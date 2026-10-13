@@ -1,5 +1,6 @@
 // login.js - pantalla de acceso: crear cuenta (primera vez), iniciar sesión, recuperar contraseña
-import { consultar, esWeb } from './database.js';
+import { consultar, esWeb, crearRespaldo } from './database.js';
+import { motor, vaciarDispositivo, vinculado, cargarVinculo, datosVinculo, sincronizarAhora, haySesionNube } from './nube-app.js';
 import { h, toast } from './ui.js';
 import {
   existenUsuarios, registrarPropietario, iniciarSesion, restaurarSesion, recuperarConCodigo, cambiarClaveTemporal,
@@ -99,8 +100,48 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       sinCripto, usuario.el, clave.el,
       h('label', { class: 'casilla' }, recordar, 'Mantener la sesión iniciada'),
       aviso, boton,
-      h('button', { class: 'enlace', onClick: () => pantallaRecuperar() }, '¿Olvidaste tu contraseña?'));
+      h('button', { class: 'enlace', onClick: () => pantallaRecuperar() }, '¿Olvidaste tu contraseña?'),
+      h('button', { class: 'enlace', onClick: pantallaOtroNegocio }, 'Crear otro negocio o entrar con otra cuenta'));
     usuario.input.focus();
+  }
+
+  // ---------- Empezar con otro negocio en este mismo dispositivo ----------
+  async function pantallaOtroNegocio() {
+    await cargarVinculo().catch(() => {});
+    const enNube = vinculado();
+    const nombre = datosVinculo()?.negocio_nombre || 'este negocio';
+    const acepto = h('input', { type: 'checkbox', id: 'acepto-borrar' });
+    const info = h('p', { class: 'error' });
+    const respaldo = enNube ? null : h('button', { class: 'btn', onClick: async () => { try { await crearRespaldo(); } catch (e) { info.textContent = e.message || String(e); } } }, 'Descargar respaldo de este dispositivo');
+    const seguir = async () => {
+      info.textContent = '';
+      if (!acepto.checked) { info.textContent = 'Marca la casilla para confirmar.'; return; }
+      boton.disabled = true;
+      try {
+        if (enNube) {
+          // Antes de borrar, sube lo pendiente para no perder ventas hechas sin internet
+          if (haySesionNube()) await sincronizarAhora().catch(() => {});
+          if ((await motor.pendientes()) > 0) {
+            throw new Error('Hay cambios que aún no se han subido a la nube. Conéctate a internet, inicia sesión y deja que sincronice antes de borrar.');
+          }
+        }
+        await vaciarDispositivo();
+        pantallaBienvenida();
+      } catch (e) {
+        info.textContent = e.message || String(e);
+        boton.disabled = false;
+      }
+    };
+    const boton = h('button', { class: 'btn peligro', onClick: seguir }, 'Borrar de este dispositivo y continuar');
+    marco(
+      h('h1', {}, 'Otro negocio en este dispositivo'),
+      h('p', { class: 'ayuda' }, enNube
+        ? `Se quitará "${nombre}" de este dispositivo: usuarios, ventas y productos. Tus datos siguen guardados en la nube y podrás volver a entrar con "Ya tengo una cuenta". Si hiciste ventas sin internet, se suben antes de borrar.`
+        : 'Este negocio solo existe en este dispositivo. Si continúas se borra todo (usuarios, ventas, productos) y no se puede recuperar. Descarga el respaldo primero.'),
+      respaldo,
+      h('label', { class: 'casilla' }, acepto, 'Entiendo que se borran los datos de este dispositivo'),
+      info, boton,
+      h('button', { class: 'enlace', onClick: pantallaEntrar }, 'Volver'));
   }
 
   // ---------- Cambio obligatorio de la contraseña temporal ----------

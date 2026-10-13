@@ -135,6 +135,23 @@ await auth.cerrarSesion();
 await auth.iniciarSesion('dueno', 'recuperada88');
 ok('recuperar la contraseña con el código funciona en la nube');
 
+// ---- otro negocio en el mismo dispositivo ----
+await na.sincronizarAhora();
+assert.equal(await na.motor.pendientes(), 0);
+await auth.cerrarSesion();
+await na.vaciarDispositivo();
+assert.equal(await auth.existenUsuarios(), false, 'sin usuarios: vuelve a la bienvenida');
+assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 0);
+assert.equal(na.vinculado(), false);
+const nuevo = await auth.registrarNegocioNube({ negocio: 'Segundo Negocio', nombre: 'Pedro', usuario: 'pedro', correo: 'pedro@x.com', clave: 'clave5678' });
+assert.ok(nuevo.codigo);
+assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 0, 'no se mezcla con el negocio anterior');
+await na.vaciarDispositivo();
+const volver = await auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplazar');
+assert.ok(volver);
+assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 1, 'los datos del primer negocio vuelven desde la nube');
+ok('se puede crear otro negocio en el mismo dispositivo y volver al anterior desde la nube');
+
 servidor.close();
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

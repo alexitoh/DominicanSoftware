@@ -69,7 +69,7 @@ async function api(metodo, ruta, cuerpo) {
   if (!r.ok) throw new Error(j.error || 'Error ' + r.status);
   return j;
 }
-const el = (t, a = {}, ...h) => { const e = document.createElement(t); for (const [k, v] of Object.entries(a)) { if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'class') e.className = v; else if (v !== false && v != null) e.setAttribute(k, v); } for (const x of h.flat()) if (x != null && x !== false) e.append(x.nodeType ? x : document.createTextNode(x)); return e; };
+const el = (t, a = {}, ...h) => { const e = document.createElement(t); for (const [k, v] of Object.entries(a)) { if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'class') e.className = v; else if (v !== false && v != null) e.setAttribute(k, v); } for (const x of h.flat(Infinity)) if (x != null && x !== false) e.append(x.nodeType ? x : document.createTextNode(x)); return e; };
 const fecha = (f) => (f ? String(f).replace('T', ' ').slice(0, 16) : '—');
 const dias = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const mb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');

@@ -101,6 +101,16 @@ export async function desconectarDispositivo() {
   avisar({ fase: 'local' });
 }
 
+// Deja este dispositivo como nuevo (sin negocio, usuarios ni datos) para crear otro negocio o entrar con otra cuenta
+export async function vaciarDispositivo() {
+  await motor.desvincular();
+  guardarSesionNube(null);
+  vinculo = null;
+  await motor.reemplazarLocal();
+  await lote([{ statement: 'DELETE FROM usuarios', values: [] }]);
+  avisar({ fase: 'local', pendientes: 0, ultimo: null });
+}
+
 // ---------- Estado visible ----------
 let estado = { fase: 'local', pendientes: 0, ultimo: null, mensaje: '' };
 const oyentes = new Set();
