@@ -183,7 +183,9 @@ async function pantallaAcceso(terminar, sesionPendiente) {
         let codigo;
         if (enNube) {
           guardarServidor(servidor.input.value);
-          ({ codigo } = await registrarNegocioNube(datos, progreso(boton)));
+          const r = await registrarNegocioNube(datos, progreso(boton));
+          if (r.pendiente) { pantallaCodigo(r.codigo, 'Registro recibido', pantallaPendiente); return; }
+          codigo = r.codigo;
         } else {
           ({ codigo } = await registrarPropietario(datos));
         }
@@ -206,6 +208,15 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       aviso, boton,
       h('button', { class: 'enlace', onClick: pantallaBienvenida }, 'Volver'));
     negocio.input.focus();
+  }
+
+  // ---------- Esperando la aprobación del proveedor ----------
+  function pantallaPendiente() {
+    marco(
+      h('h1', {}, 'Registro pendiente de aprobación'),
+      h('p', {}, 'Recibimos tu registro. Cuando el proveedor lo apruebe (después de confirmar el pago) podrás entrar.'),
+      h('p', { class: 'ayuda' }, 'Cuando te avisen, abre la app y pulsa "Ya tengo una cuenta" con el usuario y la contraseña que acabas de crear.'),
+      h('button', { class: 'btn primario', onClick: () => pantallaBienvenida() }, 'Entendido'));
   }
 
   // ---------- Entrar con una cuenta de la nube en un dispositivo nuevo ----------

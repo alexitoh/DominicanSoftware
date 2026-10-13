@@ -8,7 +8,7 @@ globalThis.document = { addEventListener() {}, visibilityState: 'visible' };
 
 const { crearServidor } = await import('../server/index.js');
 const { abrirBase } = await import('../server/db.js');
-const servidor = crearServidor({ db: abrirBase(':memory:'), secreto: 'prueba-secreto-largo-1234567890' });
+const servidor = crearServidor({ db: abrirBase(':memory:'), secreto: 'prueba-secreto-largo-1234567890', aprobacionAutomatica: true });
 await new Promise((r) => servidor.listen(0, r));
 const BASE = `http://127.0.0.1:${servidor.address().port}`;
 localStorage.setItem('caraudio_servidor', BASE);

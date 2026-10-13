@@ -153,9 +153,11 @@ export async function registrarNegocioNube({ negocio, nombre, usuario, correo, c
   if (!String(negocio || '').trim()) throw new Error('Escribe el nombre del negocio.');
   if (err) throw new Error(err);
   const r = await nube.registro({ negocio: negocio.trim(), nombre: nombre.trim(), usuario: u, correo: correo.trim(), clave, dispositivo: dispositivo() });
+  // El propietario del sistema debe aprobar el registro: todavía no hay sesión ni se sube nada
+  if (r.pendiente) return { codigo: r.codigoRecuperacion, pendiente: true };
   await adoptarRespuesta(r, clave);
   await conectarDispositivo(r, 'subir', alProgreso);
-  return { codigo: r.codigoRecuperacion };
+  return { codigo: r.codigoRecuperacion, pendiente: false };
 }
 
 // Al pasar de local a la nube: los demás usuarios de este dispositivo se crean en el servidor con una contraseña temporal

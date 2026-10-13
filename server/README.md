@@ -14,6 +14,8 @@ Servidor sin dependencias externas (solo Node.js 22.13 o más nuevo). Hace dos c
 | `DATA_DIR` | Carpeta de la base de datos (¡debe ser un disco persistente!) | `server/datos` |
 | `JWT_SECRET` | Clave para firmar las sesiones | se crea sola en `DATA_DIR/secreto.txt` |
 | `ALLOWED_ORIGINS` | Dirección permitida para la API desde otras páginas (CORS) | `*` |
+| `OWNER_PASSWORD` | Clave del panel `/propietario` (aprobar, suspender y renovar negocios) | panel desactivado |
+| `APROBACION_AUTOMATICA` | `1` = los registros nuevos se aprueban solos (para pruebas) | no |
 | `STATIC_DIR` | Carpeta de la web compilada | `../dist` |
 
 ## Arrancar

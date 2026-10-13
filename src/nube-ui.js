@@ -144,9 +144,10 @@ async function formularioNuevoNegocio(alTerminar) {
     boton.disabled = true;
     try {
       guardarServidor(servidor.input.value);
-      const { codigo } = await registrarNegocioNube({
+      const { codigo, pendiente } = await registrarNegocioNube({
         negocio: negocio.input.value, nombre: yo.nombre, usuario: yo.usuario, correo: correo.input.value, clave: clave.input.value,
       }, (p) => { boton.textContent = `Subiendo datos… ${p.subidos}`; });
+      if (pendiente) { cerrar(); mostrarPendiente(codigo); return; }
       const entregadas = await subirUsuariosLocales();
       await registrarBitacora('Negocio conectado a la nube');
       cerrar();
@@ -164,6 +165,15 @@ async function formularioNuevoNegocio(alTerminar) {
       servidor.el, negocio.el, usuario.el, correo.el, clave.el,
       h('p', { class: 'ayuda' }, 'Mínimo 8 caracteres, con letras y números.'),
       error, boton));
+
+  function mostrarPendiente(codigo) {
+    const cerrar3 = hoja('Registro pendiente de aprobación',
+      h('div', { class: 'cuerpo' },
+        h('p', {}, 'Recibimos tu registro. Cuando el proveedor lo apruebe, vuelve a Ajustes → Nube y sincronización y elige "Conectar con una cuenta existente" con el mismo usuario y contraseña, y deja marcado "Combinar": se subirán tus datos.'),
+        h('p', {}, 'Código de recuperación (guárdalo, no se vuelve a mostrar):'),
+        h('div', { class: 'codigo' }, codigo),
+        h('button', { class: 'btn primario', onClick: () => cerrar3() }, 'Entendido')));
+  }
 
   function mostrarResultado(codigo, entregadas) {
     const salir = () => { cerrar2(); alTerminar?.(); location.reload(); };
@@ -186,8 +196,8 @@ async function formularioCuentaExistente(alTerminar) {
   const usuario = campo('Usuario o correo', { autocapitalize: 'none' });
   const clave = campo('Contraseña', { type: 'password', autocomplete: 'current-password' });
   const modo = h('select', { class: 'campo', 'aria-label': 'Qué hacer con los datos de este dispositivo' },
-    h('option', { value: 'reemplazar' }, 'Reemplazar los datos de este dispositivo por los de la nube'),
-    h('option', { value: 'combinar' }, 'Combinar: subir lo de aquí y bajar lo de la nube'));
+    h('option', { value: 'combinar' }, 'Combinar: subir lo de aquí y bajar lo de la nube'),
+    h('option', { value: 'reemplazar' }, 'Reemplazar los datos de este dispositivo por los de la nube'));
   const error = h('p', { class: 'error', role: 'alert' });
 
   async function conectar() {

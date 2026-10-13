@@ -19,7 +19,7 @@ const ok = (nombre) => { pruebas++; console.log(`  ✔ ${nombre}`); };
 
 // ---------- Servidor ----------
 const srvDb = abrirBase(':memory:');
-const servidor = crearServidor({ db: srvDb, secreto: 'prueba-secreto-largo-1234567890' });
+const servidor = crearServidor({ db: srvDb, secreto: 'prueba-secreto-largo-1234567890', aprobacionAutomatica: true });
 await new Promise((r) => servidor.listen(0, r));
 const BASE = `http://127.0.0.1:${servidor.address().port}`;
 
@@ -211,6 +211,41 @@ assert.equal(vera.cuenta.debeCambiar, true);
 assert.equal(vera.negocio.uid, (await A.nube.yo()).negocio.uid);
 await assert.rejects(() => crearCliente({ base: () => BASE, token: () => vera.token }).crearMiembro({ nombre: 'X', usuario: 'xx1', rol: 'vendedor', clave: 'abcd1234' }), /administrador/);
 ok('el administrador crea empleados; un empleado no puede crear usuarios');
+
+// ---------- 11. Aprobación del propietario ----------
+const srv2 = crearServidor({ db: abrirBase(':memory:'), secreto: 'otro-secreto-largo-1234567890', clavePropietario: 'dueno-sistema-1' });
+await new Promise((r) => srv2.listen(0, r));
+const B2 = `http://127.0.0.1:${srv2.address().port}`;
+const c2 = crearCliente({ base: () => B2 });
+const pend = await c2.registro({ negocio: 'Taller Nuevo', nombre: 'Rosa', usuario: 'rosa', correo: 'rosa@x.com', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' });
+assert.equal(pend.pendiente, true);
+assert.ok(pend.codigoRecuperacion);
+assert.equal(pend.token, undefined, 'sin sesión hasta que se apruebe');
+await assert.rejects(() => c2.login({ identificador: 'rosa', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' }), /pendiente de aprobación/);
+const post2 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B2 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json()]; };
+assert.equal((await post2('/api/propietario/login', { clave: 'mala' }))[0], 401);
+const [, dueno] = await post2('/api/propietario/login', { clave: 'dueno-sistema-1' });
+assert.equal((await post2('/api/propietario/negocios', null, 'token-falso', 'GET'))[0], 401);
+const [, lista] = await post2('/api/propietario/negocios', null, dueno.token, 'GET');
+assert.equal(lista.negocios[0].estado, 'pendiente');
+assert.equal(lista.negocios[0].admin.correo, 'rosa@x.com');
+// Un usuario normal no puede usar el panel
+const [stU] = await post2('/api/propietario/negocios', null, 'x', 'GET');
+assert.equal(stU, 401);
+await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'aprobar', plan: 'mensual', vence: '2099-01-01' }, dueno.token, 'PATCH');
+const rosa = await c2.login({ identificador: 'rosa', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' });
+assert.ok(rosa.token);
+await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'suspender' }, dueno.token, 'PATCH');
+await assert.rejects(() => crearCliente({ base: () => B2, token: () => rosa.token }).sync({ dispositivo: 'rosa-dispositivo-1', desde: 0, cambios: [] }), /suspendido/);
+await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'editar', plan: 'mensual', vence: '2020-01-01' }, dueno.token, 'PATCH');
+await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'reactivar' }, dueno.token, 'PATCH');
+await assert.rejects(() => c2.login({ identificador: 'rosa', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' }), /venció/);
+const sinPanel = crearServidor({ db: abrirBase(':memory:'), secreto: 'tercer-secreto-largo-1234567890' });
+await new Promise((r) => sinPanel.listen(0, r));
+const rr = await fetch(`http://127.0.0.1:${sinPanel.address().port}/api/propietario/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"clave":"x"}' });
+assert.equal(rr.status, 404);
+srv2.close(); sinPanel.close();
+ok('los registros nuevos quedan pendientes; el propietario aprueba, suspende y vence; sin clave no hay panel');
 
 servidor.close();
 console.log(`\n${pruebas} grupos de pruebas correctos`);

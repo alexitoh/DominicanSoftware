@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Panel del propietario</title>
+<style>
+  :root { --fondo:#EDF0F2; --papel:#fff; --tinta:#15212B; --suave:#5B6B78; --linea:#D5DBE0; --primario:#0E5A6B; --ok:#2F9E5B; --bajo:#E59A0F; --mal:#C8402F; }
+  @media (prefers-color-scheme: dark) { :root { --fondo:#0f161c; --papel:#18222b; --tinta:#e8eef2; --suave:#9aabb8; --linea:#2a3843; --primario:#3aa6bd; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--fondo); color:var(--tinta); font:16px/1.4 system-ui, sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:.9rem 1rem; background:var(--tinta); color:var(--papel); }
+  header h1 { margin:0; font-size:1.1rem; }
+  main { max-width:960px; margin:0 auto; padding:1rem; }
+  .btn { padding:.55rem .9rem; border:1px solid var(--linea); border-radius:8px; background:var(--papel); color:var(--tinta); font:inherit; font-weight:600; cursor:pointer; }
+  .btn.p { background:var(--primario); border-color:var(--primario); color:#fff; }
+  .btn.m { color:var(--mal); border-color:var(--mal); }
+  .btn.chico { padding:.35rem .6rem; font-size:.875rem; }
+  input, select, textarea { width:100%; padding:.6rem .7rem; border:1px solid var(--linea); border-radius:8px; background:var(--papel); color:var(--tinta); font:inherit; }
+  label { display:block; font-weight:600; font-size:.875rem; margin:.6rem 0 .2rem; }
+  .caja { background:var(--papel); border:1px solid var(--linea); border-radius:12px; padding:1rem; }
+  .login { max-width:360px; margin:15vh auto 0; }
+  .error { color:var(--mal); margin:.5rem 0 0; font-size:.9rem; }
+  .tabs { display:flex; gap:.4rem; flex-wrap:wrap; margin:0 0 1rem; }
+  .tabs button { padding:.45rem .8rem; border:1px solid var(--linea); border-radius:999px; background:var(--papel); color:var(--suave); font:inherit; cursor:pointer; }
+  .tabs button[aria-pressed="true"] { background:var(--primario); border-color:var(--primario); color:#fff; font-weight:600; }
+  .neg { margin-bottom:.75rem; }
+  .neg h2 { margin:0; font-size:1.05rem; display:flex; justify-content:space-between; gap:.5rem; align-items:center; flex-wrap:wrap; }
+  .neg p { margin:.25rem 0 0; color:var(--suave); font-size:.875rem; }
+  .estado { padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:700; color:#fff; }
+  .estado.pendiente { background:var(--bajo); } .estado.activo { background:var(--ok); } .estado.suspendido, .estado.vencido { background:var(--mal); }
+  .acciones { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.7rem; }
+  .vacio { text-align:center; color:var(--suave); padding:2rem 0; }
+  .resumen { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:.6rem; margin-bottom:1rem; }
+  .resumen div { background:var(--papel); border:1px solid var(--linea); border-radius:12px; padding:.7rem .9rem; }
+  .resumen strong { display:block; font-size:1.4rem; }
+  .resumen span { color:var(--suave); font-size:.8rem; }
+  dialog { border:1px solid var(--linea); border-radius:14px; background:var(--papel); color:var(--tinta); padding:1.1rem; width:min(92vw, 420px); }
+  dialog::backdrop { background:rgba(0,0,0,.5); }
+  dialog h3 { margin:0 0 .3rem; }
+</style>
+</head>
+<body>
+<div id="raiz"></div>
+<dialog id="dlg"></dialog>
+<script>
+const $ = (s) => document.querySelector(s);
+const raiz = $('#raiz'), dlg = $('#dlg');
+let token = sessionStorage.getItem('prop_token');
+let datos = null, filtro = 'pendiente';
+
+async function api(metodo, ruta, cuerpo) {
+  const r = await fetch(ruta, {
+    method: metodo,
+    headers: { ...(cuerpo ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && token) { salir(); throw new Error('Tu sesión venció. Entra de nuevo.'); }
+  if (!r.ok) throw new Error(j.error || 'Error ' + r.status);
+  return j;
+}
+const el = (t, a = {}, ...h) => { const e = document.createElement(t); for (const [k, v] of Object.entries(a)) { if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'class') e.className = v; else if (v !== false && v != null) e.setAttribute(k, v); } for (const x of h.flat()) if (x != null && x !== false) e.append(x.nodeType ? x : document.createTextNode(x)); return e; };
+const fecha = (f) => (f ? String(f).replace('T', ' ').slice(0, 16) : '—');
+const dias = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+
+function pantallaLogin(msg = '') {
+  const clave = el('input', { type: 'password', placeholder: 'Clave del propietario', autocomplete: 'current-password' });
+  const err = el('p', { class: 'error' }, msg);
+  const entrar = async () => {
+    try { const r = await api('POST', '/api/propietario/login', { clave: clave.value }); token = r.token; sessionStorage.setItem('prop_token', token); await cargar(); }
+    catch (e) { err.textContent = e.message; }
+  };
+  clave.addEventListener('keydown', (e) => { if (e.key === 'Enter') entrar(); });
+  raiz.replaceChildren(el('div', { class: 'caja login' }, el('h1', {}, 'Panel del propietario'), el('p', {}, 'Acceso solo para el dueño del sistema.'), clave, err, el('div', { class: 'acciones' }, el('button', { class: 'btn p', onclick: entrar }, 'Entrar'))));
+  clave.focus();
+}
+function salir() { token = null; sessionStorage.removeItem('prop_token'); pantallaLogin(); }
+
+async function cargar() {
+  try { datos = await api('GET', '/api/propietario/negocios'); pintar(); }
+  catch (e) { if (!token) return; raiz.replaceChildren(el('main', {}, el('p', { class: 'error' }, e.message))); }
+}
+
+function pintar() {
+  const lista = datos.negocios;
+  const n = (e) => lista.filter((x) => x.estado === e).length;
+  const visibles = filtro === 'todos' ? lista : lista.filter((x) => x.estado === filtro);
+  const tab = (id, t) => el('button', { 'aria-pressed': String(filtro === id), onclick: () => { filtro = id; pintar(); } }, `${t}${id === 'todos' ? '' : ` (${n(id)})`}`);
+  raiz.replaceChildren(
+    el('header', {}, el('h1', {}, 'Panel del propietario'), el('div', { class: 'acciones' },
+      el('button', { class: 'btn chico', onclick: cargar }, 'Actualizar'), el('button', { class: 'btn chico', onclick: salir }, 'Salir'))),
+    el('main', {},
+      el('div', { class: 'resumen' },
+        ...[['pendiente', 'Por aprobar'], ['activo', 'Activos'], ['vencido', 'Vencidos'], ['suspendido', 'Suspendidos']].map(([e, t]) => el('div', {}, el('strong', {}, String(n(e))), el('span', {}, t)))),
+      el('div', { class: 'tabs' }, tab('pendiente', 'Por aprobar'), tab('activo', 'Activos'), tab('vencido', 'Vencidos'), tab('suspendido', 'Suspendidos'), tab('todos', 'Todos')),
+      visibles.length ? visibles.map(tarjeta) : el('p', { class: 'vacio' }, 'No hay negocios en esta lista.')));
+}
+
+function tarjeta(n) {
+  const a = n.admin || {};
+  const acciones = [];
+  if (n.estado === 'pendiente') acciones.push(el('button', { class: 'btn p chico', onclick: () => aprobar(n) }, 'Aprobar (ya pagó)'));
+  if (n.estado === 'activo') acciones.push(el('button', { class: 'btn m chico', onclick: () => cambiar(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar.`) }, 'Suspender'));
+  if (n.estado === 'suspendido') acciones.push(el('button', { class: 'btn p chico', onclick: () => cambiar(n, 'reactivar', `¿Reactivar "${n.nombre}"?`) }, 'Reactivar'));
+  if (n.estado === 'vencido') acciones.push(el('button', { class: 'btn p chico', onclick: () => editar(n, true) }, 'Renovar'));
+  if (n.estado !== 'pendiente') acciones.push(el('button', { class: 'btn chico', onclick: () => editar(n) }, 'Plan / vencimiento / notas'));
+  acciones.push(el('button', { class: 'btn chico', onclick: () => claveAdmin(n) }, 'Nueva clave del administrador'));
+  return el('div', { class: 'caja neg' },
+    el('h2', {}, n.nombre, el('span', { class: `estado ${n.estado}` }, { pendiente: 'Pendiente', activo: 'Activo', vencido: 'Vencido', suspendido: 'Suspendido' }[n.estado])),
+    el('p', {}, `Administrador: ${a.nombre || '—'} · @${a.usuario || '—'} · ${a.correo || 'sin correo'}`),
+    el('p', {}, `Registrado: ${fecha(n.creado)}${n.aprobado ? ` · Aprobado: ${fecha(n.aprobado)}` : ''}`),
+    n.estado === 'pendiente' ? null : el('p', {}, `Plan: ${n.plan} · Vence: ${n.vence || 'sin fecha'} · Usuarios: ${n.usuarios} · Dispositivos: ${n.dispositivos} · Datos: ${n.registros} · Último acceso: ${fecha(n.ultimoAcceso)}`),
+    n.notas ? el('p', {}, `Notas: ${n.notas}`) : null,
+    el('div', { class: 'acciones' }, acciones));
+}
+
+function modal(titulo, contenido, botones) {
+  dlg.replaceChildren(el('h3', {}, titulo), ...contenido, el('div', { class: 'acciones' }, ...botones));
+  dlg.showModal();
+}
+const cerrar = () => dlg.close();
+
+function aprobar(n) {
+  const plan = el('select', {}, ...['mensual', 'trimestral', 'anual', 'prueba', 'permanente'].map((x) => el('option', { value: x }, x)));
+  const vence = el('input', { type: 'date', value: dias(30) });
+  plan.addEventListener('change', () => { vence.value = { mensual: dias(30), trimestral: dias(90), anual: dias(365), prueba: dias(7), permanente: '' }[plan.value]; });
+  const err = el('p', { class: 'error' });
+  modal(`Aprobar "${n.nombre}"`, [
+    el('p', {}, `${(n.admin || {}).nombre || ''} · ${(n.admin || {}).correo || ''}`),
+    el('label', {}, 'Plan'), plan, el('label', {}, 'Vence (vacío = sin vencimiento)'), vence, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn p', onclick: async () => { try { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'aprobar', plan: plan.value, vence: vence.value || null }); cerrar(); filtro = 'activo'; cargar(); } catch (e) { err.textContent = e.message; } } }, 'Aprobar')]);
+}
+
+function editar(n, renovar = false) {
+  const plan = el('input', { value: n.plan });
+  const vence = el('input', { type: 'date', value: renovar ? dias(30) : (n.vence || '') });
+  const notas = el('textarea', { rows: 3 }, n.notas || '');
+  const err = el('p', { class: 'error' });
+  modal(renovar ? `Renovar "${n.nombre}"` : `Editar "${n.nombre}"`, [
+    el('label', {}, 'Plan'), plan, el('label', {}, 'Vence'), vence, el('label', {}, 'Notas (pagos, contacto…)'), notas, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn p', onclick: async () => { try { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'editar', plan: plan.value, vence: vence.value || null, notas: notas.value }); cerrar(); cargar(); } catch (e) { err.textContent = e.message; } } }, 'Guardar')]);
+}
+
+function cambiar(n, accion, texto) {
+  modal('Confirmar', [el('p', {}, texto)], [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn p', onclick: async () => { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion }); cerrar(); cargar(); } }, 'Confirmar')]);
+}
+
+function claveAdmin(n) {
+  const clave = el('input', { value: Math.random().toString(36).slice(2, 8) + Math.floor(100 + Math.random() * 900) });
+  const err = el('p', { class: 'error' });
+  modal('Nueva clave temporal', [el('p', {}, `Para el administrador de "${n.nombre}". Tendrá que cambiarla al entrar.`), clave, err],
+    [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+      el('button', { class: 'btn p', onclick: async () => { try { await api('POST', `/api/propietario/negocios/${n.uid}/clave-admin`, { clave: clave.value }); cerrar(); alert('Clave asignada: ' + clave.value); } catch (e) { err.textContent = e.message; } } }, 'Asignar')]);
+}
+
+if (token) cargar(); else pantallaLogin();
+</script>
+</body>
+</html>

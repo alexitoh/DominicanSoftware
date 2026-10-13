@@ -62,6 +62,9 @@ export function abrirBase(ruta) {
     CREATE TABLE IF NOT EXISTS secuencia (id INTEGER PRIMARY KEY CHECK (id = 1), v INTEGER NOT NULL);
     INSERT OR IGNORE INTO secuencia (id, v) VALUES (1, 0);
   `);
+  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT']) {
+    try { db.exec(q); } catch { /* la columna ya existe */ }
+  }
   return db;
 }
 

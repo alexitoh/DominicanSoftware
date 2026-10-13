@@ -1,6 +1,7 @@
 // Servidor de Car Audio: cuentas por negocio y sincronización de datos. Sin dependencias externas.
 // Requiere Node 22.13 o más nuevo (usa node:sqlite).
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -43,7 +44,7 @@ function servirEstatico(carpeta, req, res) {
   if (req.method === 'HEAD') res.end(); else fs.createReadStream(archivo).pipe(res);
 }
 
-export function crearServidor({ db, secreto, origenes = '*', estaticos = null }) {
+export function crearServidor({ db, secreto, origenes = '*', estaticos = null, clavePropietario = '', aprobacionAutomatica = false }) {
   if (!secreto || secreto.length < 16) throw new Error('Falta JWT_SECRET (mínimo 16 caracteres).');
   const intentos = new Map(); // límite de intentos de acceso por IP + usuario
 
@@ -55,6 +56,15 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null })
   });
   const miembros = (negocio) => db.prepare('SELECT * FROM cuentas WHERE negocio = ? ORDER BY activo DESC, nombre').all(negocio).map(miembro);
   const negocioDe = (uidNegocio) => db.prepare('SELECT uid, nombre, activo, plan, vence FROM negocios WHERE uid = ?').get(uidNegocio);
+
+  // null si el negocio puede usar el servicio; si no, el motivo
+  function motivoBloqueo(n) {
+    if (!n) return 'El negocio no existe.';
+    if (n.plan === 'pendiente') return 'Tu registro está pendiente de aprobación. Te avisaremos cuando esté activo.';
+    if (!n.activo) return 'El servicio de este negocio está suspendido. Contacta al proveedor.';
+    if (n.vence && n.vence < new Date().toISOString().slice(0, 10)) return 'La suscripción de este negocio venció. Contacta al proveedor para renovarla.';
+    return null;
+  }
 
   function limitar(clave) {
     const ahora = Date.now();
@@ -105,8 +115,13 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null })
     const cuenta = db.prepare('SELECT * FROM cuentas WHERE uid = ?').get(p.c);
     if (!cuenta || !cuenta.activo) falla(401, 'Tu cuenta no está activa.');
     const negocio = negocioDe(cuenta.negocio);
-    if (!negocio?.activo) falla(402, 'El servicio de este negocio está suspendido. Contacta al proveedor.');
+    const bloqueo = motivoBloqueo(negocio);
+    if (bloqueo) falla(402, bloqueo);
     return { cuenta, negocio };
+  }
+  function autenticarPropietario(req) {
+    const p = verificar((req.headers.authorization || '').replace(/^Bearer\s+/i, ''), secreto);
+    if (!p?.propietario) falla(401, 'Entra de nuevo al panel.');
   }
   const exigirAdmin = (ctx) => { if (ctx.cuenta.rol !== 'admin') falla(403, 'Solo el administrador puede hacer esto.'); };
 
@@ -132,11 +147,14 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null })
       const negocio = uid();
       const cuenta = uid();
       transaccion(db, () => {
-        db.prepare('INSERT INTO negocios (uid, nombre) VALUES (?, ?)').run(negocio, String(b.negocio).trim());
+        db.prepare('INSERT INTO negocios (uid, nombre, activo, plan) VALUES (?, ?, ?, ?)')
+          .run(negocio, String(b.negocio).trim(), aprobacionAutomatica ? 1 : 0, aprobacionAutomatica ? 'prueba' : 'pendiente');
         db.prepare(`INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, rol, hash, recup_hash)
                     VALUES (?, ?, ?, ?, ?, 'admin', ?, ?)`)
           .run(cuenta, negocio, String(b.nombre).trim(), usuario, correo, hashClave(b.clave), hashClave(normalizarCodigo(codigo)));
       });
+      // Hasta que el propietario lo apruebe no hay sesión: solo se entrega el código de recuperación
+      if (!aprobacionAutomatica) return { pendiente: true, codigoRecuperacion: codigo, negocio: { nombre: String(b.negocio).trim() } };
       return sesion(db.prepare('SELECT * FROM cuentas WHERE uid = ?').get(cuenta), b.dispositivo, { codigoRecuperacion: codigo });
     },
 
@@ -147,7 +165,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null })
       const c = db.prepare('SELECT * FROM cuentas WHERE usuario = ? OR correo = ?').get(id, id);
       if (!c || !verificarClave(String(b.clave || ''), c.hash)) { falloAcceso(clave); falla(401, 'Usuario o contraseña incorrectos.'); }
       if (!c.activo) falla(403, 'Esta cuenta está desactivada. Habla con el administrador.');
-      if (!negocioDe(c.negocio)?.activo) falla(402, 'El servicio de este negocio está suspendido. Contacta al proveedor.');
+      const bloqueo = motivoBloqueo(negocioDe(c.negocio));
+      if (bloqueo) falla(402, bloqueo);
       db.prepare("UPDATE cuentas SET ultimo_acceso = datetime('now') WHERE uid = ?").run(c.uid);
       return sesion(c, b.dispositivo);
     },
@@ -246,6 +265,64 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null })
       return { ok: true };
     },
 
+    // ---------- Panel del propietario ----------
+    'POST /api/propietario/login': (req, b) => {
+      if (!clavePropietario) falla(404, 'El panel del propietario no está activado en este servidor.');
+      const clave = `${req.socket.remoteAddress}|propietario`;
+      limitar(clave);
+      const a = Buffer.from(String(b.clave || ''));
+      const e = Buffer.from(clavePropietario);
+      if (a.length !== e.length || !crypto.timingSafeEqual(a, e)) { falloAcceso(clave); falla(401, 'Clave incorrecta.'); }
+      return { token: firmar({ propietario: 1 }, secreto, 12 * 3600) };
+    },
+
+    'GET /api/propietario/negocios': (req) => {
+      autenticarPropietario(req);
+      const hoy = new Date().toISOString().slice(0, 10);
+      const filas = db.prepare('SELECT * FROM negocios ORDER BY creado DESC').all().map((n) => {
+        const admin = db.prepare("SELECT nombre, usuario, correo FROM cuentas WHERE negocio = ? AND rol = 'admin' ORDER BY creado LIMIT 1").get(n.uid);
+        const c = db.prepare('SELECT COUNT(*) AS n, MAX(ultimo_acceso) AS ultimo FROM cuentas WHERE negocio = ?').get(n.uid);
+        const d = db.prepare('SELECT COUNT(*) AS n FROM dispositivos WHERE negocio = ?').get(n.uid).n;
+        const estado = n.plan === 'pendiente' ? 'pendiente' : !n.activo ? 'suspendido' : (n.vence && n.vence < hoy ? 'vencido' : 'activo');
+        return {
+          uid: n.uid, nombre: n.nombre, estado, plan: n.plan, vence: n.vence, creado: n.creado, aprobado: n.aprobado, notas: n.notas,
+          admin, usuarios: c.n, ultimoAcceso: c.ultimo, dispositivos: d, registros: contarDatos(n.uid),
+        };
+      });
+      return { negocios: filas, hoy };
+    },
+
+    'PATCH /api/propietario/negocios/:uid': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      const accion = b.accion;
+      const vence = b.vence ? String(b.vence).slice(0, 10) : null;
+      if (vence && !/^\d{4}-\d{2}-\d{2}$/.test(vence)) falla(400, 'La fecha debe ser AAAA-MM-DD.');
+      const plan = String(b.plan || '').trim().slice(0, 40);
+      if (accion === 'aprobar') {
+        db.prepare("UPDATE negocios SET activo = 1, plan = ?, vence = ?, aprobado = datetime('now') WHERE uid = ?").run(plan || 'mensual', vence, n.uid);
+      } else if (accion === 'suspender') {
+        db.prepare('UPDATE negocios SET activo = 0 WHERE uid = ?').run(n.uid);
+      } else if (accion === 'reactivar') {
+        db.prepare("UPDATE negocios SET activo = 1, plan = CASE WHEN plan = 'pendiente' THEN 'mensual' ELSE plan END WHERE uid = ?").run(n.uid);
+      } else if (accion === 'editar') {
+        db.prepare('UPDATE negocios SET plan = COALESCE(NULLIF(?, \'\'), plan), vence = ?, notas = ? WHERE uid = ?')
+          .run(plan, vence, String(b.notas || '').slice(0, 500) || null, n.uid);
+      } else falla(400, 'Acción no válida.');
+      return { ok: true };
+    },
+
+    'POST /api/propietario/negocios/:uid/clave-admin': (req, b, p) => {
+      autenticarPropietario(req);
+      const admin = db.prepare("SELECT uid FROM cuentas WHERE negocio = ? AND rol = 'admin' ORDER BY creado LIMIT 1").get(p.uid);
+      if (!admin) falla(404, 'El negocio no tiene administrador.');
+      const err = errorClave(b.clave);
+      if (err) falla(400, err);
+      db.prepare('UPDATE cuentas SET hash = ?, debe_cambiar = 1 WHERE uid = ?').run(hashClave(b.clave), admin.uid);
+      return { ok: true };
+    },
+
     // ---------- Sincronización ----------
     'POST /api/sync': (req, b) => {
       const ctx = autenticar(req);
@@ -327,6 +404,13 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null })
 
   return http.createServer(async (req, res) => {
     const ruta0 = new URL(req.url, 'http://x').pathname;
+    if (ruta0 === '/propietario' && req.method === 'GET') {
+      try {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
+        res.end(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'propietario.html')));
+      } catch { res.writeHead(404); res.end(); }
+      return;
+    }
     if (estaticos && !ruta0.startsWith('/api/') && (req.method === 'GET' || req.method === 'HEAD')) {
       try { servirEstatico(estaticos, req, res); } catch { res.writeHead(500); res.end(); }
       return;
@@ -370,6 +454,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const dist = path.resolve(process.env.STATIC_DIR || path.join(aqui, '..', 'dist'));
   const estaticos = fs.existsSync(path.join(dist, 'index.html')) ? dist : null;
   const puerto = Number(process.env.PORT) || 3000;
-  crearServidor({ db, secreto, origenes: process.env.ALLOWED_ORIGINS || '*', estaticos })
+  crearServidor({
+    db, secreto, origenes: process.env.ALLOWED_ORIGINS || '*', estaticos,
+    clavePropietario: process.env.OWNER_PASSWORD || '', aprobacionAutomatica: process.env.APROBACION_AUTOMATICA === '1',
+  })
     .listen(puerto, '0.0.0.0', () => console.log(`Servidor Car Audio listo en el puerto ${puerto}. Datos en ${carpeta}${estaticos ? `. Web: ${estaticos}` : '. (sin web: falta la carpeta dist)'}`));
 }
