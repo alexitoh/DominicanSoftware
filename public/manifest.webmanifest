@@ -1,0 +1,16 @@
+{
+  "name": "Car Audio - Sistema de ventas",
+  "short_name": "Car Audio",
+  "description": "Ventas, inventario, facturas y cotizaciones para tu negocio de car audio",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EDF0F2",
+  "theme_color": "#15212B",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

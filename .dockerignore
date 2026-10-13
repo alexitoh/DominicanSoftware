@@ -1,0 +1,6 @@
+node_modules
+dist
+android
+server/datos
+.git
+*.zip

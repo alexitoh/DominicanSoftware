@@ -1,0 +1,375 @@
+// Servidor de Car Audio: cuentas por negocio y sincronización de datos. Sin dependencias externas.
+// Requiere Node 22.13 o más nuevo (usa node:sqlite).
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  hashClave, verificarClave, firmar, verificar, uid, codigoRecuperacion, normalizarCodigo, normalizarUsuario,
+  errorUsuario, errorCorreo, errorClave, codigoDispositivo,
+} from './seguridad.js';
+import { abrirBase, transaccion, siguienteVersion, TABLAS_SYNC } from './db.js';
+
+const ROLES = ['admin', 'gerente', 'vendedor', 'cajero', 'almacen'];
+const PERMISOS = ['ventas', 'productos', 'inventario', 'compras', 'caja', 'cuentas', 'clientes', 'proveedores', 'garantias', 'reportes', 'ajustes', 'anular'];
+const MAX_CUERPO = 12 * 1024 * 1024;
+const LIMITE_PAGINA = 500;
+
+class ErrorHttp extends Error {
+  constructor(estado, mensaje) { super(mensaje); this.estado = estado; }
+}
+const falla = (estado, mensaje) => { throw new ErrorHttp(estado, mensaje); };
+
+const TIPOS = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.wasm': 'application/wasm',
+  '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
+};
+
+// Entrega la app web (la carpeta "dist" que genera npm run build) desde el mismo servidor
+function servirEstatico(carpeta, req, res) {
+  const limpio = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  let archivo = path.normalize(path.join(carpeta, limpio));
+  if (archivo !== carpeta && !archivo.startsWith(carpeta + path.sep)) { res.writeHead(403); res.end(); return; }
+  if (!fs.existsSync(archivo) || fs.statSync(archivo).isDirectory()) archivo = path.join(carpeta, 'index.html'); // la app es de una sola página
+  if (!fs.existsSync(archivo)) { res.writeHead(404); res.end('No encontrado'); return; }
+  const ext = path.extname(archivo).toLowerCase();
+  res.writeHead(200, {
+    'Content-Type': TIPOS[ext] || 'application/octet-stream',
+    'Cache-Control': archivo.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  if (req.method === 'HEAD') res.end(); else fs.createReadStream(archivo).pipe(res);
+}
+
+export function crearServidor({ db, secreto, origenes = '*', estaticos = null }) {
+  if (!secreto || secreto.length < 16) throw new Error('Falta JWT_SECRET (mínimo 16 caracteres).');
+  const intentos = new Map(); // límite de intentos de acceso por IP + usuario
+
+  // ---------- Utilidades ----------
+  const miembro = (c) => ({
+    uid: c.uid, nombre: c.nombre, usuario: c.usuario, correo: c.correo, rol: c.rol,
+    permisos: c.permisos ? JSON.parse(c.permisos) : null, activo: !!c.activo, debeCambiar: !!c.debe_cambiar,
+    ultimoAcceso: c.ultimo_acceso,
+  });
+  const miembros = (negocio) => db.prepare('SELECT * FROM cuentas WHERE negocio = ? ORDER BY activo DESC, nombre').all(negocio).map(miembro);
+  const negocioDe = (uidNegocio) => db.prepare('SELECT uid, nombre, activo, plan, vence FROM negocios WHERE uid = ?').get(uidNegocio);
+
+  function limitar(clave) {
+    const ahora = Date.now();
+    const x = intentos.get(clave);
+    if (x?.hasta > ahora) falla(429, `Demasiados intentos. Espera ${Math.ceil((x.hasta - ahora) / 1000)} segundos.`);
+  }
+  function falloAcceso(clave) {
+    const x = intentos.get(clave) || { n: 0 };
+    x.n += 1;
+    if (x.n >= 5) { x.n = 0; x.hasta = Date.now() + 60000; }
+    intentos.set(clave, x);
+    if (intentos.size > 5000) intentos.clear();
+  }
+
+  function asignarDispositivo(negocio, dispositivoUid) {
+    if (!dispositivoUid || typeof dispositivoUid !== 'string' || dispositivoUid.length < 8 || dispositivoUid.length > 64) return null;
+    const ya = db.prepare('SELECT codigo FROM dispositivos WHERE negocio = ? AND uid = ?').get(negocio, dispositivoUid);
+    if (ya) {
+      db.prepare("UPDATE dispositivos SET ultimo = datetime('now') WHERE negocio = ? AND uid = ?").run(negocio, dispositivoUid);
+      return ya.codigo;
+    }
+    const { n } = db.prepare('SELECT COUNT(*) AS n FROM dispositivos WHERE negocio = ?').get(negocio);
+    const codigo = codigoDispositivo(n);
+    db.prepare('INSERT INTO dispositivos (negocio, uid, codigo) VALUES (?, ?, ?)').run(negocio, dispositivoUid, codigo);
+    return codigo;
+  }
+
+  const contarDatos = (negocio) => db.prepare(
+    "SELECT COUNT(*) AS n FROM registros WHERE negocio = ? AND borrado = 0 AND tabla IN ('productos','ventas','clientes','compras')").get(negocio).n;
+
+  function sesion(cuenta, dispositivoUid, extra = {}) {
+    const negocio = negocioDe(cuenta.negocio);
+    return {
+      token: firmar({ c: cuenta.uid, n: cuenta.negocio }, secreto),
+      cuenta: miembro(cuenta),
+      negocio: { uid: negocio.uid, nombre: negocio.nombre },
+      dispositivo: { codigo: asignarDispositivo(cuenta.negocio, dispositivoUid) },
+      miembros: miembros(cuenta.negocio),
+      registros: contarDatos(cuenta.negocio),
+      ...extra,
+    };
+  }
+
+  function autenticar(req) {
+    const t = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const p = verificar(t, secreto);
+    if (!p) falla(401, 'Tu sesión expiró. Inicia sesión de nuevo.');
+    const cuenta = db.prepare('SELECT * FROM cuentas WHERE uid = ?').get(p.c);
+    if (!cuenta || !cuenta.activo) falla(401, 'Tu cuenta no está activa.');
+    const negocio = negocioDe(cuenta.negocio);
+    if (!negocio?.activo) falla(402, 'El servicio de este negocio está suspendido. Contacta al proveedor.');
+    return { cuenta, negocio };
+  }
+  const exigirAdmin = (ctx) => { if (ctx.cuenta.rol !== 'admin') falla(403, 'Solo el administrador puede hacer esto.'); };
+
+  function limpiarPermisos(rol, permisos) {
+    if (rol === 'admin') return null;
+    return JSON.stringify((Array.isArray(permisos) ? permisos : []).filter((p) => PERMISOS.includes(p)));
+  }
+
+  // ---------- Rutas ----------
+  const rutas = {
+    'GET /api/salud': () => ({ ok: true, hora: new Date().toISOString() }),
+
+    'POST /api/registro': (req, b) => {
+      const usuario = normalizarUsuario(b.usuario);
+      const correo = String(b.correo || '').trim().toLowerCase();
+      const err = errorUsuario(usuario) || errorCorreo(correo) || errorClave(b.clave);
+      if (!String(b.nombre || '').trim()) falla(400, 'Escribe tu nombre.');
+      if (!String(b.negocio || '').trim()) falla(400, 'Escribe el nombre del negocio.');
+      if (err) falla(400, err);
+      if (db.prepare('SELECT 1 FROM cuentas WHERE usuario = ?').get(usuario)) falla(409, 'Ese usuario ya existe. Prueba con otro.');
+      if (db.prepare('SELECT 1 FROM cuentas WHERE correo = ?').get(correo)) falla(409, 'Ya existe una cuenta con ese correo. Inicia sesión.');
+      const codigo = codigoRecuperacion();
+      const negocio = uid();
+      const cuenta = uid();
+      transaccion(db, () => {
+        db.prepare('INSERT INTO negocios (uid, nombre) VALUES (?, ?)').run(negocio, String(b.negocio).trim());
+        db.prepare(`INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, rol, hash, recup_hash)
+                    VALUES (?, ?, ?, ?, ?, 'admin', ?, ?)`)
+          .run(cuenta, negocio, String(b.nombre).trim(), usuario, correo, hashClave(b.clave), hashClave(normalizarCodigo(codigo)));
+      });
+      return sesion(db.prepare('SELECT * FROM cuentas WHERE uid = ?').get(cuenta), b.dispositivo, { codigoRecuperacion: codigo });
+    },
+
+    'POST /api/login': (req, b) => {
+      const id = normalizarUsuario(b.identificador);
+      const clave = `${req.socket.remoteAddress}|${id}`;
+      limitar(clave);
+      const c = db.prepare('SELECT * FROM cuentas WHERE usuario = ? OR correo = ?').get(id, id);
+      if (!c || !verificarClave(String(b.clave || ''), c.hash)) { falloAcceso(clave); falla(401, 'Usuario o contraseña incorrectos.'); }
+      if (!c.activo) falla(403, 'Esta cuenta está desactivada. Habla con el administrador.');
+      if (!negocioDe(c.negocio)?.activo) falla(402, 'El servicio de este negocio está suspendido. Contacta al proveedor.');
+      db.prepare("UPDATE cuentas SET ultimo_acceso = datetime('now') WHERE uid = ?").run(c.uid);
+      return sesion(c, b.dispositivo);
+    },
+
+    'POST /api/recuperar': (req, b) => {
+      const id = normalizarUsuario(b.identificador);
+      const clave = `${req.socket.remoteAddress}|rec|${id}`;
+      limitar(clave);
+      const err = errorClave(b.clave);
+      if (err) falla(400, err);
+      const c = db.prepare('SELECT * FROM cuentas WHERE usuario = ? OR correo = ?').get(id, id);
+      if (!c || !c.activo || !verificarClave(normalizarCodigo(b.codigo), c.recup_hash)) {
+        falloAcceso(clave);
+        falla(401, 'El usuario o el código de recuperación no son correctos.');
+      }
+      const nuevo = codigoRecuperacion();
+      db.prepare('UPDATE cuentas SET hash = ?, recup_hash = ?, debe_cambiar = 0 WHERE uid = ?')
+        .run(hashClave(b.clave), hashClave(normalizarCodigo(nuevo)), c.uid);
+      return { ok: true, codigoRecuperacion: nuevo };
+    },
+
+    'GET /api/yo': (req) => {
+      const ctx = autenticar(req);
+      return { cuenta: miembro(ctx.cuenta), negocio: { uid: ctx.negocio.uid, nombre: ctx.negocio.nombre }, miembros: miembros(ctx.negocio.uid) };
+    },
+
+    'POST /api/clave': (req, b) => {
+      const ctx = autenticar(req);
+      if (!verificarClave(String(b.actual || ''), ctx.cuenta.hash)) falla(400, 'La contraseña actual no es correcta.');
+      const err = errorClave(b.nueva);
+      if (err) falla(400, err);
+      if (b.actual === b.nueva) falla(400, 'La contraseña nueva debe ser distinta de la actual.');
+      db.prepare('UPDATE cuentas SET hash = ?, debe_cambiar = 0 WHERE uid = ?').run(hashClave(b.nueva), ctx.cuenta.uid);
+      return { ok: true };
+    },
+
+    // Cambio obligatorio después de una contraseña temporal
+    'POST /api/clave-temporal': (req, b) => {
+      const ctx = autenticar(req);
+      if (!ctx.cuenta.debe_cambiar) falla(400, 'Tu contraseña no es temporal.');
+      const err = errorClave(b.nueva);
+      if (err) falla(400, err);
+      db.prepare('UPDATE cuentas SET hash = ?, debe_cambiar = 0 WHERE uid = ?').run(hashClave(b.nueva), ctx.cuenta.uid);
+      return { ok: true };
+    },
+
+    'GET /api/miembros': (req) => ({ miembros: miembros(autenticar(req).negocio.uid) }),
+
+    'POST /api/miembros': (req, b) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      const usuario = normalizarUsuario(b.usuario);
+      const correo = String(b.correo || '').trim().toLowerCase() || null;
+      const err = errorUsuario(usuario) || (correo ? errorCorreo(correo) : '') || errorClave(b.clave);
+      if (!String(b.nombre || '').trim()) falla(400, 'Escribe el nombre.');
+      if (!ROLES.includes(b.rol)) falla(400, 'Elige un rol.');
+      if (err) falla(400, err);
+      if (db.prepare('SELECT 1 FROM cuentas WHERE usuario = ?').get(usuario)) falla(409, 'Ese usuario ya existe. Prueba con otro.');
+      if (correo && db.prepare('SELECT 1 FROM cuentas WHERE correo = ?').get(correo)) falla(409, 'Ya existe una cuenta con ese correo.');
+      const nuevo = uid();
+      db.prepare(`INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, rol, permisos, hash, debe_cambiar)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`)
+        .run(nuevo, ctx.negocio.uid, String(b.nombre).trim(), usuario, correo, b.rol, limpiarPermisos(b.rol, b.permisos), hashClave(b.clave));
+      return { uid: nuevo, miembros: miembros(ctx.negocio.uid) };
+    },
+
+    'PATCH /api/miembros/:uid': (req, b, p) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      const c = db.prepare('SELECT * FROM cuentas WHERE uid = ? AND negocio = ?').get(p.uid, ctx.negocio.uid);
+      if (!c) falla(404, 'El usuario no existe.');
+      if (!String(b.nombre || '').trim()) falla(400, 'Escribe el nombre.');
+      const correo = String(b.correo || '').trim().toLowerCase() || null;
+      if (correo && errorCorreo(correo)) falla(400, errorCorreo(correo));
+      if (!ROLES.includes(b.rol)) falla(400, 'Elige un rol.');
+      const activo = b.activo ? 1 : 0;
+      if (c.uid === ctx.cuenta.uid && !activo) falla(400, 'No puedes desactivar tu propia cuenta.');
+      if (c.rol === 'admin' && !(b.rol === 'admin' && activo)) {
+        const otros = db.prepare("SELECT COUNT(*) AS n FROM cuentas WHERE negocio = ? AND rol = 'admin' AND activo = 1 AND uid != ?").get(ctx.negocio.uid, c.uid).n;
+        if (otros === 0) falla(400, 'Debe quedar al menos un administrador activo.');
+      }
+      if (correo && db.prepare('SELECT 1 FROM cuentas WHERE correo = ? AND uid != ?').get(correo, c.uid)) falla(409, 'Ya existe otro usuario con ese correo.');
+      db.prepare('UPDATE cuentas SET nombre = ?, correo = ?, rol = ?, permisos = ?, activo = ? WHERE uid = ?')
+        .run(String(b.nombre).trim(), correo, b.rol, limpiarPermisos(b.rol, b.permisos), activo, c.uid);
+      return { miembros: miembros(ctx.negocio.uid) };
+    },
+
+    'POST /api/miembros/:uid/clave': (req, b, p) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      const c = db.prepare('SELECT uid FROM cuentas WHERE uid = ? AND negocio = ?').get(p.uid, ctx.negocio.uid);
+      if (!c) falla(404, 'El usuario no existe.');
+      const err = errorClave(b.clave);
+      if (err) falla(400, err);
+      db.prepare('UPDATE cuentas SET hash = ?, debe_cambiar = 1 WHERE uid = ?').run(hashClave(b.clave), c.uid);
+      return { ok: true };
+    },
+
+    // ---------- Sincronización ----------
+    'POST /api/sync': (req, b) => {
+      const ctx = autenticar(req);
+      const negocio = ctx.negocio.uid;
+      const origen = String(b.dispositivo || '').slice(0, 64);
+      const desde = Number.isFinite(b.desde) ? Math.max(0, Math.floor(b.desde)) : 0;
+      const limite = Math.min(Math.max(parseInt(b.limite, 10) || LIMITE_PAGINA, 1), LIMITE_PAGINA);
+      const cambios = Array.isArray(b.cambios) ? b.cambios : [];
+      if (cambios.length > 2000) falla(413, 'Demasiados cambios en una sola petición.');
+
+      let aceptados = 0;
+      let ignorados = 0;
+      if (cambios.length) {
+        const ahora = Date.now() + 60000; // un reloj adelantado no puede ganarle a todos
+        const leer = db.prepare('SELECT actualizado FROM registros WHERE negocio = ? AND tabla = ? AND uid = ?');
+        const guardar = db.prepare(`
+          INSERT INTO registros (negocio, tabla, uid, datos, borrado, actualizado, version, origen)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(negocio, tabla, uid) DO UPDATE SET
+            datos = excluded.datos, borrado = excluded.borrado, actualizado = excluded.actualizado,
+            version = excluded.version, origen = excluded.origen`);
+        transaccion(db, () => {
+          for (const c of cambios) {
+            if (!TABLAS_SYNC.includes(c?.t) || typeof c.uid !== 'string' || c.uid.length > 80 || !Number.isFinite(c.u)) { ignorados++; continue; }
+            const u = Math.min(Math.floor(c.u), ahora);
+            const previo = leer.get(negocio, c.t, c.uid);
+            if (previo && previo.actualizado > u) { ignorados++; continue; }
+            guardar.run(negocio, c.t, c.uid, c.x ? null : JSON.stringify(c.d ?? {}), c.x ? 1 : 0, u, siguienteVersion(db), origen);
+            aceptados++;
+          }
+        });
+      }
+
+      const filas = db.prepare(`
+        SELECT tabla, uid, datos, borrado, actualizado, version FROM registros
+         WHERE negocio = ? AND version > ? AND (origen != ? OR ? = 0)
+         ORDER BY version LIMIT ?`).all(negocio, desde, origen, desde, limite);
+      const maxVersion = db.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM registros WHERE negocio = ?').get(negocio).v;
+      const hayMas = filas.length === limite;
+      return {
+        aceptados, ignorados,
+        cambios: filas.map((f) => ({ t: f.tabla, uid: f.uid, d: f.datos ? JSON.parse(f.datos) : null, x: !!f.borrado, u: f.actualizado, v: f.version })),
+        hasta: hayMas ? filas[filas.length - 1].version : Math.max(maxVersion, desde),
+        hayMas,
+        miembros: miembros(negocio),
+      };
+    },
+  };
+
+  // Convierte "/api/miembros/abc/clave" en la ruta con parámetros
+  function buscarRuta(metodo, url) {
+    for (const clave of Object.keys(rutas)) {
+      const [m, patron] = clave.split(' ');
+      if (m !== metodo) continue;
+      const a = patron.split('/');
+      const b = url.split('/');
+      if (a.length !== b.length) continue;
+      const params = {};
+      if (a.every((seg, i) => (seg.startsWith(':') ? ((params[seg.slice(1)] = decodeURIComponent(b[i])), true) : seg === b[i]))) {
+        return { fn: rutas[clave], params };
+      }
+    }
+    return null;
+  }
+
+  const leerCuerpo = (req) => new Promise((resolver, rechazar) => {
+    const partes = [];
+    let total = 0;
+    req.on('data', (d) => {
+      total += d.length;
+      if (total > MAX_CUERPO) { rechazar(new ErrorHttp(413, 'La petición es demasiado grande.')); req.destroy(); return; }
+      partes.push(d);
+    });
+    req.on('end', () => {
+      try { resolver(partes.length ? JSON.parse(Buffer.concat(partes).toString()) : {}); } catch { rechazar(new ErrorHttp(400, 'JSON no válido.')); }
+    });
+    req.on('error', rechazar);
+  });
+
+  return http.createServer(async (req, res) => {
+    const ruta0 = new URL(req.url, 'http://x').pathname;
+    if (estaticos && !ruta0.startsWith('/api/') && (req.method === 'GET' || req.method === 'HEAD')) {
+      try { servirEstatico(estaticos, req, res); } catch { res.writeHead(500); res.end(); }
+      return;
+    }
+    const cabeceras = {
+      'Access-Control-Allow-Origin': origenes,
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    };
+    const responder = (estado, cuerpo) => { res.writeHead(estado, cabeceras); res.end(JSON.stringify(cuerpo)); };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cabeceras); res.end(); return; }
+    try {
+      const url = new URL(req.url, 'http://x').pathname.replace(/\/+$/, '') || '/';
+      const ruta = buscarRuta(req.method, url);
+      if (!ruta) falla(404, 'No existe esa dirección.');
+      const cuerpo = req.method === 'GET' ? {} : await leerCuerpo(req);
+      responder(200, await ruta.fn(req, cuerpo, ruta.params));
+    } catch (e) {
+      if (e instanceof ErrorHttp) responder(e.estado, { error: e.message });
+      else { console.error(e); responder(500, { error: 'Error interno del servidor.' }); }
+    }
+  });
+}
+
+// Arranque cuando se ejecuta con "node index.js"
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const aqui = path.dirname(fileURLToPath(import.meta.url));
+  const carpeta = path.resolve(process.env.DATA_DIR || path.join(aqui, 'datos'));
+  fs.mkdirSync(carpeta, { recursive: true });
+  // Si no se definió JWT_SECRET, se crea una vez y se guarda junto a los datos
+  let secreto = process.env.JWT_SECRET;
+  if (!secreto) {
+    const archivoSecreto = path.join(carpeta, 'secreto.txt');
+    if (!fs.existsSync(archivoSecreto)) fs.writeFileSync(archivoSecreto, uid() + uid(), { mode: 0o600 });
+    secreto = fs.readFileSync(archivoSecreto, 'utf8').trim();
+  }
+  const db = abrirBase(path.join(carpeta, 'caraudio.db'));
+  const dist = path.resolve(process.env.STATIC_DIR || path.join(aqui, '..', 'dist'));
+  const estaticos = fs.existsSync(path.join(dist, 'index.html')) ? dist : null;
+  const puerto = Number(process.env.PORT) || 3000;
+  crearServidor({ db, secreto, origenes: process.env.ALLOWED_ORIGINS || '*', estaticos })
+    .listen(puerto, '0.0.0.0', () => console.log(`Servidor Car Audio listo en el puerto ${puerto}. Datos en ${carpeta}${estaticos ? `. Web: ${estaticos}` : '. (sin web: falta la carpeta dist)'}`));
+}
