@@ -38,8 +38,10 @@ async function pantallaAcceso(terminar, sesionPendiente) {
   const marco = (...hijos) => { aviso.textContent = ''; raiz.replaceChildren(
     h('div', { class: 'acceso-caja' },
       cfg.negocio_logo ? h('img', { class: 'acceso-logo', src: cfg.negocio_logo, alt: '' }) : null,
-      h('strong', { class: 'acceso-negocio' }, cfg.negocio_nombre || 'Car Audio'),
-      ...hijos)); };
+      h('strong', { class: 'acceso-negocio' }, cfg.negocio_nombre && cfg.negocio_nombre !== 'Mi Car Audio' ? cfg.negocio_nombre : 'Dominican Software'),
+      ...hijos,
+      h('p', { class: 'acceso-contacto' }, 'Soporte y ventas: ', h('strong', {}, 'Ing. David Vargas'), h('br'),
+        h('a', { href: 'tel:+18092309980' }, '1-809-230-9980')))); };
 
   const campo = (etiqueta, atributos) => {
     const input = h('input', { class: 'campo', autocomplete: 'off', ...atributos });

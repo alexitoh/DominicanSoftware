@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Servidor de cuentas y sincronización de Car Audio (sin dependencias externas)",
+  "description": "Servidor de cuentas y sincronización de Dominican Software (sin dependencias externas)",
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node index.js",

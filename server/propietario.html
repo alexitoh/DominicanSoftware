@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Panel del propietario</title>
+<title>Dominican Software · Panel del propietario</title>
 <style>
   :root { --fondo:#EDF0F2; --papel:#fff; --tinta:#15212B; --suave:#5B6B78; --linea:#D5DBE0; --primario:#0E5A6B; --ok:#2F9E5B; --bajo:#E59A0F; --mal:#C8402F; }
   @media (prefers-color-scheme: dark) { :root { --fondo:#0f161c; --papel:#18222b; --tinta:#e8eef2; --suave:#9aabb8; --linea:#2a3843; --primario:#3aa6bd; } }
@@ -85,7 +85,7 @@ function pantallaLogin(msg = '') {
     catch (e) { err.textContent = e.message; }
   };
   clave.addEventListener('keydown', (e) => { if (e.key === 'Enter') entrar(); });
-  raiz.replaceChildren(el('div', { class: 'caja login' }, el('h1', {}, 'Panel del propietario'), el('p', {}, 'Acceso solo para el dueño del sistema.'), clave, err, el('div', { class: 'acciones' }, el('button', { class: 'btn p', onclick: entrar }, 'Entrar'))));
+  raiz.replaceChildren(el('div', { class: 'caja login' }, el('h1', {}, 'Dominican Software'), el('p', {}, 'Panel del propietario. Acceso solo para el dueño del sistema.'), clave, err, el('div', { class: 'acciones' }, el('button', { class: 'btn p', onclick: entrar }, 'Entrar'))));
   clave.focus();
 }
 function salir() { token = null; sessionStorage.removeItem('prop_token'); pantallaLogin(); }
@@ -114,7 +114,7 @@ function pintar() {
   const buscar = el('input', { class: 'buscar', type: 'search', placeholder: 'Buscar por negocio, nombre, usuario o correo…', value: busqueda });
   buscar.addEventListener('input', () => { busqueda = buscar.value; const pos = buscar.selectionStart; pintar(); const nuevo = $('.buscar'); nuevo.focus(); nuevo.setSelectionRange(pos, pos); });
   raiz.replaceChildren(
-    el('header', {}, el('h1', {}, 'Panel del propietario'), el('div', { class: 'acciones' },
+    el('header', {}, el('h1', {}, 'Dominican Software · Panel del propietario'), el('div', { class: 'acciones' },
       el('button', { class: 'btn chico', onclick: cargar }, 'Actualizar'), el('button', { class: 'btn chico', onclick: salir }, 'Salir'))),
     el('main', {},
       el('div', { class: 'resumen' },

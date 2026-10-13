@@ -572,7 +572,7 @@ export async function crearRespaldo() {
   });
   const { uri } = await Filesystem.getUri({ path: nombre, directory: Directory.Documents });
   // Permite enviarlo por WhatsApp, Drive, correo, etc.
-  await Share.share({ title: 'Respaldo Car Audio', url: uri });
+  await Share.share({ title: 'Respaldo Dominican Software', url: uri });
   return nombre;
 }
 

@@ -1,4 +1,4 @@
-/* style.css - Car Audio: sistema de ventas */
+/* style.css - Dominican Software: sistema de ventas */
 :root {
   --fondo: #EDF0F2;
   --papel: #FFFFFF;
@@ -309,3 +309,6 @@ textarea.campo { resize: vertical; }
 .saludo { margin: .75rem 1rem 0; font-size: 1.0625rem; font-weight: 600; }
 .historial.bitacora li { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; }
 [hidden] { display: none !important; }
+
+.acceso-contacto { margin-top: 1.25rem; padding-top: .75rem; border-top: 1px solid var(--linea, #d5dbe0); text-align: center; font-size: .875rem; color: var(--suave); }
+.acceso-contacto a { color: inherit; font-weight: 600; }

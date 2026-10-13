@@ -1,4 +1,4 @@
--- Sistema de ventas Car Audio - Fase 1
+-- Sistema de ventas Dominican Software - Fase 1
 -- Base de datos SQLite (sin comprobante fiscal)
 
 CREATE TABLE IF NOT EXISTS config (

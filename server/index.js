@@ -1,4 +1,4 @@
-// Servidor de Car Audio: cuentas por negocio y sincronización de datos. Sin dependencias externas.
+// Servidor de Dominican Software: cuentas por negocio y sincronización de datos. Sin dependencias externas.
 // Requiere Node 22.13 o más nuevo (usa node:sqlite).
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -580,5 +580,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     db, secreto, origenes: process.env.ALLOWED_ORIGINS || '*', estaticos,
     clavePropietario: process.env.OWNER_PASSWORD || '', aprobacionAutomatica: process.env.APROBACION_AUTOMATICA === '1',
   })
-    .listen(puerto, '0.0.0.0', () => console.log(`Servidor Car Audio listo en el puerto ${puerto}. Datos en ${carpeta}${estaticos ? `. Web: ${estaticos}` : '. (sin web: falta la carpeta dist)'}`));
+    .listen(puerto, '0.0.0.0', () => console.log(`Servidor Dominican Software listo en el puerto ${puerto}. Datos en ${carpeta}${estaticos ? `. Web: ${estaticos}` : '. (sin web: falta la carpeta dist)'}`));
 }

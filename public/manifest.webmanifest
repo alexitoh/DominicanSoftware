@@ -1,6 +1,6 @@
 {
-  "name": "Car Audio - Sistema de ventas",
-  "short_name": "Car Audio",
+  "name": "Dominican Software - Sistema de ventas",
+  "short_name": "Dominican",
   "description": "Ventas, inventario, facturas y cotizaciones para tu negocio de car audio",
   "start_url": "/",
   "scope": "/",
