@@ -39,6 +39,14 @@
   dialog { border:1px solid var(--linea); border-radius:14px; background:var(--papel); color:var(--tinta); padding:1.1rem; width:min(92vw, 420px); }
   dialog::backdrop { background:rgba(0,0,0,.5); }
   dialog h3 { margin:0 0 .3rem; }
+  .buscar { margin:0 0 .75rem; }
+  .fila { display:flex; justify-content:space-between; align-items:center; gap:.5rem; padding:.45rem 0; border-top:1px solid var(--linea); font-size:.9rem; }
+  .fila:first-of-type { border-top:0; }
+  .fila small { color:var(--suave); display:block; }
+  .sec { margin:1rem 0 .3rem; font-size:.95rem; }
+  dialog.ancho { width:min(94vw, 560px); max-height:90vh; overflow:auto; }
+  .aviso { background:rgba(229,154,15,.15); border:1px solid var(--bajo); border-radius:8px; padding:.5rem .7rem; font-size:.875rem; margin:.5rem 0; }
+  .toast { position:fixed; bottom:1rem; left:50%; transform:translateX(-50%); background:var(--tinta); color:var(--papel); padding:.6rem 1rem; border-radius:10px; z-index:9; }
 </style>
 </head>
 <body>
@@ -48,7 +56,7 @@
 const $ = (s) => document.querySelector(s);
 const raiz = $('#raiz'), dlg = $('#dlg');
 let token = sessionStorage.getItem('prop_token');
-let datos = null, filtro = 'pendiente';
+let datos = null, filtro = 'pendiente', busqueda = '', historial = null;
 
 async function api(metodo, ruta, cuerpo) {
   const r = await fetch(ruta, {
@@ -64,6 +72,10 @@ async function api(metodo, ruta, cuerpo) {
 const el = (t, a = {}, ...h) => { const e = document.createElement(t); for (const [k, v] of Object.entries(a)) { if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'class') e.className = v; else if (v !== false && v != null) e.setAttribute(k, v); } for (const x of h.flat()) if (x != null && x !== false) e.append(x.nodeType ? x : document.createTextNode(x)); return e; };
 const fecha = (f) => (f ? String(f).replace('T', ' ').slice(0, 16) : '—');
 const dias = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const mb = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+const rd = (n) => 'RD$ ' + Number(n || 0).toLocaleString('es-DO', { maximumFractionDigits: 2 });
+const toast = (t) => { const x = el('div', { class: 'toast' }, t); document.body.append(x); setTimeout(() => x.remove(), 3500); };
+const ETQ = { pendiente: 'Pendiente', activo: 'Activo', vencido: 'Vencido', suspendido: 'Suspendido' };
 
 function pantallaLogin(msg = '') {
   const clave = el('input', { type: 'password', placeholder: 'Clave del propietario', autocomplete: 'current-password' });
@@ -79,83 +91,174 @@ function pantallaLogin(msg = '') {
 function salir() { token = null; sessionStorage.removeItem('prop_token'); pantallaLogin(); }
 
 async function cargar() {
-  try { datos = await api('GET', '/api/propietario/negocios'); pintar(); }
-  catch (e) { if (!token) return; raiz.replaceChildren(el('main', {}, el('p', { class: 'error' }, e.message))); }
+  try {
+    datos = await api('GET', '/api/propietario/negocios');
+    if (filtro === 'historial') historial = await api('GET', '/api/propietario/historial');
+    pintar();
+  } catch (e) { if (!token) return; raiz.replaceChildren(el('main', {}, el('p', { class: 'error' }, e.message))); }
 }
 
+const porVencer = (x) => x.estado === 'activo' && x.diasParaVencer != null && x.diasParaVencer <= 7;
+const grupos = {
+  pendiente: (x) => x.estado === 'pendiente', activo: (x) => x.estado === 'activo', porvencer: porVencer,
+  vencido: (x) => x.estado === 'vencido', suspendido: (x) => x.estado === 'suspendido', todos: () => true,
+};
+
 function pintar() {
-  const lista = datos.negocios;
-  const n = (e) => lista.filter((x) => x.estado === e).length;
-  const visibles = filtro === 'todos' ? lista : lista.filter((x) => x.estado === filtro);
-  const tab = (id, t) => el('button', { 'aria-pressed': String(filtro === id), onclick: () => { filtro = id; pintar(); } }, `${t}${id === 'todos' ? '' : ` (${n(id)})`}`);
+  const lista = datos.negocios, r = datos.resumen;
+  const n = (k) => lista.filter(grupos[k]).length;
+  const q = busqueda.trim().toLowerCase();
+  const visibles = filtro === 'historial' ? [] : lista.filter(grupos[filtro]).filter((x) => !q ||
+    [x.nombre, x.admin?.nombre, x.admin?.usuario, x.admin?.correo].some((t) => String(t || '').toLowerCase().includes(q)));
+  const tab = (id, t) => el('button', { 'aria-pressed': String(filtro === id), onclick: async () => { filtro = id; if (id === 'historial') historial = await api('GET', '/api/propietario/historial'); pintar(); } }, id === 'historial' || id === 'todos' ? t : `${t} (${n(id)})`);
+  const buscar = el('input', { class: 'buscar', type: 'search', placeholder: 'Buscar por negocio, nombre, usuario o correo…', value: busqueda });
+  buscar.addEventListener('input', () => { busqueda = buscar.value; const pos = buscar.selectionStart; pintar(); const nuevo = $('.buscar'); nuevo.focus(); nuevo.setSelectionRange(pos, pos); });
   raiz.replaceChildren(
     el('header', {}, el('h1', {}, 'Panel del propietario'), el('div', { class: 'acciones' },
       el('button', { class: 'btn chico', onclick: cargar }, 'Actualizar'), el('button', { class: 'btn chico', onclick: salir }, 'Salir'))),
     el('main', {},
       el('div', { class: 'resumen' },
-        ...[['pendiente', 'Por aprobar'], ['activo', 'Activos'], ['vencido', 'Vencidos'], ['suspendido', 'Suspendidos']].map(([e, t]) => el('div', {}, el('strong', {}, String(n(e))), el('span', {}, t)))),
-      el('div', { class: 'tabs' }, tab('pendiente', 'Por aprobar'), tab('activo', 'Activos'), tab('vencido', 'Vencidos'), tab('suspendido', 'Suspendidos'), tab('todos', 'Todos')),
-      visibles.length ? visibles.map(tarjeta) : el('p', { class: 'vacio' }, 'No hay negocios en esta lista.')));
+        ...[[n('pendiente'), 'Por aprobar'], [n('activo'), 'Activos'], [n('porvencer'), 'Vencen en 7 días'], [n('vencido'), 'Vencidos'], [n('suspendido'), 'Suspendidos'],
+          [rd(r.ingresoMensual), 'Ingreso mensual estimado'], [rd(r.cobradoMes), 'Cobrado este mes'], [mb(r.dbBytes), `Base de datos${r.libreBytes > 4096 ? ` (${mb(r.libreBytes)} libres)` : ''}`]]
+          .map(([v, t]) => el('div', {}, el('strong', {}, String(v)), el('span', {}, t)))),
+      el('div', { class: 'tabs' }, tab('pendiente', 'Por aprobar'), tab('activo', 'Activos'), tab('porvencer', 'Por vencer'), tab('vencido', 'Vencidos'), tab('suspendido', 'Suspendidos'), tab('todos', 'Todos'), tab('historial', 'Historial')),
+      filtro === 'historial' ? vistaHistorial() : [buscar, visibles.length ? visibles.map(tarjeta) : el('p', { class: 'vacio' }, 'No hay negocios en esta lista.')]));
+}
+
+function vistaHistorial() {
+  return el('div', {},
+    el('div', { class: 'caja', style: 'margin-bottom:.75rem' }, el('h3', { class: 'sec', style: 'margin-top:0' }, 'Pagos recibidos'),
+      historial.pagos.length ? historial.pagos.map((p) => el('div', { class: 'fila' }, el('span', {}, p.negocio || '—', el('small', {}, `${fecha(p.fecha)}${p.nota ? ' · ' + p.nota : ''}`)), el('strong', {}, `${rd(p.monto)} · ${p.meses} mes(es)`))) : el('p', { class: 'vacio' }, 'Sin pagos registrados.')),
+    el('div', { class: 'caja' }, el('h3', { class: 'sec', style: 'margin-top:0' }, 'Lo que has hecho en el panel'),
+      historial.acciones.length ? historial.acciones.map((a) => el('div', { class: 'fila' }, el('span', {}, `${a.accion}: ${a.negocio || '—'}`, el('small', {}, a.detalle || '')), el('small', {}, fecha(a.fecha)))) : el('p', { class: 'vacio' }, 'Todavía no hay movimientos.')));
 }
 
 function tarjeta(n) {
   const a = n.admin || {};
-  const acciones = [];
-  if (n.estado === 'pendiente') acciones.push(el('button', { class: 'btn p chico', onclick: () => aprobar(n) }, 'Aprobar (ya pagó)'));
-  if (n.estado === 'activo') acciones.push(el('button', { class: 'btn m chico', onclick: () => cambiar(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar.`) }, 'Suspender'));
-  if (n.estado === 'suspendido') acciones.push(el('button', { class: 'btn p chico', onclick: () => cambiar(n, 'reactivar', `¿Reactivar "${n.nombre}"?`) }, 'Reactivar'));
-  if (n.estado === 'vencido') acciones.push(el('button', { class: 'btn p chico', onclick: () => editar(n, true) }, 'Renovar'));
-  if (n.estado !== 'pendiente') acciones.push(el('button', { class: 'btn chico', onclick: () => editar(n) }, 'Plan / vencimiento / notas'));
-  acciones.push(el('button', { class: 'btn chico', onclick: () => claveAdmin(n) }, 'Nueva clave del administrador'));
+  const ac = [];
+  if (n.estado === 'pendiente') {
+    ac.push(el('button', { class: 'btn p chico', onclick: () => aprobar(n) }, 'Aprobar (ya pagó)'));
+    ac.push(el('button', { class: 'btn m chico', onclick: () => eliminar(n, true) }, 'Rechazar y eliminar'));
+  } else {
+    ac.push(el('button', { class: 'btn p chico', onclick: () => pago(n) }, 'Registrar pago'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => detalle(n) }, 'Detalle'));
+    if (n.estado === 'suspendido') ac.push(el('button', { class: 'btn chico', onclick: () => confirmarAccion(n, 'reactivar', `¿Reactivar "${n.nombre}"?`) }, 'Reactivar'));
+    else ac.push(el('button', { class: 'btn m chico', onclick: () => confirmarAccion(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar, pero sus datos se conservan.`) }, 'Suspender'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => editar(n) }, 'Editar'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => respaldo(n) }, 'Descargar respaldo'));
+    ac.push(el('button', { class: 'btn m chico', onclick: () => eliminar(n) }, 'Eliminar'));
+  }
+  const venc = n.vence ? (n.diasParaVencer < 0 ? `venció hace ${-n.diasParaVencer} día(s) (${n.vence})` : `vence ${n.vence} (en ${n.diasParaVencer} día(s))`) : 'sin vencimiento';
   return el('div', { class: 'caja neg' },
-    el('h2', {}, n.nombre, el('span', { class: `estado ${n.estado}` }, { pendiente: 'Pendiente', activo: 'Activo', vencido: 'Vencido', suspendido: 'Suspendido' }[n.estado])),
-    el('p', {}, `Administrador: ${a.nombre || '—'} · @${a.usuario || '—'} · ${a.correo || 'sin correo'}`),
+    el('h2', {}, n.nombre, el('span', { class: `estado ${n.estado}` }, ETQ[n.estado])),
+    el('p', {}, `Administrador: ${a.nombre || '—'} · @${a.usuario || '—'} · `, a.correo ? el('a', { href: 'mailto:' + a.correo }, a.correo) : 'sin correo'),
     el('p', {}, `Registrado: ${fecha(n.creado)}${n.aprobado ? ` · Aprobado: ${fecha(n.aprobado)}` : ''}`),
-    n.estado === 'pendiente' ? null : el('p', {}, `Plan: ${n.plan} · Vence: ${n.vence || 'sin fecha'} · Usuarios: ${n.usuarios} · Dispositivos: ${n.dispositivos} · Datos: ${n.registros} · Último acceso: ${fecha(n.ultimoAcceso)}`),
+    n.estado === 'pendiente' ? null : el('p', {}, `Plan: ${n.plan}${n.precio != null ? ` (${rd(n.precio)})` : ''} · ${venc}`),
+    n.estado === 'pendiente' ? null : el('p', {}, `Usuarios: ${n.usuarios} · Dispositivos: ${n.dispositivos} · Registros: ${n.registros} · Espacio: ${mb(n.bytes)} · Último acceso: ${fecha(n.ultimoAcceso)}`),
     n.notas ? el('p', {}, `Notas: ${n.notas}`) : null,
-    el('div', { class: 'acciones' }, acciones));
+    el('div', { class: 'acciones' }, ac));
 }
 
-function modal(titulo, contenido, botones) {
+function modal(titulo, contenido, botones, ancho = false) {
+  dlg.className = ancho ? 'ancho' : '';
   dlg.replaceChildren(el('h3', {}, titulo), ...contenido, el('div', { class: 'acciones' }, ...botones));
-  dlg.showModal();
+  if (!dlg.open) dlg.showModal();
 }
 const cerrar = () => dlg.close();
+const btnCerrar = () => el('button', { class: 'btn', onclick: cerrar }, 'Cerrar');
+const intentar = (err, fn) => async () => { try { err.textContent = ''; await fn(); } catch (e) { err.textContent = e.message; } };
 
 function aprobar(n) {
   const plan = el('select', {}, ...['mensual', 'trimestral', 'anual', 'prueba', 'permanente'].map((x) => el('option', { value: x }, x)));
   const vence = el('input', { type: 'date', value: dias(30) });
+  const precio = el('input', { type: 'number', min: '0', step: '0.01', placeholder: 'Lo que paga por mes (opcional)' });
   plan.addEventListener('change', () => { vence.value = { mensual: dias(30), trimestral: dias(90), anual: dias(365), prueba: dias(7), permanente: '' }[plan.value]; });
   const err = el('p', { class: 'error' });
   modal(`Aprobar "${n.nombre}"`, [
     el('p', {}, `${(n.admin || {}).nombre || ''} · ${(n.admin || {}).correo || ''}`),
-    el('label', {}, 'Plan'), plan, el('label', {}, 'Vence (vacío = sin vencimiento)'), vence, err],
+    el('label', {}, 'Plan'), plan, el('label', {}, 'Vence (vacío = sin vencimiento)'), vence, el('label', {}, 'Precio mensual'), precio, err],
   [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
-    el('button', { class: 'btn p', onclick: async () => { try { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'aprobar', plan: plan.value, vence: vence.value || null }); cerrar(); filtro = 'activo'; cargar(); } catch (e) { err.textContent = e.message; } } }, 'Aprobar')]);
+    el('button', { class: 'btn p', onclick: intentar(err, async () => { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'aprobar', plan: plan.value, vence: vence.value || null, precio: precio.value }); cerrar(); filtro = 'activo'; await cargar(); toast('Negocio aprobado'); }) }, 'Aprobar')]);
 }
 
-function editar(n, renovar = false) {
+function pago(n) {
+  const monto = el('input', { type: 'number', min: '0', step: '0.01', value: n.precio ?? '' });
+  const meses = el('input', { type: 'number', min: '0', max: '60', value: '1' });
+  const nota = el('input', { placeholder: 'Ej. transferencia Banreservas, efectivo…' });
+  const err = el('p', { class: 'error' });
+  modal(`Registrar pago de "${n.nombre}"`, [
+    el('p', { class: 'aviso' }, `Se suma al vencimiento actual (${n.vence || 'sin fecha'}) o a hoy si ya venció. Si estaba suspendido o vencido, queda activo.`),
+    el('label', {}, 'Monto recibido (RD$)'), monto, el('label', {}, 'Meses que cubre (0 = solo anotar el pago)'), meses, el('label', {}, 'Nota'), nota, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn p', onclick: intentar(err, async () => { const r = await api('POST', `/api/propietario/negocios/${n.uid}/pagos`, { monto: monto.value || 0, meses: meses.value || 0, nota: nota.value }); cerrar(); await cargar(); toast(`Pago registrado. Vence: ${r.vence || '—'}`); }) }, 'Registrar')]);
+}
+
+function editar(n) {
   const plan = el('input', { value: n.plan });
-  const vence = el('input', { type: 'date', value: renovar ? dias(30) : (n.vence || '') });
+  const vence = el('input', { type: 'date', value: n.vence || '' });
+  const precio = el('input', { type: 'number', min: '0', step: '0.01', value: n.precio ?? '' });
   const notas = el('textarea', { rows: 3 }, n.notas || '');
   const err = el('p', { class: 'error' });
-  modal(renovar ? `Renovar "${n.nombre}"` : `Editar "${n.nombre}"`, [
-    el('label', {}, 'Plan'), plan, el('label', {}, 'Vence'), vence, el('label', {}, 'Notas (pagos, contacto…)'), notas, err],
+  modal(`Editar "${n.nombre}"`, [
+    el('label', {}, 'Plan'), plan, el('label', {}, 'Vence'), vence, el('label', {}, 'Precio mensual'), precio, el('label', {}, 'Notas (contacto, acuerdos…)'), notas, err],
   [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
-    el('button', { class: 'btn p', onclick: async () => { try { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'editar', plan: plan.value, vence: vence.value || null, notas: notas.value }); cerrar(); cargar(); } catch (e) { err.textContent = e.message; } } }, 'Guardar')]);
+    el('button', { class: 'btn p', onclick: intentar(err, async () => { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'editar', plan: plan.value, vence: vence.value || null, precio: precio.value, notas: notas.value }); cerrar(); await cargar(); }) }, 'Guardar')]);
 }
 
-function cambiar(n, accion, texto) {
+function confirmarAccion(n, accion, texto) {
   modal('Confirmar', [el('p', {}, texto)], [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
-    el('button', { class: 'btn p', onclick: async () => { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion }); cerrar(); cargar(); } }, 'Confirmar')]);
+    el('button', { class: 'btn p', onclick: async () => { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion }); cerrar(); await cargar(); } }, 'Confirmar')]);
 }
 
-function claveAdmin(n) {
+async function respaldo(n) {
+  try {
+    const j = await api('GET', `/api/propietario/negocios/${n.uid}/respaldo`);
+    const blob = new Blob([JSON.stringify(j)], { type: 'application/json' });
+    const a = el('a', { href: URL.createObjectURL(blob), download: `respaldo-${n.nombre.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.json` });
+    document.body.append(a); a.click(); a.remove();
+    toast(`Respaldo descargado (${j.registros.length} registros)`);
+  } catch (e) { toast(e.message); }
+}
+
+function eliminar(n, rechazo = false) {
+  const conf = el('input', { placeholder: 'Escribe el nombre exacto del negocio', autocomplete: 'off' });
+  const err = el('p', { class: 'error' });
+  modal(rechazo ? `Rechazar "${n.nombre}"` : `Eliminar "${n.nombre}"`, [
+    el('p', { class: 'aviso' }, rechazo
+      ? 'Se borrará el registro y la cuenta del administrador. Esta persona podrá volver a registrarse.'
+      : `Se borrarán para siempre sus ${n.registros} registros (ventas, productos, clientes…), sus ${n.usuarios} usuario(s) y sus dispositivos, y se compacta la base para recuperar el espacio (${mb(n.bytes)}). No se puede deshacer. Si tiene los datos en sus teléfonos, podrán seguir viéndolos allí, pero ya no sincronizarán.`),
+    rechazo ? null : el('button', { class: 'btn chico', onclick: () => respaldo(n) }, 'Descargar respaldo antes de eliminar'),
+    el('label', {}, `Para confirmar escribe: ${n.nombre}`), conf, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn m', onclick: intentar(err, async () => { const r = await api('DELETE', `/api/propietario/negocios/${n.uid}`, { confirmar: conf.value }); cerrar(); await cargar(); toast(`Eliminado. Espacio liberado: ${mb(r.liberado)}`); }) }, 'Eliminar para siempre')]);
+}
+
+async function detalle(n) {
+  const d = await api('GET', `/api/propietario/negocios/${n.uid}`);
+  const err = el('p', { class: 'error' });
+  const usuarios = d.usuarios.map((u) => el('div', { class: 'fila' },
+    el('span', {}, `${u.nombre} (@${u.usuario})`, el('small', {}, `${u.rol}${u.activo ? '' : ' · desactivado'} · último acceso ${fecha(u.ultimo)}${u.correo ? ' · ' + u.correo : ''}`)),
+    el('span', { class: 'acciones', style: 'margin:0' },
+      el('button', { class: 'btn chico', onclick: intentar(err, async () => { await api('PATCH', `/api/propietario/cuentas/${u.uid}`, { activo: !u.activo }); await detalle(n); }) }, u.activo ? 'Desactivar' : 'Activar'),
+      el('button', { class: 'btn chico', onclick: () => claveCuenta(u, n) }, 'Nueva clave'))));
+  const pagos = d.pagos.length ? d.pagos.map((p) => el('div', { class: 'fila' },
+    el('span', {}, `${fecha(p.fecha)} · ${rd(p.monto)} · ${p.meses} mes(es)`, el('small', {}, p.nota || '')),
+    el('button', { class: 'btn chico m', onclick: intentar(err, async () => { if (confirm('¿Borrar este pago del historial? (No cambia el vencimiento)')) { await api('DELETE', `/api/propietario/pagos/${p.id}`); await detalle(n); await cargar(); } }) }, 'Borrar'))) : [el('p', { class: 'ayuda' }, 'Sin pagos registrados.')];
+  modal(n.nombre, [
+    el('p', { class: 'ayuda' }, `Registros: ${n.registros} · Espacio: ${mb(n.bytes)} · Dispositivos: ${d.dispositivos.map((x) => x.codigo).join(', ') || '—'}`),
+    el('h3', { class: 'sec' }, 'Usuarios'), ...usuarios,
+    el('h3', { class: 'sec' }, 'Pagos'), ...pagos,
+    el('h3', { class: 'sec' }, 'Datos guardados'),
+    el('p', { class: 'ayuda' }, d.tablas.map((t) => `${t.tabla}: ${t.n}`).join(' · ') || 'Sin datos todavía.'), err],
+  [btnCerrar()], true);
+}
+
+function claveCuenta(u, n) {
   const clave = el('input', { value: Math.random().toString(36).slice(2, 8) + Math.floor(100 + Math.random() * 900) });
   const err = el('p', { class: 'error' });
-  modal('Nueva clave temporal', [el('p', {}, `Para el administrador de "${n.nombre}". Tendrá que cambiarla al entrar.`), clave, err],
-    [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
-      el('button', { class: 'btn p', onclick: async () => { try { await api('POST', `/api/propietario/negocios/${n.uid}/clave-admin`, { clave: clave.value }); cerrar(); alert('Clave asignada: ' + clave.value); } catch (e) { err.textContent = e.message; } } }, 'Asignar')]);
+  modal('Nueva clave temporal', [el('p', {}, `Para @${u.usuario}. Deberá cambiarla al entrar. Entrégasela por un medio seguro.`), clave, err],
+    [el('button', { class: 'btn', onclick: () => detalle(n) }, 'Volver'),
+      el('button', { class: 'btn p', onclick: intentar(err, async () => { await api('POST', `/api/propietario/cuentas/${u.uid}/clave`, { clave: clave.value }); toast('Clave asignada: ' + clave.value); await detalle(n); }) }, 'Asignar')]);
 }
 
 if (token) cargar(); else pantallaLogin();

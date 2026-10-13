@@ -247,6 +247,74 @@ assert.equal(rr.status, 404);
 srv2.close(); sinPanel.close();
 ok('los registros nuevos quedan pendientes; el propietario aprueba, suspende y vence; sin clave no hay panel');
 
+// ---------- 12. Panel completo del propietario: pagos, respaldo, eliminar ----------
+const db3 = abrirBase(':memory:');
+const srv3 = crearServidor({ db: db3, secreto: 'cuarto-secreto-largo-1234567890', clavePropietario: 'dueno-sistema-1', aprobacionAutomatica: true });
+await new Promise((r) => srv3.listen(0, r));
+const B3 = `http://127.0.0.1:${srv3.address().port}`;
+const c3 = crearCliente({ base: () => B3 });
+await c3.registro({ negocio: 'Sonido Uno', nombre: 'Ana', usuario: 'ana1', correo: 'a@x.com', clave: 'clave1234', dispositivo: 'uno-dispositivo-1' });
+await c3.registro({ negocio: 'Sonido Dos', nombre: 'Beto', usuario: 'beto1', correo: 'b@x.com', clave: 'clave1234', dispositivo: 'dos-dispositivo-1' });
+const p3 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B3 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json()]; };
+const [, d3] = await p3('/api/propietario/login', { clave: 'dueno-sistema-1' });
+const T = d3.token;
+const [, l3] = await p3('/api/propietario/negocios', null, T, 'GET');
+const neg1 = l3.negocios.find((x) => x.nombre === 'Sonido Uno'), neg2 = l3.negocios.find((x) => x.nombre === 'Sonido Dos');
+// Datos de relleno para ambos negocios
+const ins = db3.prepare("INSERT INTO registros (negocio, tabla, uid, datos, borrado, actualizado, version) VALUES (?, 'productos', ?, ?, 0, 1, ?)");
+for (let i = 0; i < 300; i++) { ins.run(neg1.uid, `p${i}`, JSON.stringify({ nombre: 'Producto ' + i, nota: 'x'.repeat(400) }), 1000 + i); }
+ins.run(neg2.uid, 'q1', JSON.stringify({ nombre: 'Parlante' }), 5000);
+// Aprobar con precio y pagos
+await p3(`/api/propietario/negocios/${neg1.uid}`, { accion: 'aprobar', plan: 'mensual', vence: '2020-01-01', precio: 1500 }, T, 'PATCH');
+let [, d] = await p3('/api/propietario/negocios', null, T, 'GET');
+assert.equal(d.negocios.find((x) => x.uid === neg1.uid).estado, 'vencido');
+assert.equal(d.negocios.find((x) => x.uid === neg1.uid).precio, 1500);
+assert.ok(d.negocios.find((x) => x.uid === neg1.uid).bytes > 100000);
+const [stP, pg] = await p3(`/api/propietario/negocios/${neg1.uid}/pagos`, { monto: 1500, meses: 2, nota: 'transferencia' }, T);
+assert.equal(stP, 200);
+const esperado = new Date(); esperado.setUTCMonth(esperado.getUTCMonth() + 2);
+assert.equal(pg.vence, esperado.toISOString().slice(0, 10), 'un pago a un negocio vencido cuenta desde hoy');
+[, d] = await p3('/api/propietario/negocios', null, T, 'GET');
+assert.equal(d.negocios.find((x) => x.uid === neg1.uid).estado, 'activo');
+assert.equal(d.resumen.cobradoMes, 1500);
+assert.equal(d.resumen.ingresoMensual, 1500);
+assert.ok(d.resumen.dbBytes > 0);
+assert.equal((await p3(`/api/propietario/negocios/${neg1.uid}/pagos`, { monto: -5, meses: 1 }, T))[0], 400);
+// Detalle e historial
+const [, det] = await p3(`/api/propietario/negocios/${neg1.uid}`, null, T, 'GET');
+assert.equal(det.pagos.length, 1); assert.equal(det.usuarios.length, 1); assert.equal(det.tablas[0].n, 300);
+// Cuentas: desactivar, clave temporal
+const cuentaUno = det.usuarios[0];
+await p3(`/api/propietario/cuentas/${cuentaUno.uid}`, { activo: false }, T, 'PATCH');
+await assert.rejects(() => c3.login({ identificador: 'ana1', clave: 'clave1234', dispositivo: 'uno-dispositivo-1' }));
+await p3(`/api/propietario/cuentas/${cuentaUno.uid}`, { activo: true }, T, 'PATCH');
+assert.equal((await p3(`/api/propietario/cuentas/${cuentaUno.uid}/clave`, { clave: '123' }, T))[0], 400);
+await p3(`/api/propietario/cuentas/${cuentaUno.uid}/clave`, { clave: 'nueva-temp-77' }, T);
+const lg = await c3.login({ identificador: 'ana1', clave: 'nueva-temp-77', dispositivo: 'uno-dispositivo-1' });
+assert.equal(lg.cuenta.debeCambiar, true);
+// Borrar un pago
+assert.equal((await p3(`/api/propietario/pagos/${det.pagos[0].id}`, null, T, 'DELETE'))[0], 200);
+// Respaldo
+const [, resp] = await p3(`/api/propietario/negocios/${neg1.uid}/respaldo`, null, T, 'GET');
+assert.equal(resp.registros.length, 300); assert.equal(resp.registros[0].datos.nombre.startsWith('Producto'), true);
+// Eliminar: pide el nombre exacto, y no toca a otros negocios
+assert.equal((await p3(`/api/propietario/negocios/${neg1.uid}`, { confirmar: 'sonido uno' }, T, 'DELETE'))[0], 400);
+assert.equal((await p3(`/api/propietario/negocios/${neg1.uid}`, {}, T, 'DELETE'))[0], 400);
+assert.equal((await p3(`/api/propietario/negocios/${neg1.uid}`, { confirmar: 'Sonido Uno' }, undefined, 'DELETE'))[0], 401);
+const [stD, del] = await p3(`/api/propietario/negocios/${neg1.uid}`, { confirmar: 'Sonido Uno' }, T, 'DELETE');
+assert.equal(stD, 200); assert.equal(del.registros, 300);
+assert.ok(del.liberado > 50000, 'el archivo se compacta y recupera espacio: ' + del.liberado);
+assert.equal(db3.prepare('SELECT COUNT(*) AS c FROM registros WHERE negocio = ?').get(neg1.uid).c, 0);
+assert.equal(db3.prepare('SELECT COUNT(*) AS c FROM cuentas WHERE negocio = ?').get(neg1.uid).c, 0);
+assert.equal(db3.prepare('SELECT COUNT(*) AS c FROM registros WHERE negocio = ?').get(neg2.uid).c, 1, 'el otro negocio queda intacto');
+await assert.rejects(() => c3.login({ identificador: 'ana1', clave: 'nueva-temp-77', dispositivo: 'uno-dispositivo-1' }), /incorrectos/);
+await c3.login({ identificador: 'beto1', clave: 'clave1234', dispositivo: 'dos-dispositivo-1' });
+const [, h3] = await p3('/api/propietario/historial', null, T, 'GET');
+assert.ok(h3.acciones.some((a) => a.accion === 'Eliminó negocio' && a.negocio === 'Sonido Uno'));
+assert.equal(h3.pagos.length, 0 + h3.pagos.length);
+srv3.close();
+ok('el propietario registra pagos, respalda y elimina un negocio recuperando espacio sin tocar a los demás');
+
 servidor.close();
 console.log(`\n${pruebas} grupos de pruebas correctos`);
 process.exit(0);

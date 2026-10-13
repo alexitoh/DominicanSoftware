@@ -20,8 +20,11 @@ Cada negocio que se registra queda **pendiente**: no puede entrar ni sincronizar
 1. En Railway → **Variables** agrega `OWNER_PASSWORD` con una clave larga y secreta solo tuya. (Sin esta variable el panel no existe.)
 2. Abre `https://TU-DOMINIO/propietario` y entra con esa clave.
 3. En **Por aprobar** ves cada registro con nombre del negocio, administrador, correo y fecha. Cuando confirmes el pago pulsa **Aprobar**, elige plan (mensual, anual…) y fecha de vencimiento.
-4. Después puedes **Suspender** (por falta de pago), **Reactivar**, **Renovar** (nueva fecha de vencimiento), anotar pagos en **Notas** o darle al administrador una **nueva clave** si la olvidó. Al llegar la fecha de vencimiento el negocio se bloquea solo.
-5. Para pruebas puedes agregar `APROBACION_AUTOMATICA=1` y los registros se aprueban solos (quítala cuando vendas).
+4. Resumen arriba: por aprobar, activos, que vencen en 7 días, vencidos, suspendidos, ingreso mensual estimado, cobrado este mes y tamaño de la base de datos. Hay buscador y pestañas **Por vencer** e **Historial** (pagos y todo lo que has hecho).
+5. Cuando un cliente te paga: **Registrar pago** (monto, meses, nota). El vencimiento se alarga solo y, si estaba suspendido o vencido, queda activo.
+6. Otras acciones: **Suspender / Reactivar**, **Editar** (plan, vencimiento, precio, notas), **Detalle** (usuarios con activar/desactivar y nueva clave temporal, dispositivos, pagos, datos guardados) y **Descargar respaldo** (archivo JSON con todo el negocio).
+7. **Eliminar**: cuando un cliente deja de pagar, descarga su respaldo y pulsa Eliminar; escribe el nombre exacto del negocio. Se borran sus datos, usuarios y dispositivos para siempre y la base se compacta para recuperar el espacio. En **Rechazar y eliminar** (pendientes) la persona puede volver a registrarse. Al llegar la fecha de vencimiento el negocio se bloquea solo.
+8. Para pruebas puedes agregar `APROBACION_AUTOMATICA=1` y los registros se aprueban solos (quítala cuando vendas).
 
 ## Opción B: tu propio VPS
 

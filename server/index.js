@@ -119,6 +119,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     if (bloqueo) falla(402, bloqueo);
     return { cuenta, negocio };
   }
+  const auditar = (accion, negocio, detalle = null) =>
+    db.prepare('INSERT INTO auditoria (accion, negocio_nombre, detalle) VALUES (?, ?, ?)').run(accion, negocio, detalle);
   function autenticarPropietario(req) {
     const p = verificar((req.headers.authorization || '').replace(/^Bearer\s+/i, ''), secreto);
     if (!p?.propietario) falla(401, 'Entra de nuevo al panel.');
@@ -283,13 +285,39 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
         const admin = db.prepare("SELECT nombre, usuario, correo FROM cuentas WHERE negocio = ? AND rol = 'admin' ORDER BY creado LIMIT 1").get(n.uid);
         const c = db.prepare('SELECT COUNT(*) AS n, MAX(ultimo_acceso) AS ultimo FROM cuentas WHERE negocio = ?').get(n.uid);
         const d = db.prepare('SELECT COUNT(*) AS n FROM dispositivos WHERE negocio = ?').get(n.uid).n;
-        const estado = n.plan === 'pendiente' ? 'pendiente' : !n.activo ? 'suspendido' : (n.vence && n.vence < hoy ? 'vencido' : 'activo');
+        const bytes = db.prepare('SELECT COALESCE(SUM(LENGTH(datos)), 0) AS b FROM registros WHERE negocio = ?').get(n.uid).b;
+        const vencido = !!(n.vence && n.vence < hoy);
+        const estado = n.plan === 'pendiente' ? 'pendiente' : !n.activo ? 'suspendido' : (vencido ? 'vencido' : 'activo');
+        const diasParaVencer = n.vence ? Math.round((Date.parse(n.vence) - Date.parse(hoy)) / 86400000) : null;
         return {
-          uid: n.uid, nombre: n.nombre, estado, plan: n.plan, vence: n.vence, creado: n.creado, aprobado: n.aprobado, notas: n.notas,
-          admin, usuarios: c.n, ultimoAcceso: c.ultimo, dispositivos: d, registros: contarDatos(n.uid),
+          uid: n.uid, nombre: n.nombre, estado, plan: n.plan, vence: n.vence, precio: n.precio, creado: n.creado, aprobado: n.aprobado, notas: n.notas,
+          admin, usuarios: c.n, ultimoAcceso: c.ultimo, dispositivos: d, registros: contarDatos(n.uid), bytes, diasParaVencer,
         };
       });
-      return { negocios: filas, hoy };
+      const pagina = db.prepare('PRAGMA page_size').get().page_size;
+      const paginas = db.prepare('PRAGMA page_count').get().page_count;
+      const libres = db.prepare('PRAGMA freelist_count').get().freelist_count;
+      const mes = hoy.slice(0, 7);
+      return {
+        negocios: filas, hoy,
+        resumen: {
+          dbBytes: pagina * paginas, libreBytes: pagina * libres,
+          ingresoMensual: filas.filter((x) => x.estado === 'activo' || x.estado === 'vencido').reduce((t, x) => t + (x.precio || 0), 0),
+          cobradoMes: db.prepare("SELECT COALESCE(SUM(monto), 0) AS t FROM pagos_lic WHERE substr(fecha, 1, 7) = ?").get(mes).t,
+        },
+      };
+    },
+
+    'GET /api/propietario/negocios/:uid': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT uid FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      return {
+        usuarios: db.prepare('SELECT uid, nombre, usuario, correo, rol, activo, ultimo_acceso AS ultimo, creado FROM cuentas WHERE negocio = ? ORDER BY activo DESC, nombre').all(p.uid),
+        pagos: db.prepare('SELECT id, fecha, monto, meses, nota FROM pagos_lic WHERE negocio = ? ORDER BY id DESC').all(p.uid),
+        dispositivos: db.prepare('SELECT codigo, creado, ultimo FROM dispositivos WHERE negocio = ? ORDER BY codigo').all(p.uid),
+        tablas: db.prepare('SELECT tabla, COUNT(*) AS n FROM registros WHERE negocio = ? AND borrado = 0 GROUP BY tabla ORDER BY n DESC').all(p.uid),
+      };
     },
 
     'PATCH /api/propietario/negocios/:uid': (req, b, p) => {
@@ -300,27 +328,121 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       const vence = b.vence ? String(b.vence).slice(0, 10) : null;
       if (vence && !/^\d{4}-\d{2}-\d{2}$/.test(vence)) falla(400, 'La fecha debe ser AAAA-MM-DD.');
       const plan = String(b.plan || '').trim().slice(0, 40);
+      const precio = b.precio === '' || b.precio == null ? null : Number(b.precio);
+      if (precio != null && !(precio >= 0)) falla(400, 'El precio no es válido.');
       if (accion === 'aprobar') {
-        db.prepare("UPDATE negocios SET activo = 1, plan = ?, vence = ?, aprobado = datetime('now') WHERE uid = ?").run(plan || 'mensual', vence, n.uid);
+        db.prepare("UPDATE negocios SET activo = 1, plan = ?, vence = ?, precio = ?, aprobado = datetime('now') WHERE uid = ?").run(plan || 'mensual', vence, precio, n.uid);
+        auditar('Aprobó', n.nombre, `${plan || 'mensual'}${vence ? ` hasta ${vence}` : ''}`);
       } else if (accion === 'suspender') {
         db.prepare('UPDATE negocios SET activo = 0 WHERE uid = ?').run(n.uid);
+        auditar('Suspendió', n.nombre);
       } else if (accion === 'reactivar') {
         db.prepare("UPDATE negocios SET activo = 1, plan = CASE WHEN plan = 'pendiente' THEN 'mensual' ELSE plan END WHERE uid = ?").run(n.uid);
+        auditar('Reactivó', n.nombre);
       } else if (accion === 'editar') {
-        db.prepare('UPDATE negocios SET plan = COALESCE(NULLIF(?, \'\'), plan), vence = ?, notas = ? WHERE uid = ?')
-          .run(plan, vence, String(b.notas || '').slice(0, 500) || null, n.uid);
+        db.prepare("UPDATE negocios SET plan = COALESCE(NULLIF(?, ''), plan), vence = ?, precio = ?, notas = ? WHERE uid = ?")
+          .run(plan, vence, precio, String(b.notas || '').slice(0, 500) || null, n.uid);
+        auditar('Editó', n.nombre, `${plan}${vence ? ` hasta ${vence}` : ''}`);
       } else falla(400, 'Acción no válida.');
       return { ok: true };
     },
 
-    'POST /api/propietario/negocios/:uid/clave-admin': (req, b, p) => {
+    // Registra un pago y alarga el vencimiento: parte de hoy o de la fecha actual de vencimiento, lo que sea más tarde
+    'POST /api/propietario/negocios/:uid/pagos': (req, b, p) => {
       autenticarPropietario(req);
-      const admin = db.prepare("SELECT uid FROM cuentas WHERE negocio = ? AND rol = 'admin' ORDER BY creado LIMIT 1").get(p.uid);
-      if (!admin) falla(404, 'El negocio no tiene administrador.');
+      const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      const monto = Number(b.monto);
+      const meses = Math.round(Number(b.meses) || 0);
+      if (!(monto >= 0)) falla(400, 'El monto no es válido.');
+      if (meses < 0 || meses > 60) falla(400, 'Los meses deben estar entre 0 y 60.');
+      transaccion(db, () => {
+        db.prepare('INSERT INTO pagos_lic (negocio, negocio_nombre, monto, meses, nota) VALUES (?, ?, ?, ?, ?)')
+          .run(n.uid, n.nombre, monto, meses, String(b.nota || '').slice(0, 200) || null);
+        if (meses > 0) {
+          const hoy = new Date().toISOString().slice(0, 10);
+          const base = n.vence && n.vence > hoy ? n.vence : hoy;
+          const d = new Date(`${base}T00:00:00Z`);
+          d.setUTCMonth(d.getUTCMonth() + meses);
+          const nuevo = d.toISOString().slice(0, 10);
+          // Un pago a un negocio suspendido o vencido lo deja activo de nuevo
+          db.prepare("UPDATE negocios SET vence = ?, activo = 1, plan = CASE WHEN plan = 'pendiente' THEN 'mensual' ELSE plan END WHERE uid = ?").run(nuevo, n.uid);
+        }
+      });
+      auditar('Registró pago', n.nombre, `${monto} por ${meses} mes(es)`);
+      return { ok: true, vence: db.prepare('SELECT vence FROM negocios WHERE uid = ?').get(n.uid).vence };
+    },
+
+    'DELETE /api/propietario/pagos/:id': (req, b, p) => {
+      autenticarPropietario(req);
+      const x = db.prepare('SELECT * FROM pagos_lic WHERE id = ?').get(Number(p.id));
+      if (!x) falla(404, 'El pago no existe.');
+      db.prepare('DELETE FROM pagos_lic WHERE id = ?').run(x.id);
+      auditar('Borró un pago', x.negocio_nombre, `${x.monto}`);
+      return { ok: true };
+    },
+
+    // Copia completa de los datos de un negocio (para guardarla antes de eliminarlo)
+    'GET /api/propietario/negocios/:uid/respaldo': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      auditar('Descargó respaldo', n.nombre);
+      return {
+        generado: new Date().toISOString(), negocio: n,
+        cuentas: db.prepare('SELECT uid, nombre, usuario, correo, rol, permisos, activo, creado FROM cuentas WHERE negocio = ?').all(p.uid),
+        pagos: db.prepare('SELECT fecha, monto, meses, nota FROM pagos_lic WHERE negocio = ?').all(p.uid),
+        registros: db.prepare('SELECT tabla, uid, datos, borrado, actualizado FROM registros WHERE negocio = ?').all(p.uid)
+          .map((r) => ({ ...r, datos: r.datos ? JSON.parse(r.datos) : null })),
+      };
+    },
+
+    // Elimina el negocio y todo lo suyo, y devuelve el espacio al disco
+    'DELETE /api/propietario/negocios/:uid': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      if (String(b.confirmar || '').trim() !== n.nombre) falla(400, 'Para eliminar escribe el nombre exacto del negocio.');
+      const antes = db.prepare('PRAGMA page_count').get().page_count * db.prepare('PRAGMA page_size').get().page_size;
+      const borrados = db.prepare('SELECT COUNT(*) AS c FROM registros WHERE negocio = ?').get(n.uid).c;
+      transaccion(db, () => {
+        db.prepare('DELETE FROM registros WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM dispositivos WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM cuentas WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM negocios WHERE uid = ?').run(n.uid);
+      });
+      auditar('Eliminó negocio', n.nombre, `${borrados} registros`);
+      try { db.exec('VACUUM'); db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* si no se puede compactar ahora, el espacio queda libre para reutilizarse */ }
+      const despues = db.prepare('PRAGMA page_count').get().page_count * db.prepare('PRAGMA page_size').get().page_size;
+      return { ok: true, liberado: Math.max(0, antes - despues), registros: borrados };
+    },
+
+    'PATCH /api/propietario/cuentas/:uid': (req, b, p) => {
+      autenticarPropietario(req);
+      const c = db.prepare('SELECT c.*, n.nombre AS neg FROM cuentas c JOIN negocios n ON n.uid = c.negocio WHERE c.uid = ?').get(p.uid);
+      if (!c) falla(404, 'La cuenta no existe.');
+      db.prepare('UPDATE cuentas SET activo = ? WHERE uid = ?').run(b.activo ? 1 : 0, c.uid);
+      auditar(b.activo ? 'Activó usuario' : 'Desactivó usuario', c.neg, c.usuario);
+      return { ok: true };
+    },
+
+    'POST /api/propietario/cuentas/:uid/clave': (req, b, p) => {
+      autenticarPropietario(req);
+      const c = db.prepare('SELECT c.*, n.nombre AS neg FROM cuentas c JOIN negocios n ON n.uid = c.negocio WHERE c.uid = ?').get(p.uid);
+      if (!c) falla(404, 'La cuenta no existe.');
       const err = errorClave(b.clave);
       if (err) falla(400, err);
-      db.prepare('UPDATE cuentas SET hash = ?, debe_cambiar = 1 WHERE uid = ?').run(hashClave(b.clave), admin.uid);
+      db.prepare('UPDATE cuentas SET hash = ?, debe_cambiar = 1 WHERE uid = ?').run(hashClave(b.clave), c.uid);
+      auditar('Nueva clave temporal', c.neg, c.usuario);
       return { ok: true };
+    },
+
+    'GET /api/propietario/historial': (req) => {
+      autenticarPropietario(req);
+      return {
+        acciones: db.prepare('SELECT fecha, accion, negocio_nombre AS negocio, detalle FROM auditoria ORDER BY id DESC LIMIT 200').all(),
+        pagos: db.prepare('SELECT fecha, negocio_nombre AS negocio, monto, meses, nota FROM pagos_lic ORDER BY id DESC LIMIT 200').all(),
+      };
     },
 
     // ---------- Sincronización ----------
@@ -418,7 +540,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     const cabeceras = {
       'Access-Control-Allow-Origin': origenes,
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',

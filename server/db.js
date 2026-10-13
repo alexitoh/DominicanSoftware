@@ -62,7 +62,26 @@ export function abrirBase(ruta) {
     CREATE TABLE IF NOT EXISTS secuencia (id INTEGER PRIMARY KEY CHECK (id = 1), v INTEGER NOT NULL);
     INSERT OR IGNORE INTO secuencia (id, v) VALUES (1, 0);
   `);
-  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT']) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pagos_lic (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      negocio TEXT NOT NULL,
+      negocio_nombre TEXT,
+      fecha TEXT NOT NULL DEFAULT (datetime('now')),
+      monto REAL NOT NULL DEFAULT 0,
+      meses INTEGER NOT NULL DEFAULT 0,
+      nota TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pagos_lic_negocio ON pagos_lic(negocio);
+    CREATE TABLE IF NOT EXISTS auditoria (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fecha TEXT NOT NULL DEFAULT (datetime('now')),
+      accion TEXT NOT NULL,
+      negocio_nombre TEXT,
+      detalle TEXT
+    );
+  `);
+  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT', 'ALTER TABLE negocios ADD COLUMN precio REAL']) {
     try { db.exec(q); } catch { /* la columna ya existe */ }
   }
   return db;
