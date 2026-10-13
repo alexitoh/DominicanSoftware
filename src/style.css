@@ -312,3 +312,15 @@ textarea.campo { resize: vertical; }
 
 .acceso-contacto { margin-top: 1.25rem; padding-top: .75rem; border-top: 1px solid var(--linea, #d5dbe0); text-align: center; font-size: .875rem; color: var(--suave); }
 .acceso-contacto a { color: inherit; font-weight: 600; }
+
+#nav .nav-avisos[data-nuevos="1"] { color: #ffd54f; }
+.aviso { padding: .75rem; border: 1px solid var(--linea); border-radius: 10px; margin-bottom: .6rem; }
+.aviso p { margin: .25rem 0; white-space: pre-wrap; }
+.aviso.nuevo { border-left: 4px solid var(--primario); }
+.aviso.importante { border-color: #e59a0f; background: rgba(229,154,15,.12); }
+.banner-pago { padding: .55rem 1rem; background: #fff3d6; color: #5c3b00; border-bottom: 1px solid #e59a0f; font-size: .9rem; }
+
+.buscador { width: calc(100% - 2rem); margin: .75rem 1rem 0; }
+.buscador-modulos .tiles { padding-top: .75rem; }
+.hoja .buscador { width: 100%; margin: 0; }
+#nav .nav-nube > span { display: grid; place-items: center; }

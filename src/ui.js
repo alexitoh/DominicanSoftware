@@ -32,9 +32,30 @@ export function toast(mensaje, tipo = 'ok') {
 }
 
 // Hoja inferior (ventana emergente). Devuelve la función para cerrarla.
+// Cada hoja añade una entrada al historial: el botón "atrás" del navegador o del teléfono la cierra en vez de salir de la página.
+const hojasAbiertas = [];
+let ignorarAtras = 0;
+let contadorHojas = 0;
+
+// main.js la llama en cada "popstate": devuelve true si el evento ya se atendió aquí
+export function atrasAtendido() {
+  if (ignorarAtras > 0) { ignorarAtras--; return true; }
+  const ultima = hojasAbiertas.pop();
+  if (!ultima) return false;
+  ultima.fondo.remove();
+  return true;
+}
+
 export function hoja(titulo, contenido) {
+  const id = ++contadorHojas;
   const fondo = h('div', { class: 'fondo', onClick: (e) => { if (e.target === fondo) cerrar(); } });
-  const cerrar = () => fondo.remove();
+  const cerrar = () => {
+    const i = hojasAbiertas.findIndex((x) => x.id === id);
+    if (i < 0) { fondo.remove(); return; }
+    hojasAbiertas.splice(i, 1);
+    fondo.remove();
+    if (history.state?.hoja === id) { ignorarAtras++; history.back(); }
+  };
   fondo.append(
     h('section', { class: 'hoja', role: 'dialog', 'aria-label': titulo },
       h('header', {},
@@ -43,6 +64,7 @@ export function hoja(titulo, contenido) {
       contenido)
   );
   document.body.append(fondo);
+  try { history.pushState({ hoja: id }, ''); hojasAbiertas.push({ id, fondo }); } catch { hojasAbiertas.push({ id, fondo }); }
   return cerrar;
 }
 

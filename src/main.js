@@ -2,12 +2,13 @@
 import './style.css';
 import { Capacitor } from '@capacitor/core';
 import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo } from './database.js';
-import { h, toast, confirmar, setMoneda } from './ui.js';
+import { h, toast, confirmar, setMoneda, hoja, atrasAtendido } from './ui.js';
 import { setIdioma, getIdioma, instalarTraductor } from './i18n.js';
 import { asegurarSesion } from './login.js';
 import { tienePermiso, usuarioActual, registrarBitacora } from './auth.js';
 import { vistaUsuarios, abrirMiCuenta } from './usuarios.js';
 import { indicadorNube, seccionNube } from './nube-ui.js';
+import { campanaAvisos, bannerPago } from './avisos-ui.js';
 import { cargarVinculo, vinculado, iniciarSincronizacionAutomatica } from './nube-app.js';
 import { vistaVentas } from './ventas.js';
 import { vistaProductos } from './productos.js';
@@ -19,7 +20,7 @@ import { vistaCaja } from './caja.js';
 import { vistaReportes } from './reportes.js';
 import { vistaGarantias } from './garantias.js';
 import { vistaCuentas } from './cuentas.js';
-import { crearVistaInicio, MODULOS, INICIO, icono } from './inicio.js';
+import { crearVistaInicio, MODULOS, INICIO, icono, buscadorModulos } from './inicio.js';
 
 instalarTraductor(); // las asignaciones a textContent también se traducen
 
@@ -51,6 +52,21 @@ const vistas = {
 };
 
 let actual = 'inicio';
+let rutaLista = false;
+
+// "Atrás" y "adelante" del navegador o del teléfono: primero cierran ventanas abiertas, luego cambian de pantalla
+window.addEventListener('popstate', () => {
+  if (atrasAtendido() || !rutaLista) return;
+  const id = rutaDe() || 'inicio';
+  if (id !== actual) ir(id, { push: false });
+});
+
+function abrirBuscador() {
+  const caja = h('div', { class: 'cuerpo' });
+  const cerrar = hoja('Buscar módulo', caja);
+  caja.append(buscadorModulos((id) => ir(id), (id) => tienePermiso(id), cerrar));
+  caja.querySelector('input')?.focus();
+}
 
 async function cargarMoneda() {
   const [m] = await consultar("SELECT valor FROM config WHERE clave = 'moneda'");
@@ -69,18 +85,25 @@ function construirNav() {
       h('button', { 'data-id': m.id, title: m.titulo, 'aria-label': m.titulo, onClick: () => ir(m.id) }, icono(m))),
     // Sincronización y cuenta del usuario: siempre visibles a la derecha
     h('div', { class: 'nav-fijo' },
+      h('button', { class: 'nav-nube', title: 'Buscar módulo', 'aria-label': 'Buscar módulo', onClick: abrirBuscador },
+        Object.assign(document.createElement('span'), { innerHTML: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' })),
+      campanaAvisos(),
       indicadorNube(),
       h('button', { class: 'nav-cuenta', title: 'Mi cuenta', 'aria-label': 'Mi cuenta', onClick: () => abrirMiCuenta(() => location.reload()) },
         h('span', { class: 'avatar' }, String(u?.nombre || '?').trim().split(/\s+/).slice(0, 2).map((x) => x[0]).join('').toUpperCase()))));
   nav.querySelector(`[data-id="${actual}"]`)?.setAttribute('aria-current', 'page');
 }
 
-async function ir(id) {
+// Cada pantalla tiene su propia dirección (#/ventas, #/productos…) para que "atrás" y "adelante" funcionen y se pueda compartir el enlace
+const rutaDe = () => { const r = /^#\/([a-z]+)/.exec(location.hash); return r && vistas[r[1]] ? r[1] : null; };
+
+async function ir(id, { push = true } = {}) {
   if (!tienePermiso(id)) {
     pantalla.replaceChildren(h('p', { class: 'error vacio' }, 'No tienes permiso para entrar a esta sección. Habla con el administrador.'));
     return;
   }
   actual = id;
+  if (push && location.hash !== `#/${id}`) history.pushState({ ruta: id }, '', `#/${id}`);
   nav.querySelectorAll('button').forEach((b) => {
     if (b.dataset.id === id) { b.setAttribute('aria-current', 'page'); b.scrollIntoView?.({ inline: 'center', block: 'nearest' }); }
     else b.removeAttribute('aria-current');
@@ -264,7 +287,12 @@ window.addEventListener('caraudio:datos-nuevos', async () => {
     await cargarMoneda();   // por si llegaron datos de la nube al entrar
     await cargarIdioma();   // por si cambió al restaurar
     construirNav();
-    await ir('inicio');
+    bannerPago(pantalla);
+    const inicial = rutaDe();
+    const primera = inicial && tienePermiso(inicial) ? inicial : 'inicio';
+    history.replaceState({ ruta: primera }, '', `#/${primera}`);
+    rutaLista = true;
+    await ir(primera, { push: false });
     iniciarSincronizacionAutomatica();
   } catch (e) {
     document.body.append(h('p', { class: 'error vacio' }, `No se pudo abrir la base de datos: ${e.message || e}`));

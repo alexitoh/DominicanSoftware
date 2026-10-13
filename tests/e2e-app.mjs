@@ -8,7 +8,8 @@ globalThis.document = { addEventListener() {}, visibilityState: 'visible' };
 
 const { crearServidor } = await import('../server/index.js');
 const { abrirBase } = await import('../server/db.js');
-const servidor = crearServidor({ db: abrirBase(':memory:'), secreto: 'prueba-secreto-largo-1234567890', aprobacionAutomatica: true });
+const dbSrv = abrirBase(':memory:');
+const servidor = crearServidor({ db: dbSrv, secreto: 'prueba-secreto-largo-1234567890', aprobacionAutomatica: true });
 await new Promise((r) => servidor.listen(0, r));
 const BASE = `http://127.0.0.1:${servidor.address().port}`;
 localStorage.setItem('caraudio_servidor', BASE);
@@ -151,6 +152,15 @@ const volver = await auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplaz
 assert.ok(volver);
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 1, 'los datos del primer negocio vuelven desde la nube');
 ok('se puede crear otro negocio en el mismo dispositivo y volver al anterior desde la nube');
+
+// ---- avisos en el dispositivo ----
+dbSrv.prepare("INSERT INTO avisos (negocio, titulo, mensaje, nivel, caduca) VALUES (NULL, 'Novedad', 'Hay una versión nueva', 'info', '2099-01-01')").run();
+let av = await na.cargarAvisos();
+assert.equal(av.avisos.length, 1); assert.equal(av.sinLeer, 1);
+await na.marcarAvisosLeidos();
+assert.equal(na.estadoAvisos().sinLeer, 0);
+assert.equal((await na.cargarAvisos()).sinLeer, 0, 'el servidor recuerda que ya se leyó');
+ok('el dispositivo descarga los avisos y los marca como leídos');
 
 servidor.close();
 console.log(`\n${n} grupos de pruebas correctos`);

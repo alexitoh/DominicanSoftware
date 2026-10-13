@@ -408,6 +408,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       transaccion(db, () => {
         db.prepare('DELETE FROM registros WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM dispositivos WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM avisos_leidos WHERE cuenta IN (SELECT uid FROM cuentas WHERE negocio = ?)').run(n.uid);
+        db.prepare('DELETE FROM avisos WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM cuentas WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM negocios WHERE uid = ?').run(n.uid);
       });
@@ -437,12 +439,104 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       return { ok: true };
     },
 
+
+    // ---------- Mensajes del propietario a sus clientes ----------
+    'POST /api/propietario/avisos': (req, b) => {
+      autenticarPropietario(req);
+      const titulo = String(b.titulo || '').trim().slice(0, 80);
+      const mensaje = String(b.mensaje || '').trim().slice(0, 1000);
+      const nivel = b.nivel === 'importante' ? 'importante' : 'info';
+      if (!titulo) falla(400, 'Escribe un título.');
+      if (!mensaje) falla(400, 'Escribe el mensaje.');
+      const dias = Math.min(365, Math.max(1, Math.round(Number(b.dias) || 30)));
+      const d = new Date(); d.setUTCDate(d.getUTCDate() + dias);
+      const caduca = d.toISOString().slice(0, 10);
+      const ins = db.prepare('INSERT INTO avisos (negocio, titulo, mensaje, nivel, caduca) VALUES (?, ?, ?, ?, ?)');
+      let enviados = 0;
+      if (b.destino === 'todos') {
+        ins.run(null, titulo, mensaje, nivel, caduca); enviados = db.prepare("SELECT COUNT(*) AS c FROM negocios WHERE plan <> 'pendiente'").get().c;
+        auditar('Mensaje masivo', 'Todos los clientes', titulo);
+      } else {
+        const uids = [...new Set(Array.isArray(b.negocios) ? b.negocios.map(String) : [])];
+        if (!uids.length) falla(400, 'Elige al menos un cliente.');
+        transaccion(db, () => {
+          for (const u of uids) {
+            const n = db.prepare('SELECT uid, nombre FROM negocios WHERE uid = ?').get(u);
+            if (!n) continue;
+            ins.run(n.uid, titulo, mensaje, nivel, caduca); enviados++;
+            auditar('Mensaje', n.nombre, titulo);
+          }
+        });
+        if (!enviados) falla(404, 'Los clientes elegidos no existen.');
+      }
+      return { ok: true, enviados };
+    },
+
+    'GET /api/propietario/avisos': (req) => {
+      autenticarPropietario(req);
+      const hoy = new Date().toISOString().slice(0, 10);
+      return {
+        avisos: db.prepare(`SELECT a.id, a.titulo, a.mensaje, a.nivel, a.creado, a.caduca, a.negocio, n.nombre AS negocio_nombre FROM avisos a
+          LEFT JOIN negocios n ON n.uid = a.negocio ORDER BY a.id DESC LIMIT 100`).all().map((a) => {
+          const total = a.negocio
+            ? db.prepare('SELECT COUNT(*) AS c FROM cuentas WHERE negocio = ? AND activo = 1').get(a.negocio).c
+            : db.prepare("SELECT COUNT(*) AS c FROM cuentas c JOIN negocios n ON n.uid = c.negocio WHERE c.activo = 1 AND n.plan <> 'pendiente'").get().c;
+          const leidos = db.prepare('SELECT COUNT(*) AS c FROM avisos_leidos WHERE aviso = ?').get(`m${a.id}`).c;
+          return { ...a, destino: a.negocio ? a.negocio_nombre || '(eliminado)' : 'Todos los clientes', vigente: !a.caduca || a.caduca >= hoy, leidos, total };
+        }),
+      };
+    },
+
+    'DELETE /api/propietario/avisos/:id': (req, b, p) => {
+      autenticarPropietario(req);
+      const a = db.prepare('SELECT id FROM avisos WHERE id = ?').get(Number(p.id));
+      if (!a) falla(404, 'El mensaje no existe.');
+      db.prepare('DELETE FROM avisos WHERE id = ?').run(a.id);
+      db.prepare('DELETE FROM avisos_leidos WHERE aviso = ?').run(`m${a.id}`);
+      return { ok: true };
+    },
+
     'GET /api/propietario/historial': (req) => {
       autenticarPropietario(req);
       return {
         acciones: db.prepare('SELECT fecha, accion, negocio_nombre AS negocio, detalle FROM auditoria ORDER BY id DESC LIMIT 200').all(),
         pagos: db.prepare('SELECT fecha, negocio_nombre AS negocio, monto, meses, nota FROM pagos_lic ORDER BY id DESC LIMIT 200').all(),
       };
+    },
+
+
+    // ---------- Avisos para los usuarios del negocio ----------
+    // Mensajes del propietario (para este negocio o para todos) y recordatorio automático de pago para el administrador
+    'GET /api/avisos': (req) => {
+      const ctx = autenticar(req);
+      const hoy = new Date().toISOString().slice(0, 10);
+      const leidos = new Set(db.prepare('SELECT aviso FROM avisos_leidos WHERE cuenta = ?').all(ctx.cuenta.uid).map((x) => x.aviso));
+      const lista = db.prepare(`SELECT id, titulo, mensaje, nivel, creado FROM avisos
+        WHERE (negocio IS NULL OR negocio = ?) AND (caduca IS NULL OR caduca >= ?) ORDER BY id DESC LIMIT 50`)
+        .all(ctx.negocio.uid, hoy)
+        .map((a) => ({ id: `m${a.id}`, tipo: 'mensaje', titulo: a.titulo, mensaje: a.mensaje, nivel: a.nivel, fecha: a.creado, leido: leidos.has(`m${a.id}`) }));
+      if (ctx.cuenta.rol === 'admin' && ctx.negocio.vence) {
+        const dias = Math.round((Date.parse(ctx.negocio.vence) - Date.parse(hoy)) / 86400000);
+        if (dias <= 7) {
+          const tramo = dias <= 1 ? 1 : dias <= 3 ? 3 : 7; // vuelve a aparecer como nuevo a los 7, 3 y 1 días
+          const id = `pago-${ctx.negocio.vence}-${tramo}`;
+          const cuando = dias === 0 ? 'vence hoy' : dias === 1 ? 'vence mañana' : `vence en ${dias} días`;
+          lista.unshift({
+            id, tipo: 'pago', nivel: 'importante', fecha: hoy, leido: leidos.has(id), dias,
+            titulo: 'Se acerca tu fecha de pago',
+            mensaje: `Tu suscripción ${cuando} (${ctx.negocio.vence}). Para renovar y no perder el acceso, contacta a Ing. David Vargas al 1-809-230-9980.`,
+          });
+        }
+      }
+      return { avisos: lista, sinLeer: lista.filter((a) => !a.leido).length };
+    },
+
+    'POST /api/avisos/leidos': (req, b) => {
+      const ctx = autenticar(req);
+      const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).filter((x) => x.length <= 80).slice(0, 100);
+      const ins = db.prepare('INSERT OR IGNORE INTO avisos_leidos (aviso, cuenta) VALUES (?, ?)');
+      for (const id of ids) ins.run(id, ctx.cuenta.uid);
+      return { ok: true };
     },
 
     // ---------- Sincronización ----------

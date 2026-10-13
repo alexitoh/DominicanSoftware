@@ -1,6 +1,7 @@
 // inicio.js - panel de inicio con un icono por módulo y avisos importantes
 import { consultar } from './database.js';
 import { h, dinero } from './ui.js';
+import { traducir } from './i18n.js';
 
 const svg = (cuerpo) => `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${cuerpo}</svg>`;
 
@@ -37,6 +38,30 @@ export const INICIO = {
   id: 'inicio', titulo: 'Inicio', color: '#15212B',
   icono: svg('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/>'),
 };
+
+// Palabras extra para encontrar cada módulo aunque no se escriba su nombre exacto
+const PALABRAS = {
+  ventas: 'vender factura facturar cotizacion cotizaciones pos cobrar', productos: 'articulos catalogo precio precios codigo',
+  inventario: 'stock existencia existencias almacen ajuste', compras: 'comprar suplidor mercancia', caja: 'efectivo cierre apertura gastos turno',
+  cuentas: 'deudas pagar proveedores credito', clientes: 'cobrar credito abonos', proveedores: 'suplidores', garantias: 'garantia',
+  reportes: 'informes estadisticas ganancias', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
+};
+const plano = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+// Módulos que coinciden con lo escrito (nombre en español o en el idioma actual, o palabras relacionadas)
+export function buscarModulos(texto, puede = () => true) {
+  const q = plano(texto);
+  const todos = [INICIO, ...MODULOS].filter((m) => puede(m.id));
+  if (!q) return todos.filter((m) => m.id !== 'inicio');
+  // Primero los que empiezan con lo escrito, luego los que lo contienen
+  const nota = (m) => {
+    const nombres = [m.titulo, traducir(m.titulo)].map(plano);
+    if (nombres.some((t) => t.startsWith(q))) return 0;
+    if (nombres.some((t) => t.includes(q))) return 1;
+    return plano(PALABRAS[m.id] || '').includes(q) ? 2 : 3;
+  };
+  return todos.map((m) => [nota(m), m]).filter(([n]) => n < 3).sort((a, b) => a[0] - b[0]).map(([, m]) => m);
+}
 
 export const icono = (m) => {
   const e = h('span', { class: 'tile-icono', style: `background:${m.color}` });
@@ -88,7 +113,23 @@ export function crearVistaInicio(ir, puede = () => true, nombreUsuario = () => '
         dato('Ventas hoy', String(hoy.n)),
         dato('Caja', caja ? 'Abierta' : 'Cerrada', caja ? 'pagada' : '')) : null,
       avisos.length ? h('div', { class: 'avisos' }, avisos) : null,
-      h('nav', { class: 'tiles', 'aria-label': 'Módulos' },
-        MODULOS.filter((m) => puede(m.id)).map((m) => h('button', { class: 'tile', onClick: () => ir(m.id) }, icono(m), h('span', {}, m.titulo)))));
+      buscadorModulos(ir, puede));
   };
+}
+
+// Caja de búsqueda con la lista de módulos que se va filtrando; Enter abre el primero
+export function buscadorModulos(ir, puede, alElegir = () => {}) {
+  const entrada = h('input', { class: 'campo buscador', type: 'search', placeholder: 'Buscar módulo…', 'aria-label': 'Buscar módulo', autocomplete: 'off' });
+  const tiles = h('nav', { class: 'tiles', 'aria-label': 'Módulos' });
+  const abrir = (m) => { alElegir(); ir(m.id); };
+  const pintar = () => {
+    const l = buscarModulos(entrada.value, puede);
+    tiles.replaceChildren(...(l.length
+      ? l.map((m) => h('button', { class: 'tile', onClick: () => abrir(m) }, icono(m), h('span', {}, m.titulo)))
+      : [h('p', { class: 'vacio' }, 'No hay módulos con ese nombre.')]));
+  };
+  entrada.addEventListener('input', pintar);
+  entrada.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const l = buscarModulos(entrada.value, puede); if (l[0]) abrir(l[0]); } });
+  pintar();
+  return h('div', { class: 'buscador-modulos' }, entrada, tiles);
 }

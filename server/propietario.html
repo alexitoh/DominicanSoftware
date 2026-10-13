@@ -56,7 +56,7 @@
 const $ = (s) => document.querySelector(s);
 const raiz = $('#raiz'), dlg = $('#dlg');
 let token = sessionStorage.getItem('prop_token');
-let datos = null, filtro = 'pendiente', busqueda = '', historial = null;
+let datos = null, filtro = 'pendiente', busqueda = '', historial = null, mensajes = null;
 
 async function api(metodo, ruta, cuerpo) {
   const r = await fetch(ruta, {
@@ -108,21 +108,21 @@ function pintar() {
   const lista = datos.negocios, r = datos.resumen;
   const n = (k) => lista.filter(grupos[k]).length;
   const q = busqueda.trim().toLowerCase();
-  const visibles = filtro === 'historial' ? [] : lista.filter(grupos[filtro]).filter((x) => !q ||
+  const visibles = ['historial', 'mensajes'].includes(filtro) ? [] : lista.filter(grupos[filtro]).filter((x) => !q ||
     [x.nombre, x.admin?.nombre, x.admin?.usuario, x.admin?.correo].some((t) => String(t || '').toLowerCase().includes(q)));
-  const tab = (id, t) => el('button', { 'aria-pressed': String(filtro === id), onclick: async () => { filtro = id; if (id === 'historial') historial = await api('GET', '/api/propietario/historial'); pintar(); } }, id === 'historial' || id === 'todos' ? t : `${t} (${n(id)})`);
+  const tab = (id, t) => el('button', { 'aria-pressed': String(filtro === id), onclick: async () => { filtro = id; if (id === 'historial') historial = await api('GET', '/api/propietario/historial'); if (id === 'mensajes') mensajes = await api('GET', '/api/propietario/avisos'); pintar(); } }, ['historial', 'todos', 'mensajes'].includes(id) ? t : `${t} (${n(id)})`);
   const buscar = el('input', { class: 'buscar', type: 'search', placeholder: 'Buscar por negocio, nombre, usuario o correo…', value: busqueda });
   buscar.addEventListener('input', () => { busqueda = buscar.value; const pos = buscar.selectionStart; pintar(); const nuevo = $('.buscar'); nuevo.focus(); nuevo.setSelectionRange(pos, pos); });
   raiz.replaceChildren(
     el('header', {}, el('h1', {}, 'Dominican Software · Panel del propietario'), el('div', { class: 'acciones' },
-      el('button', { class: 'btn chico', onclick: cargar }, 'Actualizar'), el('button', { class: 'btn chico', onclick: salir }, 'Salir'))),
+      el('button', { class: 'btn p chico', onclick: () => redactar() }, 'Mensaje masivo'), el('button', { class: 'btn chico', onclick: cargar }, 'Actualizar'), el('button', { class: 'btn chico', onclick: salir }, 'Salir'))),
     el('main', {},
       el('div', { class: 'resumen' },
         ...[[n('pendiente'), 'Por aprobar'], [n('activo'), 'Activos'], [n('porvencer'), 'Vencen en 7 días'], [n('vencido'), 'Vencidos'], [n('suspendido'), 'Suspendidos'],
           [rd(r.ingresoMensual), 'Ingreso mensual estimado'], [rd(r.cobradoMes), 'Cobrado este mes'], [mb(r.dbBytes), `Base de datos${r.libreBytes > 4096 ? ` (${mb(r.libreBytes)} libres)` : ''}`]]
           .map(([v, t]) => el('div', {}, el('strong', {}, String(v)), el('span', {}, t)))),
-      el('div', { class: 'tabs' }, tab('pendiente', 'Por aprobar'), tab('activo', 'Activos'), tab('porvencer', 'Por vencer'), tab('vencido', 'Vencidos'), tab('suspendido', 'Suspendidos'), tab('todos', 'Todos'), tab('historial', 'Historial')),
-      filtro === 'historial' ? vistaHistorial() : [buscar, visibles.length ? visibles.map(tarjeta) : el('p', { class: 'vacio' }, 'No hay negocios en esta lista.')]));
+      el('div', { class: 'tabs' }, tab('pendiente', 'Por aprobar'), tab('activo', 'Activos'), tab('porvencer', 'Por vencer'), tab('vencido', 'Vencidos'), tab('suspendido', 'Suspendidos'), tab('todos', 'Todos'), tab('mensajes', 'Mensajes'), tab('historial', 'Historial')),
+      filtro === 'historial' ? vistaHistorial() : filtro === 'mensajes' ? vistaMensajes() : [buscar, visibles.length ? visibles.map(tarjeta) : el('p', { class: 'vacio' }, 'No hay negocios en esta lista.')]));
 }
 
 function vistaHistorial() {
@@ -131,6 +131,48 @@ function vistaHistorial() {
       historial.pagos.length ? historial.pagos.map((p) => el('div', { class: 'fila' }, el('span', {}, p.negocio || '—', el('small', {}, `${fecha(p.fecha)}${p.nota ? ' · ' + p.nota : ''}`)), el('strong', {}, `${rd(p.monto)} · ${p.meses} mes(es)`))) : el('p', { class: 'vacio' }, 'Sin pagos registrados.')),
     el('div', { class: 'caja' }, el('h3', { class: 'sec', style: 'margin-top:0' }, 'Lo que has hecho en el panel'),
       historial.acciones.length ? historial.acciones.map((a) => el('div', { class: 'fila' }, el('span', {}, `${a.accion}: ${a.negocio || '—'}`, el('small', {}, a.detalle || '')), el('small', {}, fecha(a.fecha)))) : el('p', { class: 'vacio' }, 'Todavía no hay movimientos.')));
+}
+
+function vistaMensajes() {
+  const l = mensajes.avisos;
+  return el('div', { class: 'caja' },
+    el('div', { class: 'acciones', style: 'margin:0 0 .5rem' }, el('button', { class: 'btn p chico', onclick: () => redactar() }, 'Nuevo mensaje masivo')),
+    l.length ? l.map((a) => el('div', { class: 'fila' },
+      el('span', {}, `${a.titulo}${a.nivel === 'importante' ? ' ⚠' : ''}`, el('small', {}, `Para: ${a.destino} · ${fecha(a.creado)} · ${a.vigente ? 'vigente hasta ' + a.caduca : 'caducado'} · leído por ${a.leidos} de ${a.total}`), el('small', {}, a.mensaje)),
+      el('button', { class: 'btn chico m', onclick: async () => { if (confirm('¿Borrar este mensaje? Dejará de verse en los clientes.')) { await api('DELETE', `/api/propietario/avisos/${a.id}`); mensajes = await api('GET', '/api/propietario/avisos'); pintar(); } } }, 'Borrar')))
+      : el('p', { class: 'vacio' }, 'Todavía no has enviado mensajes.'));
+}
+
+// Un cliente (n) o varios: todos, los que vencen pronto o los activos
+function redactar(n) {
+  const destino = el('select', {}, ...(n ? [el('option', { value: 'uno' }, n.nombre)] : [
+    el('option', { value: 'todos' }, 'Todos los clientes'),
+    el('option', { value: 'porvencer' }, 'Los que vencen en 7 días o menos'),
+    el('option', { value: 'activo' }, 'Solo los activos')]));
+  const titulo = el('input', { maxlength: '80', placeholder: 'Ej. Recordatorio de pago' });
+  const texto = el('textarea', { rows: 4, maxlength: '1000', placeholder: 'Escribe el mensaje que verá el cliente en su campana de avisos…' });
+  const imp = el('input', { type: 'checkbox' });
+  const dias = el('input', { type: 'number', min: '1', max: '365', value: '30' });
+  const err = el('p', { class: 'error' });
+  modal(n ? `Mensaje para "${n.nombre}"` : 'Mensaje masivo', [
+    el('p', { class: 'ayuda' }, 'El cliente lo ve en la campana de la app (web o teléfono) la próxima vez que se conecte. Se muestra a todos los usuarios de ese negocio.'),
+    el('label', {}, 'Para'), destino, el('label', {}, 'Título'), titulo, el('label', {}, 'Mensaje'), texto,
+    el('label', { class: 'casilla' }, imp, ' Marcar como importante'), el('label', {}, 'Días que estará visible'), dias, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn p', onclick: intentar(err, async () => {
+      const cuerpo = { titulo: titulo.value, mensaje: texto.value, nivel: imp.checked ? 'importante' : 'info', dias: dias.value };
+      if (destino.value === 'todos') cuerpo.destino = 'todos';
+      else {
+        cuerpo.destino = 'negocios';
+        cuerpo.negocios = n ? [n.uid] : datos.negocios.filter((x) => destino.value === 'porvencer' ? porVencer(x) : x.estado === 'activo').map((x) => x.uid);
+        if (!cuerpo.negocios.length) throw new Error('No hay clientes en ese grupo.');
+      }
+      const total = destino.value === 'todos' ? 'todos los clientes' : `${cuerpo.negocios.length} cliente(s)`;
+      if (!n && !confirm(`¿Enviar este mensaje a ${total}?`)) return;
+      await api('POST', '/api/propietario/avisos', cuerpo);
+      cerrar(); toast('Mensaje enviado a ' + total);
+      if (filtro === 'mensajes') { mensajes = await api('GET', '/api/propietario/avisos'); pintar(); }
+    }) }, 'Enviar')]);
 }
 
 function tarjeta(n) {
@@ -142,6 +184,7 @@ function tarjeta(n) {
   } else {
     ac.push(el('button', { class: 'btn p chico', onclick: () => pago(n) }, 'Registrar pago'));
     ac.push(el('button', { class: 'btn chico', onclick: () => detalle(n) }, 'Detalle'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => redactar(n) }, 'Enviar mensaje'));
     if (n.estado === 'suspendido') ac.push(el('button', { class: 'btn chico', onclick: () => confirmarAccion(n, 'reactivar', `¿Reactivar "${n.nombre}"?`) }, 'Reactivar'));
     else ac.push(el('button', { class: 'btn m chico', onclick: () => confirmarAccion(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar, pero sus datos se conservan.`) }, 'Suspender'));
     ac.push(el('button', { class: 'btn chico', onclick: () => editar(n) }, 'Editar'));

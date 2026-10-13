@@ -26,6 +26,14 @@ Cada negocio que se registra queda **pendiente**: no puede entrar ni sincronizar
 7. **Eliminar**: cuando un cliente deja de pagar, descarga su respaldo y pulsa Eliminar; escribe el nombre exacto del negocio. Se borran sus datos, usuarios y dispositivos para siempre y la base se compacta para recuperar el espacio. En **Rechazar y eliminar** (pendientes) la persona puede volver a registrarse. Al llegar la fecha de vencimiento el negocio se bloquea solo.
 8. Para pruebas puedes agregar `APROBACION_AUTOMATICA=1` y los registros se aprueban solos (quítala cuando vendas).
 
+### Avisos y mensajes a tus clientes
+
+- **Recordatorio de pago automático:** cuando faltan 7, 3 y 1 días para el vencimiento, el administrador del negocio ve una franja amarilla arriba y un aviso nuevo en la campana, con tu teléfono de contacto. No tienes que hacer nada.
+- **Mensaje a un cliente:** en su tarjeta pulsa **Enviar mensaje**.
+- **Mensaje masivo:** botón **Mensaje masivo** arriba (a todos, a los que vencen en 7 días o a los activos). Eliges título, texto, si es importante y cuántos días estará visible.
+- La pestaña **Mensajes** muestra lo enviado, cuántos usuarios lo han leído y permite borrarlo.
+- Los clientes lo ven en la campana de la app (web o teléfono) la próxima vez que tengan internet; después queda guardado en su dispositivo.
+
 ## Opción B: tu propio VPS
 
 ```

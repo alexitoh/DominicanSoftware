@@ -73,6 +73,21 @@ export function abrirBase(ruta) {
       nota TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_pagos_lic_negocio ON pagos_lic(negocio);
+    CREATE TABLE IF NOT EXISTS avisos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      negocio TEXT,
+      titulo TEXT NOT NULL,
+      mensaje TEXT NOT NULL,
+      nivel TEXT NOT NULL DEFAULT 'info',
+      creado TEXT NOT NULL DEFAULT (datetime('now')),
+      caduca TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_avisos_negocio ON avisos(negocio);
+    CREATE TABLE IF NOT EXISTS avisos_leidos (
+      aviso TEXT NOT NULL,
+      cuenta TEXT NOT NULL,
+      PRIMARY KEY (aviso, cuenta)
+    );
     CREATE TABLE IF NOT EXISTS auditoria (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fecha TEXT NOT NULL DEFAULT (datetime('now')),

@@ -149,7 +149,12 @@ let reloj = null;
 let pendienteDebounce = null;
 export function iniciarSincronizacionAutomatica() {
   if (reloj) return;
-  const intentar = () => { if (navigator.onLine !== false && document.visibilityState !== 'hidden') sincronizarAhora(); };
+  let ultimaCargaAvisos = 0;
+  const intentar = () => {
+    if (navigator.onLine === false || document.visibilityState === 'hidden') return;
+    sincronizarAhora();
+    if (Date.now() - ultimaCargaAvisos > 300000) { ultimaCargaAvisos = Date.now(); cargarAvisos(); }
+  };
   reloj = setInterval(intentar, 45000);
   window.addEventListener('online', intentar);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') intentar(); });
@@ -159,7 +164,45 @@ export function iniciarSincronizacionAutomatica() {
     clearTimeout(pendienteDebounce);
     pendienteDebounce = setTimeout(intentar, 4000);
   });
+  cargarAvisosGuardados();
   if (vinculado()) intentar();
+}
+
+// ---------- Avisos (mensajes del proveedor y recordatorio de pago) ----------
+// Se guardan en este dispositivo para poder verlos también sin internet
+const K_AVISOS = 'caraudio_avisos';
+let avisosEstado = { avisos: [], sinLeer: 0 };
+const oyentesAvisos = new Set();
+const guardarAvisos = (cuenta) => { try { localStorage.setItem(K_AVISOS, JSON.stringify({ cuenta, ...avisosEstado })); } catch { /* sin almacenamiento */ } };
+const avisarAvisos = () => oyentesAvisos.forEach((f) => { try { f(avisosEstado); } catch { /* un oyente roto no frena a los demás */ } });
+export const estadoAvisos = () => avisosEstado;
+export const alCambiarAvisos = (fn) => { oyentesAvisos.add(fn); return () => oyentesAvisos.delete(fn); };
+
+export function cargarAvisosGuardados() {
+  try {
+    const g = JSON.parse(localStorage.getItem(K_AVISOS) || 'null');
+    if (g && g.cuenta === sesionNube()?.cuentaUid) { avisosEstado = { avisos: g.avisos || [], sinLeer: g.sinLeer || 0 }; avisarAvisos(); }
+  } catch { /* datos dañados: se ignoran */ }
+}
+
+export async function cargarAvisos() {
+  if (!vinculado() || !haySesionNube()) return avisosEstado;
+  try {
+    const r = await nube.avisos();
+    avisosEstado = { avisos: r.avisos || [], sinLeer: r.sinLeer || 0 };
+    guardarAvisos(sesionNube()?.cuentaUid);
+    avisarAvisos();
+  } catch { /* sin internet: se quedan los últimos avisos guardados */ }
+  return avisosEstado;
+}
+
+export async function marcarAvisosLeidos() {
+  const ids = avisosEstado.avisos.filter((x) => !x.leido).map((x) => x.id);
+  if (!ids.length) return;
+  avisosEstado = { avisos: avisosEstado.avisos.map((x) => ({ ...x, leido: true })), sinLeer: 0 };
+  guardarAvisos(sesionNube()?.cuentaUid);
+  avisarAvisos();
+  try { await nube.avisosLeidos(ids); } catch { /* se reintenta en la próxima carga: seguirá como no leído */ }
 }
 
 // ---------- Cuentas en la nube (para auth.js) ----------

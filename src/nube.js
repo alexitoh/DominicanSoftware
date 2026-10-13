@@ -47,6 +47,8 @@ export function crearCliente({ base = () => '', token = () => null, fetchFn = (.
     crearMiembro: (b) => llamar('POST', '/api/miembros', b),
     editarMiembro: (uid, b) => llamar('PATCH', `/api/miembros/${encodeURIComponent(uid)}`, b),
     claveMiembro: (uid, clave) => llamar('POST', `/api/miembros/${encodeURIComponent(uid)}/clave`, { clave }),
+    avisos: () => llamar('GET', '/api/avisos'),
+    avisosLeidos: (ids) => llamar('POST', '/api/avisos/leidos', { ids }),
     sync: (b) => llamar('POST', '/api/sync', b, { tiempo: 60000 }),
   };
 }

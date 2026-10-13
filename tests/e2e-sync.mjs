@@ -315,6 +315,66 @@ assert.equal(h3.pagos.length, 0 + h3.pagos.length);
 srv3.close();
 ok('el propietario registra pagos, respalda y elimina un negocio recuperando espacio sin tocar a los demás');
 
+// ---------- 13. Avisos: recordatorio de pago y mensajes del propietario ----------
+const db4 = abrirBase(':memory:');
+const srv4 = crearServidor({ db: db4, secreto: 'quinto-secreto-largo-1234567890', clavePropietario: 'dueno-sistema-1', aprobacionAutomatica: true });
+await new Promise((r) => srv4.listen(0, r));
+const B4 = `http://127.0.0.1:${srv4.address().port}`;
+const c4 = crearCliente({ base: () => B4 });
+const rg1 = await c4.registro({ negocio: 'Aviso Uno', nombre: 'Ana', usuario: 'ana4', correo: 'a4@x.com', clave: 'clave1234', dispositivo: 'av1-dispositivo-1' });
+const rg2 = await c4.registro({ negocio: 'Aviso Dos', nombre: 'Beto', usuario: 'beto4', correo: 'b4@x.com', clave: 'clave1234', dispositivo: 'av2-dispositivo-1' });
+const cl1 = crearCliente({ base: () => B4, token: () => rg1.token }), cl2 = crearCliente({ base: () => B4, token: () => rg2.token });
+const p4 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B4 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json()]; };
+const T4 = (await p4('/api/propietario/login', { clave: 'dueno-sistema-1' }))[1].token;
+const [, l4] = await p4('/api/propietario/negocios', null, T4, 'GET');
+const n1 = l4.negocios.find((x) => x.nombre === 'Aviso Uno'), n2 = l4.negocios.find((x) => x.nombre === 'Aviso Dos');
+const enDias = (d) => { const x = new Date(); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
+// Sin vencimiento cercano no hay recordatorio
+await p4(`/api/propietario/negocios/${n1.uid}`, { accion: 'editar', plan: 'mensual', vence: enDias(30) }, T4, 'PATCH');
+assert.equal((await cl1.llamar('GET', '/api/avisos')).avisos.length, 0);
+// A 5 días: recordatorio automático con el teléfono de contacto
+await p4(`/api/propietario/negocios/${n1.uid}`, { accion: 'editar', plan: 'mensual', vence: enDias(5) }, T4, 'PATCH');
+let av = await cl1.llamar('GET', '/api/avisos');
+assert.equal(av.avisos[0].tipo, 'pago'); assert.equal(av.sinLeer, 1); assert.match(av.avisos[0].mensaje, /5 días.*1-809-230-9980/);
+await cl1.llamar('POST', '/api/avisos/leidos', { ids: [av.avisos[0].id] });
+assert.equal((await cl1.llamar('GET', '/api/avisos')).sinLeer, 0);
+// A 3 días vuelve a aparecer como nuevo
+await p4(`/api/propietario/negocios/${n1.uid}`, { accion: 'editar', plan: 'mensual', vence: enDias(3) }, T4, 'PATCH');
+assert.equal((await cl1.llamar('GET', '/api/avisos')).sinLeer, 1);
+// Un empleado no ve el recordatorio de pago
+const emp = await cl1.crearMiembro({ nombre: 'Eva', usuario: 'eva4', rol: 'vendedor', permisos: ['ventas'], clave: 'temporal12' });
+const loginEva = await crearCliente({ base: () => B4 }).login({ identificador: 'eva4', clave: 'temporal12', dispositivo: 'av1-dispositivo-2' });
+assert.equal((await crearCliente({ base: () => B4, token: () => loginEva.token }).llamar('GET', '/api/avisos')).avisos.length, 0);
+// Mensaje a un cliente
+assert.equal((await p4('/api/propietario/avisos', { destino: 'negocios', negocios: [n2.uid], titulo: '', mensaje: 'x' }, T4))[0], 400);
+assert.equal((await p4('/api/propietario/avisos', { destino: 'negocios', negocios: [], titulo: 'a', mensaje: 'x' }, T4))[0], 400);
+assert.equal((await p4('/api/propietario/avisos', { destino: 'negocios', negocios: [n2.uid], titulo: 'a', mensaje: 'x' }))[0], 401);
+const [, env] = await p4('/api/propietario/avisos', { destino: 'negocios', negocios: [n2.uid], titulo: 'Hola Beto', mensaje: 'Mantenimiento mañana', nivel: 'importante' }, T4);
+assert.equal(env.enviados, 1);
+assert.equal((await cl2.llamar('GET', '/api/avisos')).avisos[0].titulo, 'Hola Beto');
+assert.equal((await cl1.llamar('GET', '/api/avisos')).avisos.some((a) => a.titulo === 'Hola Beto'), false, 'el mensaje de otro cliente no se ve');
+// Mensaje masivo
+await p4('/api/propietario/avisos', { destino: 'todos', titulo: 'Novedad', mensaje: 'Nueva versión', dias: 5 }, T4);
+for (const c of [cl1, cl2]) assert.equal((await c.llamar('GET', '/api/avisos')).avisos.some((a) => a.titulo === 'Novedad'), true);
+// Leído y conteo en el panel
+const a2 = await cl2.llamar('GET', '/api/avisos');
+await cl2.llamar('POST', '/api/avisos/leidos', { ids: a2.avisos.map((x) => x.id) });
+const [, lista4] = await p4('/api/propietario/avisos', null, T4, 'GET');
+const masivo = lista4.avisos.find((x) => x.titulo === 'Novedad');
+assert.equal(masivo.destino, 'Todos los clientes'); assert.equal(masivo.leidos, 1); assert.ok(masivo.total >= 3);
+// Caducidad y borrado
+db4.prepare("UPDATE avisos SET caduca = '2000-01-01' WHERE titulo = 'Novedad'").run();
+assert.equal((await cl1.llamar('GET', '/api/avisos')).avisos.some((a) => a.titulo === 'Novedad'), false);
+const idHola = lista4.avisos.find((x) => x.titulo === 'Hola Beto').id;
+assert.equal((await p4(`/api/propietario/avisos/${idHola}`, null, T4, 'DELETE'))[0], 200);
+assert.equal((await cl2.llamar('GET', '/api/avisos')).avisos.some((a) => a.titulo === 'Hola Beto'), false);
+// Eliminar el negocio borra sus mensajes
+await p4('/api/propietario/avisos', { destino: 'negocios', negocios: [n2.uid], titulo: 'Se va', mensaje: 'x' }, T4);
+await p4(`/api/propietario/negocios/${n2.uid}`, { confirmar: 'Aviso Dos' }, T4, 'DELETE');
+assert.equal(db4.prepare('SELECT COUNT(*) AS c FROM avisos WHERE negocio = ?').get(n2.uid).c, 0);
+srv4.close();
+ok('recordatorio de pago a 7/3/1 días solo para el administrador; mensajes a un cliente o masivos con lectura, caducidad y borrado');
+
 servidor.close();
 console.log(`\n${pruebas} grupos de pruebas correctos`);
 process.exit(0);
