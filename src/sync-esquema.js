@@ -169,6 +169,7 @@ export function sentenciasColumnas() {
   }
   s.push('ALTER TABLE usuarios ADD COLUMN uid TEXT');
   s.push('ALTER TABLE sync_ctl ADD COLUMN epoca INTEGER NOT NULL DEFAULT 0');
+  s.push('ALTER TABLE sync_ctl ADD COLUMN negocio_id TEXT');
   return s;
 }
 

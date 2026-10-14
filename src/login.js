@@ -79,6 +79,11 @@ async function pantallaAcceso(terminar, sesionPendiente) {
     ? h('p', { class: 'error' }, 'Este navegador no permite cuentas seguras en esta dirección. Abre la app desde HTTPS o desde localhost.')
     : null;
 
+  // RNC del negocio (sin guiones): es el identificador que separa un negocio de otro al iniciar sesión
+  const campoRnc = (etiqueta, extra = {}) => campo(etiqueta, {
+    inputmode: 'numeric', autocomplete: 'off', maxlength: 14, placeholder: 'ej. 131234567', 'aria-label': etiqueta, ...extra,
+  });
+
   // ---------- Entrar ----------
   function pantallaEntrar() {
     const usuario = campo('Usuario o correo', { autocapitalize: 'none', autocomplete: 'username', 'aria-label': 'Usuario o correo' });
@@ -167,26 +172,28 @@ async function pantallaAcceso(terminar, sesionPendiente) {
 
   // ---------- Recuperar ----------
   function pantallaRecuperar(usarNube = false, volver = pantallaEntrar) {
+    // En un equipo ya vinculado el negocio es conocido; en uno nuevo hay que escribir el RNC
+    const rnc = usarNube && !vinculado() ? campoRnc('RNC del negocio (sin guiones)') : null;
     const usuario = campo('Usuario o correo', { autocapitalize: 'none', 'aria-label': 'Usuario o correo' });
     const codigo = campo('Código de recuperación', { placeholder: 'XXXX-XXXX-XXXX', autocapitalize: 'characters', 'aria-label': 'Código de recuperación' });
     const n1 = claveCampo('Contraseña nueva', { autocomplete: 'new-password' });
     const hacer = async () => {
       aviso2();
       try {
-        const { codigo: nuevo } = await recuperarConCodigo(usuario.input.value, codigo.input.value, n1.input.value, usarNube);
+        const { codigo: nuevo } = await recuperarConCodigo(usuario.input.value, codigo.input.value, n1.input.value, usarNube, rnc?.input.value);
         pantallaCodigo(nuevo, 'Contraseña actualizada', volver);
       } catch (e) { aviso.textContent = e.message || String(e); }
     };
     marco(
       h('h1', {}, 'Recuperar contraseña'),
       h('p', { class: 'ayuda' }, 'Escribe el código de recuperación que recibiste al crear la cuenta de administrador. Si eres un empleado, pídele al administrador que restablezca tu contraseña.'),
-      usuario.el, codigo.el, n1.el, aviso,
+      rnc?.el, usuario.el, codigo.el, n1.el, aviso,
       h('button', { class: 'btn primario', onClick: hacer }, 'Cambiar contraseña'),
       h('button', { class: 'enlace', onClick: volver }, 'Volver'));
   }
 
   // ---------- Código de recuperación (se muestra una sola vez) ----------
-  function pantallaCodigo(codigo, titulo, continuar) {
+  function pantallaCodigo(codigo, titulo, continuar, ident = null) {
     const visto = h('input', { type: 'checkbox', id: 'visto' });
     const seguir = h('button', { class: 'btn primario', disabled: true, onClick: continuar }, 'Continuar');
     visto.addEventListener('change', () => { seguir.disabled = !visto.checked; });
@@ -194,6 +201,12 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       h('h1', {}, titulo),
       h('p', {}, 'Este es tu código de recuperación. Es la única forma de recuperar tu cuenta si olvidas la contraseña.'),
       h('div', { class: 'codigo', 'aria-label': 'Código de recuperación' }, codigo),
+      ident?.identificador ? h('div', { class: 'identificador' },
+        h('strong', {}, ident.asignado ? 'Número de tu negocio (asignado)' : 'RNC de tu negocio'),
+        h('div', { class: 'codigo', 'aria-label': 'Identificador del negocio' }, ident.identificador),
+        h('p', { class: 'ayuda' }, ident.asignado
+          ? 'Como no escribiste un RNC, el sistema te asignó este número. Apréndelo o anótalo: lo necesitarás para entrar desde otro equipo. Si algún día obtienes RNC, pídele a soporte que lo cambie.'
+          : 'Lo necesitarás (junto a tu usuario y contraseña) para entrar desde otro equipo.')) : null,
       h('button', {
         class: 'btn',
         onClick: async () => {
@@ -209,6 +222,7 @@ async function pantallaAcceso(terminar, sesionPendiente) {
   function pantallaRegistro(enNube = false) {
     const servidor = enNube ? servidorCampo() : null;
     const negocio = campo('Nombre del negocio', { value: cfg.negocio_nombre && cfg.negocio_nombre !== 'Mi Car Audio' ? cfg.negocio_nombre : '', autocomplete: 'organization' });
+    const rnc = enNube ? campoRnc('RNC del negocio (opcional, sin guiones)') : null;
     const nombre = campo('Tu nombre', { autocomplete: 'name' });
     const usuario = campo('Usuario', { autocapitalize: 'none', autocomplete: 'username', placeholder: 'ej. juan.perez' });
     const correo = campo('Correo', { type: 'email', autocomplete: 'email', inputmode: 'email' });
@@ -221,20 +235,22 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       try {
         const datos = {
           negocio: negocio.input.value, nombre: nombre.input.value, usuario: usuario.input.value,
-          correo: correo.input.value, clave: n1.input.value,
+          correo: correo.input.value, clave: n1.input.value, rnc: rnc?.input.value || '',
         };
         let codigo;
+        let ident = null;
         if (enNube) {
           guardarServidor(servidor.input.value);
           const r = await registrarNegocioNube(datos, progreso(boton));
-          if (r.pendiente) { pantallaCodigo(r.codigo, 'Registro recibido', pantallaPendiente); return; }
+          ident = { identificador: r.identificador, asignado: r.asignado };
+          if (r.pendiente) { pantallaCodigo(r.codigo, 'Registro recibido', pantallaPendiente, ident); return; }
           codigo = r.codigo;
         } else {
           ({ codigo } = await registrarPropietario(datos));
         }
         const u = await iniciarSesion(usuario.input.value, n1.input.value, true);
         cfg.negocio_nombre = negocio.input.value.trim() || cfg.negocio_nombre;
-        pantallaCodigo(codigo, enNube ? 'Negocio creado en la nube' : 'Cuenta creada', () => salir(u));
+        pantallaCodigo(codigo, enNube ? 'Negocio creado en la nube' : 'Cuenta creada', () => salir(u), ident);
       } catch (e) {
         aviso.textContent = e.message || String(e);
         boton.disabled = false;
@@ -246,7 +262,9 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       h('p', { class: 'ayuda' }, enNube
         ? 'Tus datos se guardan en la nube y podrás entrar con tu usuario o correo desde la web y desde cualquier teléfono. Sigue funcionando sin internet y se sincroniza al volver la conexión.'
         : 'Serás el administrador del negocio. Desde Usuarios podrás crear cuentas para tus empleados.'),
-      sinCripto, servidor?.el, negocio.el, nombre.el, usuario.el, correo.el, n1.el, n2.el,
+      sinCripto, servidor?.el, negocio.el, rnc?.el,
+      rnc ? h('p', { class: 'ayuda' }, 'El RNC identifica a tu negocio al iniciar sesión, así tus usuarios no se mezclan con los de otros negocios. Si no tienes RNC, déjalo vacío: el sistema te asignará un número que deberás aprenderte.') : null,
+      nombre.el, usuario.el, correo.el, n1.el, n2.el,
       h('p', { class: 'ayuda' }, 'La contraseña debe tener al menos 8 caracteres, con letras y números.'),
       aviso, boton,
       h('button', { class: 'enlace', onClick: pantallaBienvenida }, 'Volver'));
@@ -265,6 +283,7 @@ async function pantallaAcceso(terminar, sesionPendiente) {
   // ---------- Entrar con una cuenta de la nube en un dispositivo nuevo ----------
   function pantallaEntrarNube() {
     const servidor = servidorCampo();
+    const rnc = campoRnc('RNC del negocio (sin guiones)');
     const usuario = campo('Usuario o correo', { autocapitalize: 'none', autocomplete: 'username', 'aria-label': 'Usuario o correo' });
     const clave = claveCampo('Contraseña');
     const entrar = async () => {
@@ -272,7 +291,7 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       boton.disabled = true;
       try {
         guardarServidor(servidor.input.value);
-        const u = await entrarConCuentaNube(usuario.input.value, clave.input.value, 'reemplazar', progreso(boton));
+        const u = await entrarConCuentaNube(usuario.input.value, clave.input.value, 'reemplazar', progreso(boton), rnc.input.value);
         if (u.debeCambiar) pantallaCambioTemporal(u); else salir(u);
       } catch (e) {
         aviso.textContent = e.message || String(e);
@@ -281,14 +300,14 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       }
     };
     const boton = h('button', { class: 'btn primario', onClick: entrar }, 'Entrar y descargar mis datos');
-    for (const i of [usuario.input, clave.input]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') entrar(); });
+    for (const i of [rnc.input, usuario.input, clave.input]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') entrar(); });
     marco(
       h('h1', {}, 'Entrar a mi negocio'),
-      h('p', { class: 'ayuda' }, 'Escribe el usuario o correo de tu cuenta. Se descargarán los datos de tu negocio a este dispositivo.'),
-      sinCripto, servidor.el, usuario.el, clave.el, aviso, boton,
+      h('p', { class: 'ayuda' }, 'Escribe el RNC de tu negocio y tu usuario. Solo se pide la primera vez en este equipo; se descargarán los datos de tu negocio. Si tu negocio no tiene RNC, usa el número que se te asignó al registrarte.'),
+      sinCripto, servidor.el, rnc.el, usuario.el, clave.el, aviso, boton,
       h('button', { class: 'enlace', onClick: () => pantallaRecuperar(true, pantallaEntrarNube) }, '¿Olvidaste tu contraseña?'),
       h('button', { class: 'enlace', onClick: pantallaBienvenida }, 'Volver'));
-    usuario.input.focus();
+    rnc.input.focus();
   }
 
   // ---------- Primera vez en este dispositivo ----------

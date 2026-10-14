@@ -26,6 +26,7 @@
   .tabs button { padding:.45rem .8rem; border:1px solid var(--linea); border-radius:999px; background:var(--papel); color:var(--suave); font:inherit; cursor:pointer; }
   .tabs button[aria-pressed="true"] { background:var(--primario); border-color:var(--primario); color:#fff; font-weight:600; }
   .neg { margin-bottom:.75rem; }
+  .idneg { font-family:ui-monospace,Consolas,monospace; font-weight:700; color:var(--tinta,#15212B); letter-spacing:.04em; user-select:all; }
   .neg h2 { margin:0; font-size:1.05rem; display:flex; justify-content:space-between; gap:.5rem; align-items:center; flex-wrap:wrap; }
   .neg p { margin:.25rem 0 0; color:var(--suave); font-size:.875rem; }
   .estado { padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:700; color:#fff; }
@@ -109,9 +110,9 @@ function pintar() {
   const n = (k) => lista.filter(grupos[k]).length;
   const q = busqueda.trim().toLowerCase();
   const visibles = ['historial', 'mensajes'].includes(filtro) ? [] : lista.filter(grupos[filtro]).filter((x) => !q ||
-    [x.nombre, x.admin?.nombre, x.admin?.usuario, x.admin?.correo].some((t) => String(t || '').toLowerCase().includes(q)));
+    [x.nombre, x.identificador, x.admin?.nombre, x.admin?.usuario, x.admin?.correo].some((t) => String(t || '').toLowerCase().includes(q)));
   const tab = (id, t) => el('button', { 'aria-pressed': String(filtro === id), onclick: async () => { filtro = id; if (id === 'historial') historial = await api('GET', '/api/propietario/historial'); if (id === 'mensajes') mensajes = await api('GET', '/api/propietario/avisos'); pintar(); } }, ['historial', 'todos', 'mensajes'].includes(id) ? t : `${t} (${n(id)})`);
-  const buscar = el('input', { class: 'buscar', type: 'search', placeholder: 'Buscar por negocio, nombre, usuario o correo…', value: busqueda });
+  const buscar = el('input', { class: 'buscar', type: 'search', placeholder: 'Buscar por negocio, RNC, nombre, usuario o correo…', value: busqueda });
   buscar.addEventListener('input', () => { busqueda = buscar.value; const pos = buscar.selectionStart; pintar(); const nuevo = $('.buscar'); nuevo.focus(); nuevo.setSelectionRange(pos, pos); });
   raiz.replaceChildren(
     el('header', {}, el('h1', {}, 'Dominican Software · Panel del propietario'), el('div', { class: 'acciones' },
@@ -180,6 +181,7 @@ function tarjeta(n) {
   const ac = [];
   if (n.estado === 'pendiente') {
     ac.push(el('button', { class: 'btn p chico', onclick: () => aprobar(n) }, 'Aprobar (ya pagó)'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => cambiarIdentificador(n) }, 'Cambiar RNC'));
     ac.push(el('button', { class: 'btn m chico', onclick: () => eliminar(n, true) }, 'Rechazar y eliminar'));
   } else {
     ac.push(el('button', { class: 'btn p chico', onclick: () => pago(n) }, 'Registrar pago'));
@@ -188,13 +190,17 @@ function tarjeta(n) {
     if (n.estado === 'suspendido') ac.push(el('button', { class: 'btn chico', onclick: () => confirmarAccion(n, 'reactivar', `¿Reactivar "${n.nombre}"?`) }, 'Reactivar'));
     else ac.push(el('button', { class: 'btn m chico', onclick: () => confirmarAccion(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar, pero sus datos se conservan.`) }, 'Suspender'));
     ac.push(el('button', { class: 'btn chico', onclick: () => editar(n) }, 'Editar'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => cambiarIdentificador(n) }, 'Cambiar RNC'));
     ac.push(el('button', { class: 'btn chico', onclick: () => respaldo(n) }, 'Descargar respaldo'));
     ac.push(el('button', { class: 'btn m chico', onclick: () => limpiarDatos(n) }, 'Limpiar datos'));
     ac.push(el('button', { class: 'btn m chico', onclick: () => eliminar(n) }, 'Eliminar'));
   }
+  const dg = n.dgii;
+  const infoDgii = !dg ? '' : dg.noEncontrado ? ' · no aparece en el padrón de la DGII' : ` · DGII: ${dg.nombre} (${dg.estado})`;
   const venc = n.vence ? (n.diasParaVencer < 0 ? `venció hace ${-n.diasParaVencer} día(s) (${n.vence})` : `vence ${n.vence} (en ${n.diasParaVencer} día(s))`) : 'sin vencimiento';
   return el('div', { class: 'caja neg' },
     el('h2', {}, n.nombre, el('span', { class: `estado ${n.estado}` }, ETQ[n.estado])),
+    el('p', {}, el('strong', {}, n.idTipo === 'asignado' ? 'Número asignado (sin RNC): ' : 'RNC: '), el('span', { class: 'idneg' }, n.identificador || '—'), infoDgii),
     el('p', {}, `Administrador: ${a.nombre || '—'} · @${a.usuario || '—'} · `, a.correo ? el('a', { href: 'mailto:' + a.correo }, a.correo) : 'sin correo'),
     el('p', {}, `Registrado: ${fecha(n.creado)}${n.aprobado ? ` · Aprobado: ${fecha(n.aprobado)}` : ''}`),
     n.estado === 'pendiente' ? null : el('p', {}, `Plan: ${n.plan}${n.precio != null ? ` (${rd(n.precio)})` : ''} · ${venc}`),
@@ -247,6 +253,20 @@ function editar(n) {
     el('label', {}, 'Plan'), plan, el('label', {}, 'Vence'), vence, el('label', {}, 'Precio mensual'), precio, el('label', {}, 'Notas (contacto, acuerdos…)'), notas, err],
   [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
     el('button', { class: 'btn p', onclick: intentar(err, async () => { await api('PATCH', `/api/propietario/negocios/${n.uid}`, { accion: 'editar', plan: plan.value, vence: vence.value || null, precio: precio.value, notas: notas.value }); cerrar(); await cargar(); }) }, 'Guardar')]);
+}
+
+// Solo el propietario cambia el identificador (el cliente no puede): por ejemplo, cuando obtiene su RNC
+function cambiarIdentificador(n) {
+  const nuevo = el('input', { placeholder: 'RNC nuevo (9 números) o cédula (11), sin guiones', inputmode: 'numeric', autocomplete: 'off', maxlength: 14 });
+  const err = el('p', { class: 'error' });
+  const hecho = async (r) => { cerrar(); await cargar(); toast(`Identificador cambiado a ${r.identificador}`); };
+  modal(`Cambiar el identificador de "${n.nombre}"`, [
+    el('p', {}, `Actual: ${n.identificador} (${n.idTipo === 'asignado' ? 'asignado por el sistema' : 'RNC'})`),
+    el('p', { class: 'ayuda' }, 'Los equipos ya conectados siguen entrando sin cambios. Los equipos nuevos deberán escribir el identificador nuevo; avísale al cliente. Antes de cambiarlo, confirma el RNC en la DGII.'),
+    el('label', {}, 'RNC nuevo'), nuevo, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn chico', onclick: intentar(err, async () => { if (confirm('¿Asignar un número nuevo al azar (sin RNC)?')) await hecho(await api('PATCH', `/api/propietario/negocios/${n.uid}/identificador`, { asignar: true })); }) }, 'Asignar número al azar'),
+    el('button', { class: 'btn p', onclick: intentar(err, async () => { await hecho(await api('PATCH', `/api/propietario/negocios/${n.uid}/identificador`, { identificador: nuevo.value })); }) }, 'Guardar RNC')]);
 }
 
 function confirmarAccion(n, accion, texto) {

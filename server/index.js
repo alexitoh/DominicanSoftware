@@ -7,10 +7,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   hashClave, verificarClave, firmar, verificar, uid, codigoRecuperacion, normalizarCodigo, normalizarUsuario,
-  errorUsuario, errorCorreo, errorClave, codigoDispositivo,
+  errorUsuario, errorCorreo, errorClave, codigoDispositivo, normalizarRnc, errorRnc,
 } from './seguridad.js';
 import { prepararTablaRNC, consultarRNC, estadoPadron, importarPadron, descargarPadron } from './dgii.js';
-import { abrirBase, transaccion, siguienteVersion, TABLAS_SYNC } from './db.js';
+import { abrirBase, transaccion, siguienteVersion, identificadorLibre, TABLAS_SYNC } from './db.js';
 
 const ROLES = ['admin', 'gerente', 'vendedor', 'cajero', 'almacen'];
 const PERMISOS = ['ventas', 'productos', 'inventario', 'compras', 'caja', 'cuentas', 'clientes', 'proveedores', 'garantias', 'reportes', 'contabilidad', 'ajustes', 'anular'];
@@ -51,13 +51,19 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
   const intentos = new Map(); // límite de intentos de acceso por IP + usuario
 
   // ---------- Utilidades ----------
+  // Para el panel: ¿el RNC del negocio existe en el padrón de la DGII y a nombre de quién?
+  function verificarEnPadron(rnc) {
+    const r = consultarRNC(db, rnc);
+    if (r.error || r.padronVacio) return null;
+    return r.encontrado ? { nombre: r.nombre, estado: r.estado, activo: r.activo } : { noEncontrado: true };
+  }
   const miembro = (c) => ({
     uid: c.uid, nombre: c.nombre, usuario: c.usuario, correo: c.correo, rol: c.rol,
     permisos: c.permisos ? JSON.parse(c.permisos) : null, activo: !!c.activo, debeCambiar: !!c.debe_cambiar,
     ultimoAcceso: c.ultimo_acceso,
   });
   const miembros = (negocio) => db.prepare('SELECT * FROM cuentas WHERE negocio = ? ORDER BY activo DESC, nombre').all(negocio).map(miembro);
-  const negocioDe = (uidNegocio) => db.prepare('SELECT uid, nombre, activo, plan, vence, epoca FROM negocios WHERE uid = ?').get(uidNegocio);
+  const negocioDe = (uidNegocio) => db.prepare('SELECT uid, nombre, activo, plan, vence, epoca, identificador, id_tipo FROM negocios WHERE uid = ?').get(uidNegocio);
 
   // null si el negocio puede usar el servicio; si no, el motivo
   function motivoBloqueo(n) {
@@ -66,6 +72,17 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     if (!n.activo) return 'El servicio de este negocio está suspendido. Contacta al proveedor.';
     if (n.vence && n.vence < new Date().toISOString().slice(0, 10)) return 'La suscripción de este negocio venció. Contacta al proveedor para renovarla.';
     return null;
+  }
+
+  // Ubica el negocio por su identificador (RNC o número asignado). Un dispositivo ya vinculado manda el uid del negocio.
+  function buscarNegocio(b) {
+    const por = String(b.negocioUid || '').trim();
+    if (por) return { negocio: db.prepare('SELECT uid FROM negocios WHERE uid = ?').get(por), clave: por };
+    const id = normalizarRnc(b.negocioId);
+    if (!id) falla(400, 'Escribe el RNC del negocio, sin guiones. Si no tiene RNC, escribe el número que se le asignó al registrarse.');
+    const err = errorRnc(id);
+    if (err) falla(400, err);
+    return { negocio: db.prepare('SELECT uid FROM negocios WHERE identificador = ?').get(id), clave: id };
   }
 
   function limitar(clave) {
@@ -102,7 +119,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     return {
       token: firmar({ c: cuenta.uid, n: cuenta.negocio }, secreto),
       cuenta: miembro(cuenta),
-      negocio: { uid: negocio.uid, nombre: negocio.nombre, epoca: negocio.epoca || 0 },
+      negocio: { uid: negocio.uid, nombre: negocio.nombre, epoca: negocio.epoca || 0, identificador: negocio.identificador, idTipo: negocio.id_tipo },
       dispositivo: { codigo: asignarDispositivo(cuenta.negocio, dispositivoUid) },
       miembros: miembros(cuenta.negocio),
       registros: contarDatos(cuenta.negocio),
@@ -153,29 +170,37 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       if (!String(b.nombre || '').trim()) falla(400, 'Escribe tu nombre.');
       if (!String(b.negocio || '').trim()) falla(400, 'Escribe el nombre del negocio.');
       if (err) falla(400, err);
-      if (db.prepare('SELECT 1 FROM cuentas WHERE usuario = ?').get(usuario)) falla(409, 'Ese usuario ya existe. Prueba con otro.');
-      if (db.prepare('SELECT 1 FROM cuentas WHERE correo = ?').get(correo)) falla(409, 'Ya existe una cuenta con ese correo. Inicia sesión.');
+      // Identificador del negocio: su RNC; si no tiene, el sistema le asigna un número de 9 dígitos
+      const rnc = normalizarRnc(b.rnc);
+      if (rnc && errorRnc(rnc)) falla(400, errorRnc(rnc));
+      if (rnc && db.prepare('SELECT 1 FROM negocios WHERE identificador = ?').get(rnc)) {
+        falla(409, 'Ya existe un negocio registrado con ese RNC. Si es el tuyo, entra con "Ya tengo una cuenta"; si no puedes, contacta a soporte.');
+      }
       const codigo = codigoRecuperacion();
       const negocio = uid();
       const cuenta = uid();
+      const identificador = rnc || identificadorLibre(db);
       transaccion(db, () => {
-        db.prepare('INSERT INTO negocios (uid, nombre, activo, plan) VALUES (?, ?, ?, ?)')
-          .run(negocio, String(b.negocio).trim(), aprobacionAutomatica ? 1 : 0, aprobacionAutomatica ? 'prueba' : 'pendiente');
+        db.prepare('INSERT INTO negocios (uid, nombre, activo, plan, identificador, id_tipo) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(negocio, String(b.negocio).trim(), aprobacionAutomatica ? 1 : 0, aprobacionAutomatica ? 'prueba' : 'pendiente', identificador, rnc ? 'rnc' : 'asignado');
         db.prepare(`INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, rol, hash, recup_hash)
                     VALUES (?, ?, ?, ?, ?, 'admin', ?, ?)`)
           .run(cuenta, negocio, String(b.nombre).trim(), usuario, correo, hashClave(b.clave), hashClave(normalizarCodigo(codigo)));
       });
       // Hasta que el propietario lo apruebe no hay sesión: solo se entrega el código de recuperación
-      if (!aprobacionAutomatica) return { pendiente: true, codigoRecuperacion: codigo, negocio: { nombre: String(b.negocio).trim() } };
+      if (!aprobacionAutomatica) {
+        return { pendiente: true, codigoRecuperacion: codigo, negocio: { nombre: String(b.negocio).trim(), identificador, idTipo: rnc ? 'rnc' : 'asignado' } };
+      }
       return sesion(db.prepare('SELECT * FROM cuentas WHERE uid = ?').get(cuenta), b.dispositivo, { codigoRecuperacion: codigo });
     },
 
     'POST /api/login': (req, b) => {
       const id = normalizarUsuario(b.identificador);
-      const clave = `${req.socket.remoteAddress}|${id}`;
+      const { negocio: neg, clave: negClave } = buscarNegocio(b);
+      const clave = `${req.socket.remoteAddress}|${negClave}|${id}`;
       limitar(clave);
-      const c = db.prepare('SELECT * FROM cuentas WHERE usuario = ? OR correo = ?').get(id, id);
-      if (!c || !verificarClave(String(b.clave || ''), c.hash)) { falloAcceso(clave); falla(401, 'Usuario o contraseña incorrectos.'); }
+      const c = neg && db.prepare('SELECT * FROM cuentas WHERE negocio = ? AND (usuario = ? OR correo = ?)').get(neg.uid, id, id);
+      if (!c || !verificarClave(String(b.clave || ''), c.hash)) { falloAcceso(clave); falla(401, 'RNC del negocio, usuario o contraseña incorrectos.'); }
       if (!c.activo) falla(403, 'Esta cuenta está desactivada. Habla con el administrador.');
       const bloqueo = motivoBloqueo(negocioDe(c.negocio));
       if (bloqueo) falla(402, bloqueo);
@@ -185,14 +210,15 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
 
     'POST /api/recuperar': (req, b) => {
       const id = normalizarUsuario(b.identificador);
-      const clave = `${req.socket.remoteAddress}|rec|${id}`;
+      const { negocio: neg, clave: negClave } = buscarNegocio(b);
+      const clave = `${req.socket.remoteAddress}|rec|${negClave}|${id}`;
       limitar(clave);
       const err = errorClave(b.clave);
       if (err) falla(400, err);
-      const c = db.prepare('SELECT * FROM cuentas WHERE usuario = ? OR correo = ?').get(id, id);
+      const c = neg && db.prepare('SELECT * FROM cuentas WHERE negocio = ? AND (usuario = ? OR correo = ?)').get(neg.uid, id, id);
       if (!c || !c.activo || !verificarClave(normalizarCodigo(b.codigo), c.recup_hash)) {
         falloAcceso(clave);
-        falla(401, 'El usuario o el código de recuperación no son correctos.');
+        falla(401, 'El RNC del negocio, el usuario o el código de recuperación no son correctos.');
       }
       const nuevo = codigoRecuperacion();
       db.prepare('UPDATE cuentas SET hash = ?, recup_hash = ?, debe_cambiar = 0 WHERE uid = ?')
@@ -202,7 +228,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
 
     'GET /api/yo': (req) => {
       const ctx = autenticar(req);
-      return { cuenta: miembro(ctx.cuenta), negocio: { uid: ctx.negocio.uid, nombre: ctx.negocio.nombre }, miembros: miembros(ctx.negocio.uid) };
+      return { cuenta: miembro(ctx.cuenta), negocio: { uid: ctx.negocio.uid, nombre: ctx.negocio.nombre, identificador: ctx.negocio.identificador, idTipo: ctx.negocio.id_tipo }, miembros: miembros(ctx.negocio.uid) };
     },
 
     'POST /api/clave': (req, b) => {
@@ -236,8 +262,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       if (!String(b.nombre || '').trim()) falla(400, 'Escribe el nombre.');
       if (!ROLES.includes(b.rol)) falla(400, 'Elige un rol.');
       if (err) falla(400, err);
-      if (db.prepare('SELECT 1 FROM cuentas WHERE usuario = ?').get(usuario)) falla(409, 'Ese usuario ya existe. Prueba con otro.');
-      if (correo && db.prepare('SELECT 1 FROM cuentas WHERE correo = ?').get(correo)) falla(409, 'Ya existe una cuenta con ese correo.');
+      if (db.prepare('SELECT 1 FROM cuentas WHERE negocio = ? AND usuario = ?').get(ctx.negocio.uid, usuario)) falla(409, 'Ese usuario ya existe en tu negocio. Prueba con otro.');
+      if (correo && db.prepare('SELECT 1 FROM cuentas WHERE negocio = ? AND correo = ?').get(ctx.negocio.uid, correo)) falla(409, 'Ya existe una cuenta con ese correo en tu negocio.');
       const nuevo = uid();
       db.prepare(`INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, rol, permisos, hash, debe_cambiar)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`)
@@ -260,7 +286,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
         const otros = db.prepare("SELECT COUNT(*) AS n FROM cuentas WHERE negocio = ? AND rol = 'admin' AND activo = 1 AND uid != ?").get(ctx.negocio.uid, c.uid).n;
         if (otros === 0) falla(400, 'Debe quedar al menos un administrador activo.');
       }
-      if (correo && db.prepare('SELECT 1 FROM cuentas WHERE correo = ? AND uid != ?').get(correo, c.uid)) falla(409, 'Ya existe otro usuario con ese correo.');
+      if (correo && db.prepare('SELECT 1 FROM cuentas WHERE negocio = ? AND correo = ? AND uid != ?').get(ctx.negocio.uid, correo, c.uid)) falla(409, 'Ya existe otro usuario con ese correo.');
       db.prepare('UPDATE cuentas SET nombre = ?, correo = ?, rol = ?, permisos = ?, activo = ? WHERE uid = ?')
         .run(String(b.nombre).trim(), correo, b.rol, limpiarPermisos(b.rol, b.permisos), activo, c.uid);
       return { miembros: miembros(ctx.negocio.uid) };
@@ -288,6 +314,27 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       return { token: firmar({ propietario: 1 }, secreto, 12 * 3600) };
     },
 
+    // Solo el propietario del sistema puede cambiar el identificador de un negocio (por ejemplo, cuando obtiene su RNC)
+    'PATCH /api/propietario/negocios/:uid/identificador': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      let nuevo; let tipo;
+      if (b.asignar) { nuevo = identificadorLibre(db); tipo = 'asignado'; }
+      else {
+        nuevo = normalizarRnc(b.identificador);
+        const err = errorRnc(nuevo);
+        if (err) falla(400, err);
+        tipo = 'rnc';
+      }
+      if (nuevo === n.identificador) falla(400, 'Ese ya es el identificador de este negocio.');
+      const otro = db.prepare('SELECT nombre FROM negocios WHERE identificador = ? AND uid != ?').get(nuevo, n.uid);
+      if (otro) falla(409, `Ese RNC ya lo usa el negocio "${otro.nombre}".`);
+      db.prepare('UPDATE negocios SET identificador = ?, id_tipo = ? WHERE uid = ?').run(nuevo, tipo, n.uid);
+      auditar('Cambió identificador', n.nombre, `${n.identificador} → ${nuevo}`);
+      return { ok: true, identificador: nuevo, idTipo: tipo, dgii: tipo === 'rnc' ? verificarEnPadron(nuevo) : null };
+    },
+
     'GET /api/propietario/negocios': (req) => {
       autenticarPropietario(req);
       const hoy = new Date().toISOString().slice(0, 10);
@@ -300,7 +347,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
         const estado = n.plan === 'pendiente' ? 'pendiente' : !n.activo ? 'suspendido' : (vencido ? 'vencido' : 'activo');
         const diasParaVencer = n.vence ? Math.round((Date.parse(n.vence) - Date.parse(hoy)) / 86400000) : null;
         return {
-          uid: n.uid, nombre: n.nombre, estado, plan: n.plan, vence: n.vence, precio: n.precio, creado: n.creado, aprobado: n.aprobado, notas: n.notas,
+          uid: n.uid, nombre: n.nombre, identificador: n.identificador, idTipo: n.id_tipo, dgii: n.id_tipo === 'rnc' ? verificarEnPadron(n.identificador) : null,
+          estado, plan: n.plan, vence: n.vence, precio: n.precio, creado: n.creado, aprobado: n.aprobado, notas: n.notas,
           admin, usuarios: c.n, ultimoAcceso: c.ultimo, dispositivos: d, registros: contarDatos(n.uid), bytes, diasParaVencer,
         };
       });

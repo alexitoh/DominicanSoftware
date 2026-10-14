@@ -46,6 +46,10 @@ export function codigoRecuperacion() {
 }
 export const normalizarCodigo = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+// Identificador del negocio: el RNC (9 dígitos) o la cédula (11), sin guiones. Si el negocio no tiene, el sistema le asigna 9 dígitos al azar.
+export const normalizarRnc = (x) => String(x || '').replace(/[\s-]/g, '');
+export const errorRnc = (x) => (/^(\d{9}|\d{11})$/.test(x) ? '' : 'El RNC debe tener 9 números (o la cédula 11), sin guiones.');
+
 export const normalizarUsuario = (u) => String(u || '').trim().toLowerCase();
 export const errorUsuario = (u) => (/^[a-z0-9._-]{3,30}$/.test(u) ? '' : 'El usuario debe tener de 3 a 30 caracteres: letras, números, punto, guion o guion bajo.');
 export const errorCorreo = (c) => (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(c || '').trim()) ? '' : 'Escribe un correo válido.');

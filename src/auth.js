@@ -4,11 +4,11 @@
 import { consultar, ejecutar, transaccion, setUsuarioActual } from './database.js';
 import {
   vinculado, nube, ErrorNube, sesionNube, haySesionNube, aplicarMiembros, guardarVerificador, adoptarRespuesta,
-  conectarDispositivo, dispositivo,
+  conectarDispositivo, dispositivo, negocioParaAcceso,
 } from './nube-app.js';
 import {
   hashClave, verificarClave, generarCodigoRecuperacion, normalizarCodigo, normalizarUsuario,
-  errorUsuario, errorCorreo, errorClave, generarClaveTemporal,
+  errorUsuario, errorCorreo, errorClave, generarClaveTemporal, normalizarRnc, errorRnc,
 } from './seguridad.js';
 
 // ---------- Roles y permisos ----------
@@ -117,7 +117,7 @@ export async function iniciarSesion(identificador, clave, recordar = true) {
   // Conectado a la nube: manda el servidor. Solo si no hay internet se usa la copia guardada en el dispositivo.
   if (vinculado()) {
     try {
-      const r = await nube.login({ identificador: normalizarUsuario(identificador), clave, dispositivo: dispositivo() });
+      const r = await nube.login({ identificador: normalizarUsuario(identificador), clave, ...negocioParaAcceso(), dispositivo: dispositivo() });
       await adoptarRespuesta(r, clave);
       const [u] = await consultar('SELECT * FROM usuarios WHERE uid = ?', [r.cuenta.uid]);
       if (!u) throw new Error('No se pudo guardar tu cuenta en este dispositivo.');
@@ -146,18 +146,21 @@ export async function iniciarSesion(identificador, clave, recordar = true) {
 
 // ---------- Cuentas en la nube ----------
 // Crea el negocio en el servidor y sube a la nube lo que ya hay en este dispositivo
-export async function registrarNegocioNube({ negocio, nombre, usuario, correo, clave }, alProgreso) {
+export async function registrarNegocioNube({ negocio, nombre, usuario, correo, clave, rnc = '' }, alProgreso) {
   const u = normalizarUsuario(usuario);
   const err = errorUsuario(u) || errorCorreo(correo) || errorClave(clave);
   if (!String(nombre || '').trim()) throw new Error('Escribe tu nombre.');
   if (!String(negocio || '').trim()) throw new Error('Escribe el nombre del negocio.');
-  if (err) throw new Error(err);
-  const r = await nube.registro({ negocio: negocio.trim(), nombre: nombre.trim(), usuario: u, correo: correo.trim(), clave, dispositivo: dispositivo() });
+  const id = normalizarRnc(rnc);
+  if (id && errorRnc(id)) throw new Error(errorRnc(id));
+  // Con RNC se identifica con él; sin RNC el servidor le asigna un número que debe aprenderse
+  const r = await nube.registro({ negocio: negocio.trim(), nombre: nombre.trim(), usuario: u, correo: correo.trim(), clave, rnc: id, dispositivo: dispositivo() });
+  const datosId = { identificador: r.negocio?.identificador, asignado: r.negocio?.idTipo === 'asignado' };
   // El propietario del sistema debe aprobar el registro: todavía no hay sesión ni se sube nada
-  if (r.pendiente) return { codigo: r.codigoRecuperacion, pendiente: true };
+  if (r.pendiente) return { codigo: r.codigoRecuperacion, pendiente: true, ...datosId };
   await adoptarRespuesta(r, clave);
   await conectarDispositivo(r, 'subir', alProgreso);
-  return { codigo: r.codigoRecuperacion, pendiente: false };
+  return { codigo: r.codigoRecuperacion, pendiente: false, ...datosId };
 }
 
 // Al pasar de local a la nube: los demás usuarios de este dispositivo se crean en el servidor con una contraseña temporal
@@ -187,8 +190,13 @@ export async function subirUsuariosLocales() {
 }
 
 // Entra con una cuenta que ya existe en la nube. modo: 'reemplazar' (dispositivo nuevo) | 'combinar'
-export async function entrarConCuentaNube(identificador, clave, modo = 'reemplazar', alProgreso) {
-  const r = await nube.login({ identificador: normalizarUsuario(identificador), clave, dispositivo: dispositivo() });
+export async function entrarConCuentaNube(identificador, clave, modo = 'reemplazar', alProgreso, rnc = '') {
+  const id = normalizarRnc(rnc);
+  if (!vinculado()) {
+    if (!id) throw new Error('Escribe el RNC del negocio, sin guiones. Si no tiene RNC, escribe el número que se le asignó al registrarse.');
+    if (errorRnc(id)) throw new Error(errorRnc(id));
+  }
+  const r = await nube.login({ identificador: normalizarUsuario(identificador), clave, ...negocioParaAcceso(id), dispositivo: dispositivo() });
   const { nuevoVinculo } = await adoptarRespuesta(r, clave);
   if (nuevoVinculo) await conectarDispositivo(r, modo, alProgreso);
   const [u] = await consultar('SELECT * FROM usuarios WHERE uid = ?', [r.cuenta.uid]);
@@ -272,11 +280,11 @@ export async function cambiarClaveTemporal(id, claveNueva) {
 }
 
 // Olvidó la contraseña: con el código de recuperación que recibió al crear la cuenta
-export async function recuperarConCodigo(identificador, codigo, claveNueva, usarNube = false) {
+export async function recuperarConCodigo(identificador, codigo, claveNueva, usarNube = false, rnc = '') {
   const err = errorClave(claveNueva);
   if (err) throw new Error(err);
   if (vinculado() || usarNube) {
-    const r = await nube.recuperar({ identificador: normalizarUsuario(identificador), codigo, clave: claveNueva });
+    const r = await nube.recuperar({ identificador: normalizarUsuario(identificador), codigo, clave: claveNueva, ...negocioParaAcceso(normalizarRnc(rnc)) });
     return { codigo: r.codigoRecuperacion };
   }
   const u = await buscarPorIdentificador(identificador);

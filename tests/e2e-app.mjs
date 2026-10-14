@@ -39,11 +39,14 @@ assert.equal(num1, 'V-000001');
 ok('en modo local todo sigue igual (venta V-000001)');
 
 // ---- pasar a la nube ----
-const { codigo } = await auth.registrarNegocioNube({ negocio: 'Sonido Pro', nombre: 'Dueño', usuario: 'dueno', correo: 'dueno@x.com', clave: 'clave1234' });
+const { codigo, identificador: idNegocio, asignado } = await auth.registrarNegocioNube({ negocio: 'Sonido Pro', nombre: 'Dueño', usuario: 'dueno', correo: 'dueno@x.com', clave: 'clave1234' });
+assert.match(idNegocio, /^9\d{8}$/, 'sin RNC el sistema asigna un número de 9 dígitos');
+assert.equal(asignado, true);
 assert.match(codigo, /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
 const entregadas = await auth.subirUsuariosLocales();
 assert.deepEqual(entregadas.map((e) => e.usuario), ['vera']);
 assert.ok(na.vinculado());
+assert.equal(na.datosVinculo().negocio_id, idNegocio, 'el equipo recuerda el identificador del negocio');
 assert.equal((await na.motor.pendientes()), 0);
 const num2 = await bd.registrarVenta({ items: [{ producto_id: pid, cantidad: 1, precio_unitario: 100 }] });
 assert.equal(num2, 'V-A000002'.replace('2', '2').replace('A0', 'A0'), 'formato con letra del dispositivo');
@@ -63,7 +66,7 @@ const lote2 = async (sets) => { db2.exec('BEGIN'); try { for (const s of sets) d
 let tok2;
 const cli2 = crearCliente({ base: () => BASE, token: () => tok2 });
 const motor2 = crearMotor({ consultar: async (s, p = []) => db2.prepare(s).all(...p), lote: lote2, nube: cli2 });
-const r2 = await cli2.login({ identificador: 'dueno@x.com', clave: 'clave1234', dispositivo: 'segundo-dispositivo-xx' });
+const r2 = await cli2.login({ identificador: 'dueno@x.com', clave: 'clave1234', negocioId: idNegocio, dispositivo: 'segundo-dispositivo-xx' });
 tok2 = r2.token;
 await motor2.vincular({ dispositivo: 'segundo-dispositivo-xx', codigo: r2.dispositivo.codigo, negocio: r2.negocio.uid, negocioNombre: r2.negocio.nombre });
 await motor2.reemplazarLocal();
@@ -124,7 +127,7 @@ assert.deepEqual(lista.map((x) => x.usuario).sort(), ['carlos', 'dueno', 'vera']
 const carlos = lista.find((x) => x.usuario === 'carlos');
 await auth.actualizarUsuario(carlos.id, { nombre: 'Carlos C.', correo: 'c@x.com', rol: 'cajero', permisos: ['ventas'], activo: false });
 await assert.rejects(() => auth.iniciarSesion('carlos', 'temporal34'), /desactivada/);
-const visto = await crearCliente({ base: () => BASE }).login({ identificador: 'dueno', clave: 'clave1234', dispositivo: 'tercer-dispositivo-xx' });
+const visto = await crearCliente({ base: () => BASE }).login({ identificador: 'dueno', clave: 'clave1234', negocioId: idNegocio, dispositivo: 'tercer-dispositivo-xx' });
 assert.equal(visto.miembros.length, 3);
 await auth.restablecerClave(carlos.id, 'otraTemp55');
 ok('el administrador crea, desactiva y restablece usuarios, y el servidor lo refleja');
@@ -144,13 +147,23 @@ await na.vaciarDispositivo();
 assert.equal(await auth.existenUsuarios(), false, 'sin usuarios: vuelve a la bienvenida');
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 0);
 assert.equal(na.vinculado(), false);
-const nuevo = await auth.registrarNegocioNube({ negocio: 'Segundo Negocio', nombre: 'Pedro', usuario: 'pedro', correo: 'pedro@x.com', clave: 'clave5678' });
+const nuevo = await auth.registrarNegocioNube({ negocio: 'Segundo Negocio', nombre: 'Pedro', usuario: 'pedro', correo: 'pedro@x.com', clave: 'clave5678', rnc: '131-23456-7' });
 assert.ok(nuevo.codigo);
+assert.equal(nuevo.identificador, '131234567'); assert.equal(nuevo.asignado, false);
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 0, 'no se mezcla con el negocio anterior');
 await na.vaciarDispositivo();
-const volver = await auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplazar');
+assert.equal(na.datosVinculo(), null);
+// En un equipo nuevo se pide el RNC del negocio; sin él (o mal escrito) no se entra
+await assert.rejects(() => auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplazar'), /Escribe el RNC del negocio/);
+await assert.rejects(() => auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplazar', undefined, '123'), /9 números/);
+await assert.rejects(() => auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplazar', undefined, '131234567'), /incorrectos/, 'ese RNC es de otro negocio');
+const volver = await auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplazar', undefined, idNegocio);
 assert.ok(volver);
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 1, 'los datos del primer negocio vuelven desde la nube');
+assert.equal(na.datosVinculo().negocio_id, idNegocio);
+// Ya vinculado, no se vuelve a pedir el RNC
+await auth.cerrarSesion();
+await auth.iniciarSesion('dueno', 'recuperada88');
 ok('se puede crear otro negocio en el mismo dispositivo y volver al anterior desde la nube');
 
 // ---- límite de crédito del cliente ----

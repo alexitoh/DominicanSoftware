@@ -52,6 +52,10 @@ export function generarClaveTemporal() {
   return s;
 }
 
+// Identificador del negocio: el RNC (9 dígitos) o la cédula (11), sin guiones. Sin RNC, el servidor asigna un número de 9 dígitos.
+export const normalizarRnc = (x) => String(x || '').replace(/[\s-]/g, '');
+export const errorRnc = (x) => (/^(\d{9}|\d{11})$/.test(x) ? '' : 'El RNC debe tener 9 números (o la cédula 11), sin guiones.');
+
 export function normalizarUsuario(u) {
   return String(u || '').trim().toLowerCase();
 }

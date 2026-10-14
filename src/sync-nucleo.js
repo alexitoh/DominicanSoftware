@@ -67,15 +67,20 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
     await lote(ENVOLTURA(sets));
   }
 
-  async function vincular({ dispositivo, codigo, negocio, negocioNombre, epoca = 0 }) {
+  async function vincular({ dispositivo, codigo, negocio, negocioNombre, epoca = 0, negocioId = null }) {
     await lote([{
-      statement: 'UPDATE sync_ctl SET dispositivo = ?, codigo = ?, negocio = ?, negocio_nombre = ?, cursor = 0, epoca = ? WHERE id = 1',
-      values: [dispositivo, codigo, negocio, negocioNombre, epoca || 0],
+      statement: 'UPDATE sync_ctl SET dispositivo = ?, codigo = ?, negocio = ?, negocio_nombre = ?, cursor = 0, epoca = ?, negocio_id = ? WHERE id = 1',
+      values: [dispositivo, codigo, negocio, negocioNombre, epoca || 0, negocioId || null],
     }]);
   }
 
+  // El identificador (RNC o número asignado) lo cambia solo el propietario del sistema: aquí se guarda el vigente
+  async function recordarIdentificador(negocioId) {
+    await lote([{ statement: 'UPDATE sync_ctl SET negocio_id = ? WHERE id = 1', values: [negocioId || null] }]);
+  }
+
   async function desvincular() {
-    await lote([{ statement: 'UPDATE sync_ctl SET negocio = NULL, negocio_nombre = NULL, codigo = NULL, cursor = 0, ultimo = NULL WHERE id = 1', values: [] }]);
+    await lote([{ statement: 'UPDATE sync_ctl SET negocio = NULL, negocio_nombre = NULL, negocio_id = NULL, codigo = NULL, cursor = 0, ultimo = NULL WHERE id = 1', values: [] }]);
   }
 
   async function pendientes() {
@@ -268,7 +273,7 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
   }
 
   return {
-    ctl, vincular, desvincular, marcarTodo, reemplazarLocal, reconciliarStock, pendientes, sincronizar,
+    ctl, vincular, recordarIdentificador, desvincular, marcarTodo, reemplazarLocal, reconciliarStock, pendientes, sincronizar,
     enCurso: () => !!corriendo,
   };
 }

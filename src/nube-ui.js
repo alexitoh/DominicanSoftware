@@ -8,7 +8,7 @@ import {
 import { usuarioActual, registrarNegocioNube, subirUsuariosLocales, registrarBitacora } from './auth.js';
 import { guardarServidor } from './nube.js';
 import { consultar } from './database.js';
-import { normalizarUsuario } from './seguridad.js';
+import { normalizarUsuario, normalizarRnc, errorRnc } from './seguridad.js';
 
 const NUBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5H7z"/></svg>';
 
@@ -50,6 +50,7 @@ export function abrirEstadoNube() {
     if (e.mensaje) filas.push(h('p', { class: e.fase === 'error' ? 'error' : 'ayuda' }, e.mensaje));
     if (v) {
       filas.push(h('p', { class: 'ayuda' }, `Negocio: ${v.negocio_nombre || '—'} · Dispositivo ${v.codigo || '—'}`));
+      if (v.negocio_id) filas.push(h('p', { class: 'ayuda' }, `RNC / número del negocio: ${v.negocio_id} (se pide al conectar un equipo nuevo; solo el proveedor puede cambiarlo)`));
       filas.push(h('p', { class: 'ayuda' }, `Última sincronización: ${hora(e.ultimo)}${e.pendientes ? ` · ${e.pendientes} cambios por subir` : ''}`));
       filas.push(h('div', { class: 'acciones' },
         h('button', { class: 'btn primario', disabled: e.fase === 'sincronizando', onClick: async () => {
@@ -134,6 +135,7 @@ async function formularioNuevoNegocio(alTerminar) {
   const [fila] = await consultar('SELECT correo FROM usuarios WHERE id = ?', [yo.id]);
   const servidor = campoServidor();
   const negocio = campo('Nombre del negocio', { value: cfg?.valor || '' });
+  const rnc = campo('RNC del negocio (opcional, sin guiones)', { inputmode: 'numeric', autocomplete: 'off', maxlength: 14, placeholder: 'ej. 131234567' });
   const usuario = campo('Tu usuario', { value: yo.usuario, disabled: true });
   const correo = campo('Correo', { type: 'email', value: fila?.correo || '' });
   const clave = campo('Contraseña para la nube', { type: 'password', autocomplete: 'new-password' });
@@ -144,14 +146,15 @@ async function formularioNuevoNegocio(alTerminar) {
     boton.disabled = true;
     try {
       guardarServidor(servidor.input.value);
-      const { codigo, pendiente } = await registrarNegocioNube({
-        negocio: negocio.input.value, nombre: yo.nombre, usuario: yo.usuario, correo: correo.input.value, clave: clave.input.value,
+      const { codigo, pendiente, identificador, asignado } = await registrarNegocioNube({
+        negocio: negocio.input.value, nombre: yo.nombre, usuario: yo.usuario, correo: correo.input.value, clave: clave.input.value, rnc: rnc.input.value,
       }, (p) => { boton.textContent = `Subiendo datos… ${p.subidos}`; });
-      if (pendiente) { cerrar(); mostrarPendiente(codigo); return; }
+      const ident = { identificador, asignado };
+      if (pendiente) { cerrar(); mostrarPendiente(codigo, ident); return; }
       const entregadas = await subirUsuariosLocales();
       await registrarBitacora('Negocio conectado a la nube');
       cerrar();
-      mostrarResultado(codigo, entregadas);
+      mostrarResultado(codigo, entregadas, ident);
     } catch (e) {
       error.textContent = `${e.message || e}${/ya existe/i.test(e.message || '') ? ' Si ese usuario ya está en la nube, usa "Conectar con una cuenta existente".' : ''}`;
       boton.disabled = false;
@@ -162,25 +165,33 @@ async function formularioNuevoNegocio(alTerminar) {
   const cerrar = hoja('Crear mi negocio en la nube',
     h('div', { class: 'cuerpo' },
       h('p', { class: 'ayuda' }, 'Se sube todo lo que hay en este dispositivo (productos, ventas, clientes…). Tu usuario será el administrador de la nube. Los demás usuarios de este dispositivo se crearán con una contraseña temporal.'),
-      servidor.el, negocio.el, usuario.el, correo.el, clave.el,
+      servidor.el, negocio.el, rnc.el,
+      h('p', { class: 'ayuda' }, 'El RNC identifica a tu negocio al iniciar sesión en otros equipos. Si no tienes RNC, déjalo vacío: el sistema te asignará un número que deberás aprenderte.'),
+      usuario.el, correo.el, clave.el,
       h('p', { class: 'ayuda' }, 'Mínimo 8 caracteres, con letras y números.'),
       error, boton));
 
-  function mostrarPendiente(codigo) {
+  const bloqueId = (ident) => (ident?.identificador ? h('div', { class: 'identificador' },
+    h('p', {}, ident.asignado ? 'Número de tu negocio (asignado, apréndelo: lo necesitas para entrar desde otro equipo):' : 'RNC de tu negocio (lo necesitas para entrar desde otro equipo):'),
+    h('div', { class: 'codigo' }, ident.identificador)) : null);
+
+  function mostrarPendiente(codigo, ident) {
     const cerrar3 = hoja('Registro pendiente de aprobación',
       h('div', { class: 'cuerpo' },
         h('p', {}, 'Recibimos tu registro. Cuando el proveedor lo apruebe, vuelve a Ajustes → Nube y sincronización y elige "Conectar con una cuenta existente" con el mismo usuario y contraseña, y deja marcado "Combinar": se subirán tus datos.'),
         h('p', {}, 'Código de recuperación (guárdalo, no se vuelve a mostrar):'),
         h('div', { class: 'codigo' }, codigo),
+        bloqueId(ident),
         h('button', { class: 'btn primario', onClick: () => cerrar3() }, 'Entendido')));
   }
 
-  function mostrarResultado(codigo, entregadas) {
+  function mostrarResultado(codigo, entregadas, ident) {
     const salir = () => { cerrar2(); alTerminar?.(); location.reload(); };
     const cerrar2 = hoja('Tu negocio ya está en la nube',
       h('div', { class: 'cuerpo' },
         h('p', {}, 'Código de recuperación de tu cuenta (guárdalo, no se vuelve a mostrar):'),
         h('div', { class: 'codigo' }, codigo),
+        bloqueId(ident),
         entregadas.length
           ? h('div', {},
             h('p', {}, 'Contraseñas temporales de los demás usuarios (deberán cambiarla al entrar):'),
@@ -193,6 +204,7 @@ async function formularioNuevoNegocio(alTerminar) {
 async function formularioCuentaExistente(alTerminar) {
   const local = await hayDatosLocales();
   const servidor = campoServidor();
+  const rnc = campo('RNC del negocio (sin guiones)', { inputmode: 'numeric', autocomplete: 'off', maxlength: 14, placeholder: 'ej. 131234567' });
   const usuario = campo('Usuario o correo', { autocapitalize: 'none' });
   const clave = campo('Contraseña', { type: 'password', autocomplete: 'current-password' });
   const modo = h('select', { class: 'campo', 'aria-label': 'Qué hacer con los datos de este dispositivo' },
@@ -213,7 +225,10 @@ async function formularioCuentaExistente(alTerminar) {
         if (!ok) { boton.disabled = false; return; }
       }
       guardarServidor(servidor.input.value);
-      const r = await nube.login({ identificador: normalizarUsuario(usuario.input.value), clave: clave.input.value, dispositivo: dispositivo() });
+      const negocioId = normalizarRnc(rnc.input.value);
+      if (!negocioId) throw new Error('Escribe el RNC del negocio, sin guiones (o el número que se le asignó al registrarse).');
+      if (errorRnc(negocioId)) throw new Error(errorRnc(negocioId));
+      const r = await nube.login({ identificador: normalizarUsuario(usuario.input.value), clave: clave.input.value, negocioId, dispositivo: dispositivo() });
       const { nuevoVinculo } = await adoptarRespuesta(r, clave.input.value);
       if (!nuevoVinculo) throw new Error('Este dispositivo ya está conectado.');
       await conectarDispositivo(r, modo.value, (p) => { boton.textContent = `Sincronizando… ↑${p.subidos} ↓${p.bajados}`; });
@@ -231,7 +246,7 @@ async function formularioCuentaExistente(alTerminar) {
   const boton = h('button', { class: 'btn primario', onClick: conectar }, 'Conectar');
   const cerrar = hoja('Conectar con una cuenta existente',
     h('div', { class: 'cuerpo' },
-      servidor.el, usuario.el, clave.el,
+      servidor.el, rnc.el, usuario.el, clave.el,
       local ? h('label', { class: 'etiqueta' }, 'Datos de este dispositivo', modo) : null,
       error, boton));
 }

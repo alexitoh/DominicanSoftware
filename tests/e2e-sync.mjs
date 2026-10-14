@@ -3,6 +3,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { crearServidor } from '../server/index.js';
@@ -83,7 +84,9 @@ const vc = (await uno(A, "SELECT id FROM ventas WHERE numero = 'V-000002'")).id;
 A.run("INSERT INTO cuentas_cobrar (venta_id, vence) VALUES (?, '2030-01-31')", [vc]);
 A.run("INSERT INTO pagos (venta_id, monto, metodo, nota) VALUES (?, 200, 'efectivo', 'Inicial')", [vc]);
 
-await conectar(A, 'registro', { negocio: 'Audio Pro', nombre: 'Ana', usuario: 'ana', correo: 'ana@x.com', clave: 'abcd1234' });
+const regA = await conectar(A, 'registro', { negocio: 'Audio Pro', nombre: 'Ana', usuario: 'ana', correo: 'ana@x.com', clave: 'abcd1234' });
+const ID_A = regA.negocio.identificador;
+assert.match(ID_A, /^9\d{8}$/, 'sin RNC el servidor asigna 9 dígitos');
 await A.motor.marcarTodo();
 assert.ok((await A.motor.pendientes()) > 10);
 const r1 = await A.motor.sincronizar();
@@ -92,7 +95,7 @@ assert.equal(await A.motor.pendientes(), 0, 'nada pendiente después de subir');
 ok('A sube todo y queda sin pendientes');
 
 // ---------- 2. El dispositivo B se une y baja todo ----------
-await conectar(B, 'login', { identificador: 'ana', clave: 'abcd1234' });
+await conectar(B, 'login', { identificador: 'ana', clave: 'abcd1234', negocioId: ID_A });
 await B.motor.reemplazarLocal();
 const r2 = await B.motor.sincronizar();
 assert.equal(r2.errores.length, 0, r2.errores.join('\n'));
@@ -185,7 +188,7 @@ ok('sincronizar otra vez no sube ni duplica nada');
 // ---------- 9. Datos propios previos en un dispositivo nuevo que "combina" ----------
 const C = await crearDispositivo('C');
 crearProducto(C, 'LOCAL-9', 'Producto de C', 7);
-await conectar(C, 'login', { identificador: 'ana@x.com', clave: 'abcd1234' });
+await conectar(C, 'login', { identificador: 'ana@x.com', clave: 'abcd1234', negocioId: ID_A });
 await C.motor.marcarTodo();
 await C.motor.sincronizar(); await A.motor.sincronizar();
 assert.equal((await uno(C, 'SELECT COUNT(*) n FROM productos')).n, 5);
@@ -297,7 +300,7 @@ const reg5 = await conectar(D1, 'registro', { negocio: 'Negocio de Prueba', nomb
 crearProducto(D1, 'LP-1', 'Producto de prueba', 5, 100);
 await D1.motor.marcarTodo();
 await D1.motor.sincronizar();
-await conectar(D2, 'login', { identificador: 'dani', clave: 'clave1234' });
+await conectar(D2, 'login', { identificador: 'dani', clave: 'clave1234', negocioId: reg5.negocio.identificador });
 await D2.motor.sincronizar();
 assert.equal((await uno(D2, "SELECT COUNT(*) n FROM productos WHERE codigo = 'LP-1'")).n, 1, 'el segundo dispositivo ve el producto');
 // sin confirmar el nombre exacto no se borra nada
@@ -332,12 +335,12 @@ const reg2 = await otro.registro({ negocio: 'Otro', nombre: 'Luis', usuario: 'lu
 const otroT = crearCliente({ base: () => BASE, token: () => reg2.token });
 const s = await otroT.sync({ dispositivo: 'otro-dispositivo-1', desde: 0, cambios: [] });
 assert.equal(s.cambios.length, 0, 'otro negocio no ve datos ajenos');
-await assert.rejects(() => otro.login({ identificador: 'ana', clave: 'mala-clave1', dispositivo: 'x'.repeat(10) }), /incorrectos/);
+await assert.rejects(() => otro.login({ identificador: 'ana', clave: 'mala-clave1', negocioId: ID_A, dispositivo: 'x'.repeat(10) }), /incorrectos/);
 ok('un negocio no ve los datos de otro y sin sesión no se entra');
 
 const m = await A.nube.crearMiembro({ nombre: 'Vera', usuario: 'vera', rol: 'vendedor', permisos: ['ventas'], clave: 'temporal12' });
 assert.equal(m.miembros.length, 2);
-const vera = await crearCliente({ base: () => BASE }).login({ identificador: 'vera', clave: 'temporal12', dispositivo: 'vera-disp-0001' });
+const vera = await crearCliente({ base: () => BASE }).login({ identificador: 'vera', clave: 'temporal12', negocioId: ID_A, dispositivo: 'vera-disp-0001' });
 assert.equal(vera.cuenta.debeCambiar, true);
 assert.equal(vera.negocio.uid, (await A.nube.yo()).negocio.uid);
 await assert.rejects(() => crearCliente({ base: () => BASE, token: () => vera.token }).crearMiembro({ nombre: 'X', usuario: 'xx1', rol: 'vendedor', clave: 'abcd1234' }), /administrador/);
@@ -352,7 +355,8 @@ const pend = await c2.registro({ negocio: 'Taller Nuevo', nombre: 'Rosa', usuari
 assert.equal(pend.pendiente, true);
 assert.ok(pend.codigoRecuperacion);
 assert.equal(pend.token, undefined, 'sin sesión hasta que se apruebe');
-await assert.rejects(() => c2.login({ identificador: 'rosa', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' }), /pendiente de aprobación/);
+assert.match(pend.negocio.identificador, /^9\d{8}$/);
+await assert.rejects(() => c2.login({ identificador: 'rosa', clave: 'clave1234', negocioId: pend.negocio.identificador, dispositivo: 'rosa-dispositivo-1' }), /pendiente de aprobación/);
 const post2 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B2 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json()]; };
 assert.equal((await post2('/api/propietario/login', { clave: 'mala' }))[0], 401);
 const [, dueno] = await post2('/api/propietario/login', { clave: 'dueno-sistema-1' });
@@ -364,13 +368,13 @@ assert.equal(lista.negocios[0].admin.correo, 'rosa@x.com');
 const [stU] = await post2('/api/propietario/negocios', null, 'x', 'GET');
 assert.equal(stU, 401);
 await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'aprobar', plan: 'mensual', vence: '2099-01-01' }, dueno.token, 'PATCH');
-const rosa = await c2.login({ identificador: 'rosa', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' });
+const rosa = await c2.login({ identificador: 'rosa', clave: 'clave1234', negocioId: pend.negocio.identificador, dispositivo: 'rosa-dispositivo-1' });
 assert.ok(rosa.token);
 await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'suspender' }, dueno.token, 'PATCH');
 await assert.rejects(() => crearCliente({ base: () => B2, token: () => rosa.token }).sync({ dispositivo: 'rosa-dispositivo-1', desde: 0, cambios: [] }), /suspendido/);
 await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'editar', plan: 'mensual', vence: '2020-01-01' }, dueno.token, 'PATCH');
 await post2(`/api/propietario/negocios/${lista.negocios[0].uid}`, { accion: 'reactivar' }, dueno.token, 'PATCH');
-await assert.rejects(() => c2.login({ identificador: 'rosa', clave: 'clave1234', dispositivo: 'rosa-dispositivo-1' }), /venció/);
+await assert.rejects(() => c2.login({ identificador: 'rosa', clave: 'clave1234', negocioId: pend.negocio.identificador, dispositivo: 'rosa-dispositivo-1' }), /venció/);
 const sinPanel = crearServidor({ db: abrirBase(':memory:'), secreto: 'tercer-secreto-largo-1234567890' });
 await new Promise((r) => sinPanel.listen(0, r));
 const rr = await fetch(`http://127.0.0.1:${sinPanel.address().port}/api/propietario/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"clave":"x"}' });
@@ -384,8 +388,8 @@ const srv3 = crearServidor({ db: db3, secreto: 'cuarto-secreto-largo-1234567890'
 await new Promise((r) => srv3.listen(0, r));
 const B3 = `http://127.0.0.1:${srv3.address().port}`;
 const c3 = crearCliente({ base: () => B3 });
-await c3.registro({ negocio: 'Sonido Uno', nombre: 'Ana', usuario: 'ana1', correo: 'a@x.com', clave: 'clave1234', dispositivo: 'uno-dispositivo-1' });
-await c3.registro({ negocio: 'Sonido Dos', nombre: 'Beto', usuario: 'beto1', correo: 'b@x.com', clave: 'clave1234', dispositivo: 'dos-dispositivo-1' });
+const reg31 = await c3.registro({ negocio: 'Sonido Uno', nombre: 'Ana', usuario: 'ana1', correo: 'a@x.com', clave: 'clave1234', dispositivo: 'uno-dispositivo-1' });
+const reg32 = await c3.registro({ negocio: 'Sonido Dos', nombre: 'Beto', usuario: 'beto1', correo: 'b@x.com', clave: 'clave1234', dispositivo: 'dos-dispositivo-1' });
 const p3 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B3 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json()]; };
 const [, d3] = await p3('/api/propietario/login', { clave: 'dueno-sistema-1' });
 const T = d3.token;
@@ -417,11 +421,11 @@ assert.equal(det.pagos.length, 1); assert.equal(det.usuarios.length, 1); assert.
 // Cuentas: desactivar, clave temporal
 const cuentaUno = det.usuarios[0];
 await p3(`/api/propietario/cuentas/${cuentaUno.uid}`, { activo: false }, T, 'PATCH');
-await assert.rejects(() => c3.login({ identificador: 'ana1', clave: 'clave1234', dispositivo: 'uno-dispositivo-1' }));
+await assert.rejects(() => c3.login({ identificador: 'ana1', clave: 'clave1234', negocioId: reg31.negocio.identificador, dispositivo: 'uno-dispositivo-1' }));
 await p3(`/api/propietario/cuentas/${cuentaUno.uid}`, { activo: true }, T, 'PATCH');
 assert.equal((await p3(`/api/propietario/cuentas/${cuentaUno.uid}/clave`, { clave: '123' }, T))[0], 400);
 await p3(`/api/propietario/cuentas/${cuentaUno.uid}/clave`, { clave: 'nueva-temp-77' }, T);
-const lg = await c3.login({ identificador: 'ana1', clave: 'nueva-temp-77', dispositivo: 'uno-dispositivo-1' });
+const lg = await c3.login({ identificador: 'ana1', clave: 'nueva-temp-77', negocioId: reg31.negocio.identificador, dispositivo: 'uno-dispositivo-1' });
 assert.equal(lg.cuenta.debeCambiar, true);
 // Borrar un pago
 assert.equal((await p3(`/api/propietario/pagos/${det.pagos[0].id}`, null, T, 'DELETE'))[0], 200);
@@ -438,8 +442,8 @@ assert.ok(del.liberado > 50000, 'el archivo se compacta y recupera espacio: ' + 
 assert.equal(db3.prepare('SELECT COUNT(*) AS c FROM registros WHERE negocio = ?').get(neg1.uid).c, 0);
 assert.equal(db3.prepare('SELECT COUNT(*) AS c FROM cuentas WHERE negocio = ?').get(neg1.uid).c, 0);
 assert.equal(db3.prepare('SELECT COUNT(*) AS c FROM registros WHERE negocio = ?').get(neg2.uid).c, 1, 'el otro negocio queda intacto');
-await assert.rejects(() => c3.login({ identificador: 'ana1', clave: 'nueva-temp-77', dispositivo: 'uno-dispositivo-1' }), /incorrectos/);
-await c3.login({ identificador: 'beto1', clave: 'clave1234', dispositivo: 'dos-dispositivo-1' });
+await assert.rejects(() => c3.login({ identificador: 'ana1', clave: 'nueva-temp-77', negocioId: reg31.negocio.identificador, dispositivo: 'uno-dispositivo-1' }), /incorrectos/);
+await c3.login({ identificador: 'beto1', clave: 'clave1234', negocioId: reg32.negocio.identificador, dispositivo: 'dos-dispositivo-1' });
 const [, h3] = await p3('/api/propietario/historial', null, T, 'GET');
 assert.ok(h3.acciones.some((a) => a.accion === 'Eliminó negocio' && a.negocio === 'Sonido Uno'));
 assert.equal(h3.pagos.length, 0 + h3.pagos.length);
@@ -474,7 +478,7 @@ await p4(`/api/propietario/negocios/${n1.uid}`, { accion: 'editar', plan: 'mensu
 assert.equal((await cl1.llamar('GET', '/api/avisos')).sinLeer, 1);
 // Un empleado no ve el recordatorio de pago
 const emp = await cl1.crearMiembro({ nombre: 'Eva', usuario: 'eva4', rol: 'vendedor', permisos: ['ventas'], clave: 'temporal12' });
-const loginEva = await crearCliente({ base: () => B4 }).login({ identificador: 'eva4', clave: 'temporal12', dispositivo: 'av1-dispositivo-2' });
+const loginEva = await crearCliente({ base: () => B4 }).login({ identificador: 'eva4', clave: 'temporal12', negocioId: rg1.negocio.identificador, dispositivo: 'av1-dispositivo-2' });
 assert.equal((await crearCliente({ base: () => B4, token: () => loginEva.token }).llamar('GET', '/api/avisos')).avisos.length, 0);
 // Mensaje a un cliente
 assert.equal((await p4('/api/propietario/avisos', { destino: 'negocios', negocios: [n2.uid], titulo: '', mensaje: 'x' }, T4))[0], 400);
@@ -505,6 +509,100 @@ await p4(`/api/propietario/negocios/${n2.uid}`, { confirmar: 'Aviso Dos' }, T4, 
 assert.equal(db4.prepare('SELECT COUNT(*) AS c FROM avisos WHERE negocio = ?').get(n2.uid).c, 0);
 srv4.close();
 ok('recordatorio de pago a 7/3/1 días solo para el administrador; mensajes a un cliente o masivos con lectura, caducidad y borrado');
+
+
+// ---------- 11. Un mismo usuario en distintos negocios: el RNC identifica el negocio ----------
+const db6 = abrirBase(':memory:');
+const srv6 = crearServidor({ db: db6, secreto: 'septimo-secreto-largo-1234567890', clavePropietario: 'dueno-sistema-1', aprobacionAutomatica: true });
+await new Promise((r) => srv6.listen(0, r));
+const B6 = `http://127.0.0.1:${srv6.address().port}`;
+const c6 = crearCliente({ base: () => B6 });
+const hogar = await c6.registro({ negocio: 'Hogar', rnc: '131-23456-7', nombre: 'Ana', usuario: 'admin', correo: 'dueno@x.com', clave: 'clave1234', dispositivo: 'hogar-dispositivo-1' });
+assert.equal(hogar.negocio.identificador, '131234567', 'el RNC se guarda sin guiones');
+assert.equal(hogar.negocio.idTipo, 'rnc');
+// El mismo usuario y el mismo correo en otro negocio (sin RNC): ya no hay conflicto
+const ups = await c6.registro({ negocio: 'UPS', nombre: 'Luis', usuario: 'admin', correo: 'dueno@x.com', clave: 'otraClave99', dispositivo: 'ups-dispositivo-1' });
+assert.match(ups.negocio.identificador, /^9\d{8}$/, 'sin RNC: 9 dígitos asignados');
+assert.equal(ups.negocio.idTipo, 'asignado');
+assert.notEqual(ups.negocio.uid, hogar.negocio.uid);
+// RNC repetido o mal escrito
+await assert.rejects(() => c6.registro({ negocio: 'Otro Hogar', rnc: '131234567', nombre: 'X', usuario: 'xxx', correo: 'x@x.com', clave: 'clave1234' }), /Ya existe un negocio registrado con ese RNC/);
+await assert.rejects(() => c6.registro({ negocio: 'Mal', rnc: '12345', nombre: 'X', usuario: 'xxx', correo: 'x@x.com', clave: 'clave1234' }), /9 números/);
+await assert.rejects(() => c6.registro({ negocio: 'Mal', rnc: 'ABC123456', nombre: 'X', usuario: 'xxx', correo: 'x@x.com', clave: 'clave1234' }), /9 números/);
+// Acceso: cada clave entra solo a su negocio
+const lh = await c6.login({ identificador: 'admin', clave: 'clave1234', negocioId: '131234567', dispositivo: 'hogar-dispositivo-1' });
+assert.equal(lh.negocio.uid, hogar.negocio.uid);
+assert.equal(lh.negocio.identificador, '131234567');
+const lu = await c6.login({ identificador: 'dueno@x.com', clave: 'otraClave99', negocioId: ups.negocio.identificador, dispositivo: 'ups-dispositivo-1' });
+assert.equal(lu.negocio.uid, ups.negocio.uid, 'el correo repetido también se separa por negocio');
+await assert.rejects(() => c6.login({ identificador: 'admin', clave: 'clave1234', negocioId: ups.negocio.identificador, dispositivo: 'x'.repeat(10) }), /incorrectos/);
+await assert.rejects(() => c6.login({ identificador: 'admin', clave: 'clave1234', negocioId: '999999999', dispositivo: 'x'.repeat(10) }), /incorrectos/);
+await assert.rejects(() => c6.login({ identificador: 'admin', clave: 'clave1234', dispositivo: 'x'.repeat(10) }), /Escribe el RNC del negocio/);
+await assert.rejects(() => c6.login({ identificador: 'admin', clave: 'clave1234', negocioId: '12ab', dispositivo: 'x'.repeat(10) }), /9 números/);
+// Un equipo ya vinculado entra con el uid del negocio, sin volver a escribir el RNC
+const luid = await c6.login({ identificador: 'admin', clave: 'clave1234', negocioUid: hogar.negocio.uid, dispositivo: 'hogar-dispositivo-1' });
+assert.equal(luid.negocio.uid, hogar.negocio.uid);
+// Empleados: el mismo usuario puede existir en otro negocio, pero no repetirse dentro del suyo
+const tHogar = crearCliente({ base: () => B6, token: () => lh.token });
+const tUps = crearCliente({ base: () => B6, token: () => lu.token });
+await tHogar.crearMiembro({ nombre: 'Vera', usuario: 'vera', rol: 'vendedor', permisos: ['ventas'], clave: 'temporal12' });
+await tUps.crearMiembro({ nombre: 'Vera U', usuario: 'vera', rol: 'vendedor', permisos: ['ventas'], clave: 'temporal34' });
+await assert.rejects(() => tHogar.crearMiembro({ nombre: 'Vera 2', usuario: 'vera', rol: 'vendedor', permisos: [], clave: 'temporal56' }), /ya existe en tu negocio/);
+const veraU = await c6.login({ identificador: 'vera', clave: 'temporal34', negocioId: ups.negocio.identificador, dispositivo: 'ups-disp-0002' });
+assert.equal(veraU.negocio.uid, ups.negocio.uid);
+// Recuperar contraseña también necesita el negocio
+await assert.rejects(() => c6.recuperar({ identificador: 'admin', codigo: hogar.codigoRecuperacion, clave: 'nueva12345', negocioId: ups.negocio.identificador }), /no son correctos/);
+await c6.recuperar({ identificador: 'admin', codigo: hogar.codigoRecuperacion, clave: 'nueva12345', negocioId: '131234567' });
+await c6.login({ identificador: 'admin', clave: 'nueva12345', negocioId: '131234567', dispositivo: 'hogar-dispositivo-1' });
+// Panel del propietario: ve el identificador y solo él lo cambia
+const p6 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B6 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json().catch(() => ({}))]; };
+const T6 = (await p6('/api/propietario/login', { clave: 'dueno-sistema-1' }))[1].token;
+const [, l6] = await p6('/api/propietario/negocios', null, T6, 'GET');
+const nUps = l6.negocios.find((x) => x.nombre === 'UPS'), nHogar = l6.negocios.find((x) => x.nombre === 'Hogar');
+assert.equal(nHogar.identificador, '131234567'); assert.equal(nHogar.idTipo, 'rnc');
+assert.equal(nUps.identificador, ups.negocio.identificador); assert.equal(nUps.idTipo, 'asignado');
+const rutaId = (n) => `/api/propietario/negocios/${n.uid}/identificador`;
+assert.equal((await p6(rutaId(nUps), { identificador: '131234567' }, 'token-falso', 'PATCH'))[0], 401, 'sin la clave del propietario no se cambia');
+assert.equal((await p6(rutaId(nUps), { identificador: lu.token }, lh.token, 'PATCH'))[0], 401, 'un usuario del negocio tampoco puede');
+assert.equal((await p6(rutaId(nUps), { identificador: '12345' }, T6, 'PATCH'))[0], 400);
+const [stDup, dup] = await p6(rutaId(nUps), { identificador: '131234567' }, T6, 'PATCH');
+assert.equal(stDup, 409); assert.match(dup.error, /Hogar/);
+// Cuando UPS obtiene RNC, el propietario se lo asigna
+const [stOk, cambio] = await p6(rutaId(nUps), { identificador: '401-00000-1' }, T6, 'PATCH');
+assert.equal(stOk, 200); assert.equal(cambio.identificador, '401000001'); assert.equal(cambio.idTipo, 'rnc');
+await assert.rejects(() => c6.login({ identificador: 'dueno@x.com', clave: 'otraClave99', negocioId: ups.negocio.identificador, dispositivo: 'x'.repeat(10) }), /incorrectos/, 'el número viejo ya no sirve para equipos nuevos');
+const lu2 = await c6.login({ identificador: 'dueno@x.com', clave: 'otraClave99', negocioId: '401000001', dispositivo: 'ups-dispositivo-1' });
+assert.equal(lu2.negocio.uid, ups.negocio.uid); assert.equal(lu2.negocio.identificador, '401000001');
+const luid2 = await c6.login({ identificador: 'dueno@x.com', clave: 'otraClave99', negocioUid: ups.negocio.uid, dispositivo: 'ups-dispositivo-1' });
+assert.equal(luid2.negocio.identificador, '401000001', 'un equipo ya vinculado sigue entrando y aprende el número nuevo');
+// Asignar un número al azar
+const [, az] = await p6(rutaId(nUps), { asignar: true }, T6, 'PATCH');
+assert.match(az.identificador, /^9\d{8}$/); assert.equal(az.idTipo, 'asignado');
+const [, hist] = await p6('/api/propietario/historial', null, T6, 'GET');
+assert.ok(JSON.stringify(hist).includes('Cambió identificador'), 'queda en la bitácora del propietario');
+srv6.close();
+ok('mismo usuario y correo en negocios distintos; el RNC (o número asignado) identifica el negocio; solo el propietario lo cambia');
+
+// ---------- 12. Bases anteriores: usuario y correo dejan de ser únicos en todo el servidor ----------
+const rutaVieja = path.join(os.tmpdir(), `viejo-${process.pid}.db`);
+for (const x of ['', '-wal', '-shm']) fs.rmSync(rutaVieja + x, { force: true });
+const viejo = new DatabaseSync(rutaVieja);
+viejo.exec(`CREATE TABLE negocios (uid TEXT PRIMARY KEY, nombre TEXT NOT NULL, activo INTEGER NOT NULL DEFAULT 1, plan TEXT NOT NULL DEFAULT 'prueba', vence TEXT, creado TEXT NOT NULL DEFAULT (datetime('now')));
+  CREATE TABLE cuentas (uid TEXT PRIMARY KEY, negocio TEXT NOT NULL REFERENCES negocios(uid), nombre TEXT NOT NULL, usuario TEXT NOT NULL UNIQUE, correo TEXT UNIQUE, rol TEXT NOT NULL DEFAULT 'vendedor', permisos TEXT, activo INTEGER NOT NULL DEFAULT 1, hash TEXT NOT NULL, recup_hash TEXT, debe_cambiar INTEGER NOT NULL DEFAULT 0, creado TEXT NOT NULL DEFAULT (datetime('now')), ultimo_acceso TEXT);
+  INSERT INTO negocios (uid, nombre) VALUES ('n1', 'Hogar'), ('n2', 'UPS');
+  INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, hash) VALUES ('c1', 'n1', 'Ana', 'ana', 'a@x.com', 'h');`);
+viejo.close();
+const migrada = abrirBase(rutaVieja);
+const idsViejos = migrada.prepare('SELECT identificador, id_tipo FROM negocios ORDER BY uid').all();
+assert.ok(idsViejos.every((x) => /^9\d{8}$/.test(x.identificador) && x.id_tipo === 'asignado'), 'los negocios existentes reciben un número asignado');
+assert.notEqual(idsViejos[0].identificador, idsViejos[1].identificador);
+migrada.prepare("INSERT INTO cuentas (uid, negocio, nombre, usuario, correo, hash) VALUES ('c2', 'n2', 'Ana 2', 'ana', 'a@x.com', 'h')").run();
+assert.throws(() => migrada.prepare("INSERT INTO cuentas (uid, negocio, nombre, usuario, hash) VALUES ('c3', 'n2', 'Dup', 'ana', 'h')").run(), /UNIQUE/);
+assert.equal(migrada.prepare('SELECT COUNT(*) AS n FROM cuentas').get().n, 2);
+migrada.close();
+assert.equal(abrirBase(rutaVieja).prepare('SELECT COUNT(*) AS n FROM cuentas').get().n, 2, 'abrirla otra vez no rompe nada');
+for (const x of ['', '-wal', '-shm']) fs.rmSync(rutaVieja + x, { force: true });
+ok('una base anterior se migra: los negocios reciben su número y el usuario se repite solo entre negocios distintos');
 
 servidor.close();
 console.log(`\n${pruebas} grupos de pruebas correctos`);

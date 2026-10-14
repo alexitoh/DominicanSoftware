@@ -352,3 +352,6 @@ textarea.campo { resize: vertical; }
 .btn.chico { padding: .25rem .6rem; font-size: .8rem; }
 .btn.peligro { color: #b3261e; }
 .fila-check { display: flex; align-items: center; gap: .5rem; }
+
+/* Identificador del negocio (RNC o número asignado) */
+.identificador { display: flex; flex-direction: column; gap: .4rem; }

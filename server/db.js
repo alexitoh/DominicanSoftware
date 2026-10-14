@@ -2,6 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export const TABLAS_SYNC = [
   'categorias', 'productos', 'clientes', 'cliente_direcciones', 'cliente_contactos', 'recibos', 'recibo_metodos', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'pagos',
@@ -9,6 +10,33 @@ export const TABLAS_SYNC = [
   'centros_costo', 'cuentas_contables', 'asientos', 'asiento_lineas', 'cuentas_bancarias', 'banco_movs', 'conciliaciones', 'activos_fijos', 'empleados', 'nomina_corridas', 'nomina_detalle', 'presupuestos', 'periodos_cerrados',
   'caja', 'gastos', 'cotizaciones', 'cotizacion_detalle', 'movimientos_inventario', 'bitacora', 'config',
 ];
+
+// Los usuarios y correos son únicos dentro de cada negocio (no en todo el servidor): dos negocios pueden tener un usuario "admin"
+const DDL_CUENTAS = (nombre) => `CREATE TABLE IF NOT EXISTS ${nombre} (
+      uid TEXT PRIMARY KEY,
+      negocio TEXT NOT NULL REFERENCES negocios(uid),
+      nombre TEXT NOT NULL,
+      usuario TEXT NOT NULL,
+      correo TEXT,
+      rol TEXT NOT NULL DEFAULT 'vendedor',
+      permisos TEXT,
+      activo INTEGER NOT NULL DEFAULT 1,
+      hash TEXT NOT NULL,
+      recup_hash TEXT,
+      debe_cambiar INTEGER NOT NULL DEFAULT 0,
+      creado TEXT NOT NULL DEFAULT (datetime('now')),
+      ultimo_acceso TEXT
+    );`;
+const COLUMNAS_CUENTAS = 'uid, negocio, nombre, usuario, correo, rol, permisos, activo, hash, recup_hash, debe_cambiar, creado, ultimo_acceso';
+
+// Número de 9 dígitos al azar que no use otro negocio. Empieza con 9 para reconocerlo a simple vista como asignado.
+export function identificadorLibre(db) {
+  for (let i = 0; i < 100; i++) {
+    const n = `9${String(crypto.randomInt(0, 100000000)).padStart(8, '0')}`;
+    if (!db.prepare('SELECT 1 FROM negocios WHERE identificador = ?').get(n)) return n;
+  }
+  throw new Error('No se pudo generar un identificador libre.');
+}
 
 export function abrirBase(ruta) {
   if (ruta !== ':memory:') fs.mkdirSync(path.dirname(ruta), { recursive: true });
@@ -24,21 +52,7 @@ export function abrirBase(ruta) {
       vence TEXT,
       creado TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE TABLE IF NOT EXISTS cuentas (
-      uid TEXT PRIMARY KEY,
-      negocio TEXT NOT NULL REFERENCES negocios(uid),
-      nombre TEXT NOT NULL,
-      usuario TEXT NOT NULL UNIQUE,
-      correo TEXT UNIQUE,
-      rol TEXT NOT NULL DEFAULT 'vendedor',
-      permisos TEXT,
-      activo INTEGER NOT NULL DEFAULT 1,
-      hash TEXT NOT NULL,
-      recup_hash TEXT,
-      debe_cambiar INTEGER NOT NULL DEFAULT 0,
-      creado TEXT NOT NULL DEFAULT (datetime('now')),
-      ultimo_acceso TEXT
-    );
+    ${DDL_CUENTAS('cuentas')}
     CREATE INDEX IF NOT EXISTS idx_cuentas_negocio ON cuentas(negocio);
     CREATE TABLE IF NOT EXISTS dispositivos (
       negocio TEXT NOT NULL,
@@ -97,8 +111,31 @@ export function abrirBase(ruta) {
       detalle TEXT
     );
   `);
-  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT', 'ALTER TABLE negocios ADD COLUMN precio REAL', 'ALTER TABLE negocios ADD COLUMN epoca INTEGER NOT NULL DEFAULT 0']) {
+  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT', 'ALTER TABLE negocios ADD COLUMN precio REAL', 'ALTER TABLE negocios ADD COLUMN epoca INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE negocios ADD COLUMN identificador TEXT', "ALTER TABLE negocios ADD COLUMN id_tipo TEXT NOT NULL DEFAULT 'rnc'"]) {
     try { db.exec(q); } catch { /* la columna ya existe */ }
+  }
+  // Bases anteriores: usuario y correo eran únicos en todo el servidor. Se reconstruye la tabla para que lo sean por negocio.
+  const defCuentas = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cuentas'").get()?.sql || '';
+  if (/usuario\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(defCuentas)) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec('DROP INDEX IF EXISTS idx_cuentas_negocio');
+      db.exec('ALTER TABLE cuentas RENAME TO cuentas_vieja');
+      db.exec(DDL_CUENTAS('cuentas'));
+      db.exec(`INSERT INTO cuentas (${COLUMNAS_CUENTAS}) SELECT ${COLUMNAS_CUENTAS} FROM cuentas_vieja`);
+      db.exec('DROP TABLE cuentas_vieja');
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_cuentas_negocio ON cuentas(negocio);
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_cuentas_usuario ON cuentas(negocio, usuario);
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_cuentas_correo ON cuentas(negocio, correo) WHERE correo IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_negocios_identificador ON negocios(identificador) WHERE identificador IS NOT NULL;
+  `);
+  // Los negocios que ya existían reciben un número asignado (el propietario puede cambiarlo por su RNC desde el panel)
+  for (const { uid } of db.prepare('SELECT uid FROM negocios WHERE identificador IS NULL').all()) {
+    db.prepare("UPDATE negocios SET identificador = ?, id_tipo = 'asignado' WHERE uid = ?").run(identificadorLibre(db), uid);
   }
   return db;
 }

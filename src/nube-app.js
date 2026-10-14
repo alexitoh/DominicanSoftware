@@ -55,6 +55,9 @@ export async function cargarVinculo() {
   return vinculo;
 }
 export const vinculado = () => !!vinculo;
+// Quién es el negocio en las llamadas de acceso: un equipo ya vinculado manda su uid (no se vuelve a pedir el RNC);
+// uno nuevo manda el RNC que escribió la persona.
+export const negocioParaAcceso = (rnc = '') => (vinculo ? { negocioUid: vinculo.negocio } : { negocioId: rnc });
 export const datosVinculo = () => vinculo;
 export const haySesionNube = () => !!sesionNube()?.token;
 
@@ -77,6 +80,11 @@ export async function adoptarRespuesta(r, clave) {
     throw new Error('Este dispositivo ya está conectado a otro negocio. Desconéctalo en Ajustes antes de entrar con esta cuenta.');
   }
   recordarSesion(r);
+  // Si el propietario cambió el identificador del negocio, este equipo guarda el nuevo (él sigue entrando por el uid)
+  if (vinculo && r.negocio.identificador && vinculo.negocio_id !== r.negocio.identificador) {
+    await motor.recordarIdentificador(r.negocio.identificador);
+    await cargarVinculo();
+  }
   await aplicarMiembros(r.miembros);
   if (clave) await guardarVerificador(r.cuenta.uid, clave, r.cuenta.debeCambiar);
   return { nuevoVinculo: !vinculo };
@@ -85,7 +93,7 @@ export async function adoptarRespuesta(r, clave) {
 // modo: 'subir' (los datos de este dispositivo pasan a la nube) | 'combinar' | 'reemplazar' (se queda con lo de la nube)
 export async function conectarDispositivo(r, modo, alProgreso) {
   await motor.vincular({
-    dispositivo: idDispositivo(), codigo: r.dispositivo?.codigo || '', negocio: r.negocio.uid, negocioNombre: r.negocio.nombre, epoca: r.negocio.epoca || 0,
+    dispositivo: idDispositivo(), codigo: r.dispositivo?.codigo || '', negocio: r.negocio.uid, negocioNombre: r.negocio.nombre, epoca: r.negocio.epoca || 0, negocioId: r.negocio.identificador || null,
   });
   if (modo === 'reemplazar') await motor.reemplazarLocal();
   else await motor.marcarTodo();
