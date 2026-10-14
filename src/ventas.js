@@ -1,6 +1,6 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
 import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal } from './database.js';
-import { TIPOS_NCF } from './itbis.js';
+import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis } from './itbis.js';
 import { buscarRNC } from './dgii.js';
 import { limpiarDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
@@ -128,6 +128,7 @@ export async function vistaVentas(raiz) {
     cerrar = hoja(v.numero,
       h('div', { class: 'cuerpo' },
         h('p', { class: 'ayuda' }, `${v.fecha.slice(0, 16)}, ${v.cliente || 'Cliente general'}, ${METODOS[v.metodo_pago] || v.metodo_pago}`),
+        v.ncf ? h('p', { class: 'ayuda' }, `${NOMBRE_COMPROBANTE[v.ncf.slice(0, 3)] || 'Comprobante'}, NCF ${v.ncf}`) : null,
         v.vendedor ? h('p', { class: 'ayuda' }, `Atendió: ${v.vendedor}`) : null,
         anulada ? h('p', { class: 'error' }, 'Esta venta está anulada.') : null,
         h('ul', { class: 'historial detalle' }, items.map((i) => h('li', {},
@@ -146,6 +147,7 @@ export async function vistaVentas(raiz) {
         h('div', { class: 'totales' },
           renglon('Subtotal', dinero(v.subtotal)),
           v.descuento > 0 ? renglon('Descuento', `- ${dinero(v.descuento)}`) : null,
+          v.itbis > 0 && Math.abs(v.total - (v.subtotal - v.descuento) - v.itbis) < 0.01 ? renglon('ITBIS', dinero(v.itbis)) : null,
           renglon('Total', dinero(v.total), 'gran'),
           credito ? renglon('Abonado', dinero(pagado)) : null,
           credito ? renglon('Pendiente', dinero(anulada ? 0 : Math.max(0, saldo)),
@@ -196,11 +198,11 @@ export async function vistaVentas(raiz) {
     const avisoCredito = h('p', { class: 'ayuda', role: 'status' });
     // Comprobante fiscal y consulta del RNC en la DGII
     const cfgF = await configFiscal();
-    const tipoNcf = h('select', { class: 'campo', 'aria-label': 'Tipo de comprobante' },
+    const tipoNcf = h('select', { class: 'campo', 'aria-label': 'Tipo de comprobante', onChange: () => pintarTotales() },
       h('option', { value: 'auto' }, 'Automático (según el cliente)'),
-      ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)),
-      h('option', { value: 'ninguno' }, 'Sin comprobante'));
+      ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)));
     const estatusRnc = h('p', { class: 'ayuda', role: 'status' });
+    const avisoNcf = h('p', { class: 'ayuda', role: 'status' });
     const rncRapido = h('input', {
       class: 'campo', inputmode: 'numeric', autocomplete: 'off', placeholder: 'RNC o cédula (consulta la DGII)', 'aria-label': 'RNC del cliente',
       onChange: () => buscarPorRnc(),
@@ -251,7 +253,7 @@ export async function vistaVentas(raiz) {
     const botonCobrar = h('button', { class: 'btn primario', onClick: () => cobrar() }, 'Cobrar');
 
     async function cargarClientes() {
-      const cs = await consultar('SELECT id, nombre, condicion, dias_credito FROM clientes ORDER BY nombre');
+      const cs = await consultar('SELECT id, nombre, condicion, dias_credito, documento FROM clientes ORDER BY nombre');
       clientesInfo.clear();
       cs.forEach((c) => clientesInfo.set(String(c.id), c));
       cliente.replaceChildren(
@@ -277,6 +279,11 @@ export async function vistaVentas(raiz) {
 
     const subtotal = () => [...carrito.values()].reduce((s, l) => s + l.cantidad * l.precio, 0)
       + servicios.reduce((s, l) => s + l.cantidad * l.precio, 0);
+    // ITBIS que se suma al precio (si la facturación con comprobante está encendida)
+    const itbisDe = (sub, dto) => (cfgF.modo === 'adicional' ? calcularItbis({
+      lineas: [...[...carrito.values()].map((l) => ({ neto: l.cantidad * l.precio, exento: !!l.p.itbis_exento })), ...servicios.map((l) => ({ neto: l.cantidad * l.precio, exento: false }))],
+      descuento: dto, tasa: cfgF.tasa, modo: 'adicional',
+    }) : 0);
     const descuentoAplicado = (sub) => Math.min(Math.max(parseFloat(descuento.value) || 0, 0), sub);
 
     async function pintarResultados() {
@@ -408,9 +415,16 @@ export async function vistaVentas(raiz) {
 
     function pintarTotales() {
       pintarAvisoCredito();
+      if (cfgF.modo !== 'no') {
+        const doc = limpiarDocumento(clientesInfo.get(cliente.value)?.documento || '');
+        const elegido = tipoNcf.value || 'auto';
+        const t = elegido === 'auto' ? (doc.length === 9 ? 'B01' : 'B02') : elegido;
+        avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]} (${t})${doc.length !== 9 && t === 'B02' ? '. Cliente sin RNC: consumidor final.' : ''}`;
+      }
       const sub = subtotal();
       const dto = descuentoAplicado(sub);
-      const total = sub - dto;
+      const imp = itbisDe(sub, dto);
+      const total = sub - dto + imp;
       const rec = parseFloat(recibido.value) || 0;
       const esCredito = metodo.value === 'credito';
       const ini = Math.min(Math.max(parseFloat(inicial.value) || 0, 0), total);
@@ -419,6 +433,7 @@ export async function vistaVentas(raiz) {
       totales.replaceChildren(
         renglon('Subtotal', dinero(sub)),
         dto > 0 ? renglon('Descuento', `- ${dinero(dto)}`) : null,
+        imp > 0 ? renglon(`ITBIS ${cfgF.tasa}%`, dinero(imp)) : null,
         renglon('Total', dinero(total), 'gran'),
         metodo.value === 'efectivo' && rec > 0
           ? renglon(rec >= total ? 'Cambio' : 'Falta', dinero(Math.abs(rec - total)))
@@ -437,7 +452,7 @@ export async function vistaVentas(raiz) {
       if (dto > sub) { error.textContent = 'El descuento no puede ser mayor que el subtotal.'; descuento.focus(); return; }
 
       const esCredito = metodo.value === 'credito';
-      const total = redondear(sub - dto);
+      const total = redondear(sub - dto + itbisDe(sub, dto));
       const ini = esCredito ? Math.max(parseFloat(inicial.value) || 0, 0) : 0;
       if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente.'; cliente.focus(); return; }
       if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return; }
@@ -456,7 +471,7 @@ export async function vistaVentas(raiz) {
       botonCobrar.disabled = true;
       try {
         const numero = await registrarVenta({
-          tipo_ncf: cfgF.modo === 'no' ? 'ninguno' : tipoNcf.value,
+          tipo_ncf: cfgF.modo === 'no' ? 'ninguno' : (tipoNcf.value || 'auto'),
           cliente_id: cliente.value ? Number(cliente.value) : null,
           items: [...carrito.values()].map((l) => ({
             producto_id: l.p.id, cantidad: l.cantidad, precio_unitario: l.precio, descuento: 0,
@@ -507,6 +522,7 @@ export async function vistaVentas(raiz) {
         h('label', { class: 'etiqueta' }, 'RNC / cédula del cliente', rncRapido),
         estatusRnc,
         cfgF.modo === 'no' ? null : h('label', { class: 'etiqueta' }, 'Tipo de comprobante', tipoNcf),
+        cfgF.modo === 'no' ? null : avisoNcf,
         h('div', { class: 'rejilla' },
           h('label', { class: 'etiqueta' }, 'Método de pago', metodo),
           h('label', { class: 'etiqueta' }, 'Descuento', descuento)),

@@ -201,9 +201,9 @@ ok('un recibo cobra varias facturas con efectivo y cheque a la vez, valida lo re
 // ---- ITBIS, NCF, 606/607 y reportes de negocio ----
 const itb = await import('../src/itbis.js');
 const rf = await import('../src/reportes-fiscal.js');
-assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }], tasa: 18 }), 18);
-assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }, { neto: 100, exento: true }], tasa: 18 }), 18, 'lo exento no lleva ITBIS');
-assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }], descuento: 11.8, tasa: 18 }), 16.2, 'el descuento baja la base');
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }], tasa: 18, modo: 'incluido' }), 18);
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }, { neto: 100, exento: true }], tasa: 18, modo: 'incluido' }), 18, 'lo exento no lleva ITBIS');
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }], descuento: 11.8, tasa: 18, modo: 'incluido' }), 16.2, 'el descuento baja la base');
 assert.equal(itb.calcularItbis({ lineas: [{ neto: 118 }], tasa: 18, modo: 'no' }), 0);
 const mesAct = (await uno("SELECT strftime('%Y-%m', 'now', 'localtime') AS m")).m;
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo', 'incluido')");

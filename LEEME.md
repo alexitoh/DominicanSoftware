@@ -170,3 +170,12 @@ Límites a tener presentes:
 - Si no hay internet o el dispositivo no está conectado a la nube, avisa y deja escribir los datos a mano (no frena la venta).
 - **Cómo funciona**: el servidor guarda el listado público de contribuyentes de la DGII (`DGII_RNC.zip`) y lo consulta al instante. Se baja solo al arrancar y cada semana. Variable opcional `DGII_RNC_URL` para usar otra dirección. Si la DGII bloquea al servidor (a veces rechaza IPs de fuera del país), el administrador puede bajar el archivo y subirlo en Ajustes → Datos fiscales → *Subir archivo*.
 - El listado se actualiza con la frecuencia que lo publica la DGII, por lo que un cambio muy reciente de estatus puede tardar en verse.
+
+## Facturación con comprobante e ITBIS sumado (Ajustes → Facturación con comprobante)
+- Un interruptor **Facturar con comprobante e ITBIS**. **Encendido**: toda venta lleva comprobante (NCF) y el ITBIS (18 %, editable) **se suma al precio de venta** (precio 1,000 → total 1,180). **Apagado**: se factura sin comprobante ni ITBIS.
+- Al facturar siempre puedes elegir el tipo (Automático, B01, B02, B14, B15). Automático = B01 si el cliente tiene RNC y B02 (consumidor final) si no. No hay opción de vender sin comprobante mientras esté encendido.
+- Si no quedan números de la secuencia necesaria, la venta **no se registra** y el mensaje dice cuál secuencia cargar. Carga los rangos autorizados por la DGII en la misma sección antes de encender el interruptor.
+- La factura PDF y el detalle de la venta muestran el tipo de comprobante (por ejemplo "Factura de consumo"), el NCF, el subtotal, el ITBIS y el total.
+- Productos marcados *Exento de ITBIS* no pagan impuesto. El ITBIS se calcula después del descuento.
+- Los negocios que ya tenían "los precios incluyen ITBIS" siguen igual hasta que guarden esta sección; al guardar con el interruptor encendido pasan al ITBIS sumado.
+- Las **cotizaciones** todavía muestran el total sin ITBIS; al convertirlas en venta se suma.

@@ -67,7 +67,7 @@ ok('la app muestra el estatus (ACTIVO / SUSPENDIDO / DADO DE BAJA / no aparece /
 // ---- tipo de comprobante al facturar ----
 const bd = await import('../src/database.js');
 await bd.initDB();
-await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo','incluido')");
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo','adicional')");
 await bd.guardarSecuenciaNCF('B01', 1, 5);
 await bd.guardarSecuenciaNCF('B02', 1, 5);
 await bd.ejecutar("INSERT INTO productos (nombre, codigo, precio, costo, stock_actual) VALUES ('Bocina','BC1',1000,500,50)");
@@ -81,7 +81,7 @@ const ncfDe = async (num) => (await bd.consultar('SELECT ncf FROM ventas WHERE n
 assert.match(await ncfDe(await vender({ cliente_id: conRnc })), /^B01/, 'automático con RNC = B01');
 assert.match(await ncfDe(await vender({ cliente_id: sinRnc })), /^B02/, 'automático sin RNC = B02');
 assert.match(await ncfDe(await vender({ cliente_id: conRnc, tipo_ncf: 'B02' })), /^B02/, 'consumo aunque tenga RNC');
-assert.equal(await ncfDe(await vender({ cliente_id: conRnc, tipo_ncf: 'ninguno' })), null, 'sin comprobante');
+assert.match(await ncfDe(await vender({ cliente_id: conRnc, tipo_ncf: 'ninguno' })), /^B01/, 'encendida, siempre hay comprobante');
 await assert.rejects(vender({ cliente_id: sinRnc, tipo_ncf: 'B01' }), /necesita un cliente con RNC/);
 await assert.rejects(vender({ tipo_ncf: 'B01' }), /necesita un cliente con RNC/);
 await assert.rejects(vender({ cliente_id: conRnc, tipo_ncf: 'B14' }), /No hay números disponibles de B14/);
@@ -91,7 +91,27 @@ await assert.rejects(vender({ cliente_id: conRnc, tipo_ncf: 'B14' }), /No hay n�
 const [{ n: ventas }] = await bd.consultar('SELECT COUNT(*) AS n FROM ventas');
 assert.equal(ventas, 5, 'las ventas rechazadas no se guardan ni gastan números');
 const sec = await bd.leerSecuenciasNCF();
-assert.equal(sec.find((s) => s.tipo === 'B01').sig, 2, 'B01 solo gastó 1 número');
-ok('el tipo de comprobante se respeta: B01/B02/B14/sin comprobante, exige RNC y secuencia, y no gasta números si falla');
+assert.equal(sec.find((s) => s.tipo === 'B01').sig, 3, 'B01 solo gastó 2 números (las fallidas no gastan)');
+// ITBIS sumado al precio
+const fila = async (num) => (await bd.consultar('SELECT subtotal, descuento, itbis, total, ncf FROM ventas WHERE numero = ?', [num]))[0];
+await bd.guardarSecuenciaNCF('B02', 20, 50);
+const v1 = await fila(await vender({ cliente_id: sinRnc }));
+assert.deepEqual([v1.subtotal, v1.itbis, v1.total], [1000, 180, 1180], 'precio 1,000 + 18 % = 1,180');
+assert.match(v1.ncf, /^B02/, 'cliente sin RNC: consumidor final');
+const v2 = await fila(await vender({ descuento: 100 }));
+assert.deepEqual([v2.itbis, v2.total], [162, 1062], 'el ITBIS se calcula después del descuento');
+await bd.ejecutar("UPDATE productos SET itbis_exento = 1 WHERE id = ?", [pid]);
+const v3 = await fila(await vender({}));
+assert.deepEqual([v3.itbis, v3.total], [0, 1000], 'producto exento no paga ITBIS');
+await bd.ejecutar("UPDATE productos SET itbis_exento = 0 WHERE id = ?", [pid]);
+await bd.ejecutar("UPDATE clientes SET limite_credito = 1100 WHERE id = ?", [sinRnc]);
+await assert.rejects(vender({ cliente_id: sinRnc, metodo_pago: 'credito' }), /límite de crédito/, 'el límite de crédito cuenta el ITBIS (1,180 > 1,100)');
+await bd.guardarSecuenciaNCF('B02', 0, 0);
+await assert.rejects(vender({ cliente_id: sinRnc }), /No hay números disponibles de B02/, 'sin secuencia no se vende sin comprobante');
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo','no')");
+const v4 = await fila(await vender({ cliente_id: sinRnc }));
+assert.deepEqual([v4.itbis, v4.total, v4.ncf], [0, 1000, null], 'apagada: sin ITBIS ni comprobante');
+ok('ITBIS 18 % sumado al precio (con descuento, exentos y límite de crédito); consumidor final B02; apagada = sin comprobante');
+ok('el tipo de comprobante se respeta: B01/B02/B14, exige RNC y secuencia, y no gasta números si falla');
 console.log(`\n${n} grupos OK`);
 process.exit(0);

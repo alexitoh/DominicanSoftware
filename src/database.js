@@ -157,7 +157,21 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
   const subtotal = redondear(items.reduce((s, i) => s + i.cantidad * i.precio_unitario - (i.descuento || 0), 0)
     + servicios.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0));
   if (descuento < 0 || descuento > subtotal + 0.005) throw new Error('El descuento no puede ser mayor que el subtotal.');
-  const total = redondear(subtotal - descuento);
+  // ITBIS (si la facturación con comprobante está encendida): se suma al precio
+  const cfgF = await configFiscal();
+  const exentos = new Map();
+  for (const it of items) {
+    const [px] = await consultar('SELECT itbis_exento FROM productos WHERE id = ?', [it.producto_id]);
+    exentos.set(it.producto_id, !!px?.itbis_exento);
+  }
+  const itbis = calcularItbis({
+    lineas: [
+      ...items.map((i) => ({ neto: i.cantidad * i.precio_unitario - (i.descuento || 0), exento: exentos.get(i.producto_id) })),
+      ...servicios.map((s) => ({ neto: s.cantidad * s.precio_unitario, exento: false })),
+    ],
+    descuento, tasa: cfgF.tasa, modo: cfgF.modo,
+  });
+  const total = redondear(subtotal - descuento + (cfgF.modo === 'adicional' ? itbis : 0));
 
   if (metodo_pago === 'credito') {
     if (!cliente_id) throw new Error('Para vender a crédito elige un cliente.');
@@ -175,21 +189,9 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     }
   }
 
-  // ITBIS (si el negocio lo usa) y comprobante fiscal
-  const cfgF = await configFiscal();
-  const exentos = new Map();
-  for (const it of items) {
-    const [px] = await consultar('SELECT itbis_exento FROM productos WHERE id = ?', [it.producto_id]);
-    exentos.set(it.producto_id, !!px?.itbis_exento);
-  }
-  const itbis = calcularItbis({
-    lineas: [
-      ...items.map((i) => ({ neto: i.cantidad * i.precio_unitario - (i.descuento || 0), exento: exentos.get(i.producto_id) })),
-      ...servicios.map((s) => ({ neto: s.cantidad * s.precio_unitario, exento: false })),
-    ],
-    descuento, tasa: cfgF.tasa, modo: cfgF.modo,
-  });
-  const ncf = cfgF.modo === 'no' || tipo_ncf === 'ninguno' ? null : await siguienteNCF(cliente_id, tipo_ncf);
+  // Con la facturación con comprobante encendida, toda venta lleva comprobante
+  const ncf = cfgF.modo === 'no' || (tipo_ncf === 'ninguno' && cfgF.modo !== 'adicional') ? null
+    : await siguienteNCF(cliente_id, tipo_ncf === 'ninguno' ? 'auto' : tipo_ncf, cfgF.modo === 'adicional');
 
   const numero = await numeroDocumento('V', 'siguiente_numero_venta');
 
@@ -736,7 +738,8 @@ export async function restaurarRespaldo(archivo) {
 export async function configFiscal() {
   const f = Object.fromEntries((await consultar("SELECT clave, valor FROM config WHERE clave IN ('itbis_modo','itbis_tasa')")).map((r) => [r.clave, r.valor]));
   const tasa = parseFloat(f.itbis_tasa);
-  return { modo: f.itbis_modo === 'incluido' ? 'incluido' : 'no', tasa: tasa > 0 ? tasa : 18 };
+  const modo = f.itbis_modo === 'incluido' ? 'incluido' : f.itbis_modo === 'adicional' ? 'adicional' : 'no';
+  return { modo, activo: modo !== 'no', tasa: tasa > 0 ? tasa : 18 };
 }
 
 // Secuencias autorizadas por la DGII: ncf_<tipo>_sig (próximo número) y ncf_<tipo>_hasta (último autorizado)
@@ -758,7 +761,7 @@ export async function guardarSecuenciaNCF(tipo, sig, hasta) {
 
 // Tipo de comprobante: 'auto' elige B01 (crédito fiscal) si el cliente tiene RNC y hay secuencia B01; si no, B02 (si no hay secuencia, la venta queda sin NCF).
 // Si se pide un tipo concreto, se exige que se pueda emitir: B01, B14 y B15 necesitan un cliente con RNC, y todos una secuencia autorizada con números disponibles.
-async function siguienteNCF(clienteId, pedido = 'auto') {
+async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
   const sec = await leerSecuenciasNCF();
   const util = (t) => sec.find((s) => s.tipo === t && s.sig > 0 && s.sig <= s.hasta);
   let tieneRnc = false;
@@ -770,11 +773,15 @@ async function siguienteNCF(clienteId, pedido = 'auto') {
   if (pedido && pedido !== 'auto') {
     if (!TIPOS_NCF[pedido]) throw new Error('Tipo de comprobante desconocido.');
     if (pedido !== 'B02' && !tieneRnc) throw new Error(`El comprobante ${pedido} (${TIPOS_NCF[pedido]}) necesita un cliente con RNC.`);
-    if (!util(pedido)) throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Datos fiscales.`);
+    if (!util(pedido)) throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante.`);
     tipo = pedido;
   } else {
-    if (tieneRnc && util('B01')) tipo = 'B01';
+    if (tieneRnc) {
+      if (util('B01')) tipo = 'B01';
+      else if (obligatorio) throw new Error('No hay números disponibles de B01 (Crédito fiscal) para este cliente con RNC. Registra la secuencia en Ajustes → Facturación con comprobante, o elige Consumo (B02).');
+    }
     if (!tipo && util('B02')) tipo = 'B02';
+    if (!tipo && obligatorio) throw new Error('No hay números disponibles de B02 (Consumo). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante.');
   }
   if (!tipo) return null;
   const s = util(tipo);

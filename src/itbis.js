@@ -5,17 +5,20 @@ const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 // Modo 'incluido': los precios ya traen el ITBIS. Se saca de lo gravado (después del descuento general).
 // lineas: [{ neto, exento }]  (neto = cantidad × precio − descuento de línea)
-export function calcularItbis({ lineas, descuento = 0, tasa = 18, modo = 'incluido' }) {
-  if (modo !== 'incluido' || !(tasa > 0)) return 0;
+// Modo 'adicional': los precios son netos y el ITBIS se suma encima (precio + 18 %).
+export function calcularItbis({ lineas, descuento = 0, tasa = 18, modo = 'adicional' }) {
+  if ((modo !== 'incluido' && modo !== 'adicional') || !(tasa > 0)) return 0;
   const subtotal = lineas.reduce((s, l) => s + l.neto, 0);
   if (!(subtotal > 0)) return 0;
   const gravado = lineas.filter((l) => !l.exento).reduce((s, l) => s + l.neto, 0);
   const gravadoNeto = gravado - descuento * (gravado / subtotal);
-  return r2(gravadoNeto * tasa / (100 + tasa));
+  return r2(modo === 'adicional' ? gravadoNeto * tasa / 100 : gravadoNeto * tasa / (100 + tasa));
 }
 
 // ---------- NCF ----------
 export const TIPOS_NCF = { B01: 'Crédito fiscal', B02: 'Consumo', B14: 'Régimen especial', B15: 'Gubernamental' };
+// Nombre que lleva la factura según el comprobante
+export const NOMBRE_COMPROBANTE = { B01: 'Factura de crédito fiscal', B02: 'Factura de consumo', B14: 'Factura de régimen especial', B15: 'Factura gubernamental' };
 export const formatearNCF = (tipo, n) => `${tipo}${String(n).padStart(8, '0')}`;
 export const ncfValido = (s) => /^[BE]\d{2}\d{8,10}$/.test(String(s || '').toUpperCase());
 

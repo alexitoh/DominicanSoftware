@@ -248,9 +248,7 @@ async function vistaAjustes(raiz) {
 
   // Datos fiscales: RNC, ITBIS y secuencias de NCF autorizadas por la DGII (las secuencias son de este dispositivo)
   const rncNegocio = h('input', { class: 'campo', value: cfg.negocio_rnc ?? '', inputmode: 'numeric', placeholder: '9 números', autocomplete: 'off' });
-  const selItbis = h('select', { class: 'campo', 'aria-label': 'ITBIS' },
-    h('option', { value: 'no' }, 'No calcular ITBIS'), h('option', { value: 'incluido' }, 'Los precios ya incluyen ITBIS'));
-  selItbis.value = cfg.itbis_modo === 'incluido' ? 'incluido' : 'no';
+  const activoFact = h('input', { type: 'checkbox', checked: cfg.itbis_modo === 'adicional' || cfg.itbis_modo === 'incluido', 'aria-label': 'Facturación con comprobante' });
   const tasaItbis = h('input', { class: 'campo', type: 'number', min: '0', step: '0.01', value: cfg.itbis_tasa || '18', inputmode: 'decimal' });
   const secuencias = await leerSecuenciasNCF();
   const camposNcf = secuencias.map((s) => ({
@@ -267,8 +265,8 @@ async function vistaAjustes(raiz) {
     try {
       for (const c of camposNcf) await guardarSecuenciaNCF(c.s.tipo, parseInt(c.sig.value, 10) || 0, parseInt(c.hasta.value, 10) || 0);
     } catch (e) { errorFiscal.textContent = e.message; return; }
-    for (const [k, v] of [['negocio_rnc', doc.numero || ''], ['itbis_modo', selItbis.value], ['itbis_tasa', String(tasa)]]) await guardarConfig(k, v);
-    toast('Datos fiscales guardados');
+    for (const [k, v] of [['negocio_rnc', doc.numero || ''], ['itbis_modo', activoFact.checked ? 'adicional' : 'no'], ['itbis_tasa', String(tasa)]]) await guardarConfig(k, v);
+    toast(activoFact.checked ? 'Facturación con comprobante encendida' : 'Facturación con comprobante apagada');
   }
 
   // Padrón de contribuyentes de la DGII (vive en el servidor; solo el administrador lo actualiza)
@@ -313,16 +311,16 @@ async function vistaAjustes(raiz) {
         quitarLogo,
         h('label', { class: 'btn primario' }, 'Elegir logo', archivoLogo))),
     h('section', { class: 'seccion' },
-      h('h2', {}, 'Datos fiscales (DGII)'),
-      h('p', { class: 'ayuda' }, 'Para el ITBIS y los reportes 606 y 607. Escribe en NCF los rangos que la DGII te autorizó: las ventas toman el siguiente número solas. Si usas varios dispositivos, dale a cada uno un rango distinto.'),
+      h('h2', {}, 'Facturación con comprobante (DGII)'),
+      h('p', { class: 'ayuda' }, 'Encendida: toda venta sale con comprobante fiscal (NCF) y el ITBIS se suma al precio de venta. Al facturar eliges el tipo; si el cliente no tiene RNC se le da una factura de consumo (B02). Apagada: se factura sin comprobante ni ITBIS. Escribe abajo los rangos de NCF que la DGII te autorizó; si usas varios dispositivos, dale a cada uno un rango distinto.'),
+      h('label', { class: 'etiqueta fila-check' }, activoFact, ' Facturar con comprobante e ITBIS'),
       h('label', { class: 'etiqueta' }, 'RNC del negocio', rncNegocio),
-      h('label', { class: 'etiqueta' }, 'ITBIS', selItbis),
       h('label', { class: 'etiqueta' }, 'Tasa de ITBIS (%)', tasaItbis),
       ...camposNcf.map((c) => h('div', { class: 'rejilla' },
         h('label', { class: 'etiqueta' }, `${c.s.tipo} · ${TIPOS_NCF[c.s.tipo]} · próximo`, c.sig),
         h('label', { class: 'etiqueta' }, 'Último autorizado', c.hasta))),
       errorFiscal,
-      h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar datos fiscales'),
+      h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar'),
       seccionPadron),
     h('section', { class: 'seccion' },
       h('h2', {}, 'Datos del negocio'),

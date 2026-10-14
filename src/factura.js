@@ -1,5 +1,6 @@
 // factura.js - genera la factura en PDF y la comparte (WhatsApp, correo, Drive...)
 // Requiere: npm install jspdf
+import { NOMBRE_COMPROBANTE } from './itbis.js';
 import { jsPDF } from 'jspdf';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
@@ -72,7 +73,8 @@ export async function crearPDF(ventaId) {
   doc.setFont('helvetica', 'bold').setFontSize(15).setTextColor(21, 33, 43);
   doc.text(doc.splitTextToSize(cfg.negocio_nombre || 'Mi negocio', DER - xTexto - 32)[0], xTexto, y);
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90);
-  doc.text(L('FACTURA'), DER, y - 5, { align: 'right' });
+  const tipoCpb = v.ncf ? NOMBRE_COMPROBANTE[String(v.ncf).slice(0, 3)] : null;
+  doc.text(L(tipoCpb || 'FACTURA').toUpperCase(), DER, y - 5, { align: 'right' });
   doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(21, 33, 43);
   doc.text(v.numero, DER, y + 1, { align: 'right' });
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90);
@@ -91,7 +93,7 @@ export async function crearPDF(ventaId) {
   y += 5;
   doc.text(`${L('Cliente')}: ${L(v.cliente || 'Cliente general')}`, M, y);
   if (v.cliente_tel) doc.text(L(`Tel. ${v.cliente_tel}`), DER, y, { align: 'right' });
-  if (v.ncf) { y += 5; doc.text(`NCF: ${v.ncf}`, M, y); }
+  if (v.ncf) { y += 5; doc.text(`${L('Comprobante')}: ${L(tipoCpb || '')}`, M, y); doc.text(`NCF: ${v.ncf}`, DER, y, { align: 'right' }); }
   if (v.cliente_doc) { y += 5; doc.text(`${L(textoDocumento(v.cliente_tipo_doc, v.cliente_doc))}`, M, y); }
 
   // Tabla de productos
@@ -147,11 +149,17 @@ export async function crearPDF(ventaId) {
     doc.text(L('Descuento'), 100, y, { align: 'right' });
     doc.text(`- ${dinero(v.descuento)}`, DER - 2, y, { align: 'right' });
   }
+  const itbisSumado = v.itbis > 0 && Math.abs(v.total - (v.subtotal - v.descuento) - v.itbis) < 0.01;
+  if (itbisSumado) {
+    y += 5;
+    doc.text(L('ITBIS'), 100, y, { align: 'right' });
+    doc.text(dinero(v.itbis), DER - 2, y, { align: 'right' });
+  }
   y += 7;
   doc.setFont('helvetica', 'bold').setFontSize(12);
   doc.text(L('TOTAL'), 100, y, { align: 'right' });
   doc.text(dinero(v.total), DER - 2, y, { align: 'right' });
-  if (v.itbis > 0) {
+  if (v.itbis > 0 && !itbisSumado) {
     y += 5;
     doc.setFont('helvetica', 'normal').setFontSize(9);
     doc.text(L(`ITBIS incluido: ${dinero(v.itbis)}`), DER - 2, y, { align: 'right' });
