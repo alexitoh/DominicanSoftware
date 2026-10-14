@@ -329,6 +329,7 @@ async function vistaAjustes(raiz) {
       h('p', { class: 'ayuda' }, 'Encendida: toda venta sale con comprobante fiscal (NCF) y el ITBIS se suma al precio de venta. Al facturar eliges el tipo; si el cliente no tiene RNC se le da una factura de consumo (B02). Apagada: se factura sin comprobante ni ITBIS. Escribe abajo los rangos de NCF que la DGII te autorizó; si usas varios dispositivos, dale a cada uno un rango distinto.'),
       h('label', { class: 'etiqueta fila-check' }, activoFact, ' Facturar con comprobante e ITBIS'),
       h('label', { class: 'etiqueta' }, 'RNC del negocio', rncNegocio),
+      cfg.negocio_categoria ? h('p', { class: 'ayuda' }, `Categoría / régimen en la DGII: ${cfg.negocio_categoria}`) : null,
       h('label', { class: 'etiqueta' }, 'Tasa de ITBIS (%)', tasaItbis),
       ...camposNcf.map((c) => h('div', { class: 'rejilla' },
         h('label', { class: 'etiqueta' }, `${c.s.tipo} · ${TIPOS_NCF[c.s.tipo]} · próximo`, c.sig),

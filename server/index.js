@@ -50,12 +50,22 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
   prepararTablaRNC(db);
   const intentos = new Map(); // límite de intentos de acceso por IP + usuario
 
+  // Consultas de RNC antes de tener cuenta (al registrar un negocio): tope por IP para que no sirva para bajar el padrón completo
+  const consultasRnc = new Map();
+  function limitarConsultaRnc(req) {
+    const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
+    const ahora = Date.now();
+    const x = consultasRnc.get(ip);
+    if (!x || x.hasta < ahora) { consultasRnc.set(ip, { n: 1, hasta: ahora + 60000 }); if (consultasRnc.size > 5000) consultasRnc.clear(); return; }
+    if (++x.n > 40) falla(429, 'Demasiadas consultas seguidas. Espera un minuto.');
+  }
+
   // ---------- Utilidades ----------
   // Para el panel: ¿el RNC del negocio existe en el padrón de la DGII y a nombre de quién?
   function verificarEnPadron(rnc) {
     const r = consultarRNC(db, rnc);
     if (r.error || r.padronVacio) return null;
-    return r.encontrado ? { nombre: r.nombre, estado: r.estado, activo: r.activo } : { noEncontrado: true };
+    return r.encontrado ? { nombre: r.nombre, estado: r.estado, activo: r.activo, regimen: r.regimen } : { noEncontrado: true };
   }
   const miembro = (c) => ({
     uid: c.uid, nombre: c.nombre, usuario: c.usuario, correo: c.correo, rol: c.rol,
@@ -155,6 +165,13 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
   const rutas = {
     // Consulta de RNC/cédula en el padrón de la DGII (cualquier usuario con sesión)
     'GET /api/rnc/:numero': (req, b, p) => { autenticar(req); return consultarRNC(db, p.numero); },
+    // Sin sesión: lo usa la pantalla de registro para completar el nombre y la categoría del negocio a partir de su RNC
+    'GET /api/rnc-registro/:numero': (req, b, p) => {
+      limitarConsultaRnc(req);
+      const r = consultarRNC(db, p.numero);
+      if (r.error || r.padronVacio) return r;
+      return { ...r, registrado: !!db.prepare('SELECT 1 FROM negocios WHERE identificador = ?').get(r.rnc) };
+    },
     'GET /api/rnc-estado': (req) => { autenticar(req); return estadoPadron(db); },
     'POST /api/rnc-actualizar': async (req) => {
       exigirAdmin(autenticar(req));

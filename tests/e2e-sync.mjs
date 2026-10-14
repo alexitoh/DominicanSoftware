@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { crearServidor } from '../server/index.js';
 import { abrirBase } from '../server/db.js';
+import { importarPadron } from '../server/dgii.js';
 import { crearCliente } from '../src/nube.js';
 import { crearMotor } from '../src/sync-nucleo.js';
 import { prepararBase } from '../src/sync-esquema.js';
@@ -517,9 +518,27 @@ const srv6 = crearServidor({ db: db6, secreto: 'septimo-secreto-largo-1234567890
 await new Promise((r) => srv6.listen(0, r));
 const B6 = `http://127.0.0.1:${srv6.address().port}`;
 const c6 = crearCliente({ base: () => B6 });
+// Padrón de la DGII de prueba y la consulta de RNC que usa la pantalla de registro (sin sesión)
+importarPadron(db6, Buffer.from(['RNC|RAZON SOCIAL|ACTIVIDAD ECONOMICA|FECHA INICIO|ESTADO|REGIMEN',
+  '131234567|HOGAR SRL|VENTA DE ARTICULOS DEL HOGAR|15/03/2010|ACTIVO|NORMAL',
+  '130999888|TALLER CERRADO SRL|SERVICIOS|01/01/2005|SUSPENDIDO|RST', ''].join('\r\n'), 'latin1'));
+const consultaReg = async (n, ip = '7.7.7.7') => { const r = await fetch(`${B6}/api/rnc-registro/${n}`, { headers: { 'x-forwarded-for': ip } }); return [r.status, await r.json().catch(() => ({}))]; };
+const [, rcActivo] = await consultaReg('131-23456-7');
+assert.equal(rcActivo.encontrado, true); assert.equal(rcActivo.nombre, 'HOGAR SRL'); assert.equal(rcActivo.regimen, 'NORMAL'); assert.equal(rcActivo.activo, true);
+assert.equal(rcActivo.registrado, false, 'todavía nadie lo registró');
+const [, rcSusp] = await consultaReg('130999888');
+assert.equal(rcSusp.activo, false); assert.match(rcSusp.estado, /SUSPENDIDO/);
+assert.equal((await consultaReg('999999999'))[1].encontrado, false);
+assert.match((await consultaReg('123'))[1].error, /9 números/);
 const hogar = await c6.registro({ negocio: 'Hogar', rnc: '131-23456-7', nombre: 'Ana', usuario: 'admin', correo: 'dueno@x.com', clave: 'clave1234', dispositivo: 'hogar-dispositivo-1' });
 assert.equal(hogar.negocio.identificador, '131234567', 'el RNC se guarda sin guiones');
 assert.equal(hogar.negocio.idTipo, 'rnc');
+assert.equal((await consultaReg('131234567'))[1].registrado, true, 'ahora la consulta avisa que ya existe un negocio con ese RNC');
+// Tope de consultas sin sesión por IP
+let tope = 0;
+for (let i = 0; i < 45; i++) if ((await consultaReg('131234567', '8.8.8.8'))[0] === 429) tope++;
+assert.ok(tope >= 4, 'después de 40 consultas por minuto se frena');
+assert.equal((await consultaReg('131234567', '8.8.4.4'))[0], 200, 'otra IP no se ve afectada');
 // El mismo usuario y el mismo correo en otro negocio (sin RNC): ya no hay conflicto
 const ups = await c6.registro({ negocio: 'UPS', nombre: 'Luis', usuario: 'admin', correo: 'dueno@x.com', clave: 'otraClave99', dispositivo: 'ups-dispositivo-1' });
 assert.match(ups.negocio.identificador, /^9\d{8}$/, 'sin RNC: 9 dígitos asignados');
@@ -560,6 +579,7 @@ const T6 = (await p6('/api/propietario/login', { clave: 'dueno-sistema-1' }))[1]
 const [, l6] = await p6('/api/propietario/negocios', null, T6, 'GET');
 const nUps = l6.negocios.find((x) => x.nombre === 'UPS'), nHogar = l6.negocios.find((x) => x.nombre === 'Hogar');
 assert.equal(nHogar.identificador, '131234567'); assert.equal(nHogar.idTipo, 'rnc');
+assert.equal(nHogar.dgii.nombre, 'HOGAR SRL'); assert.equal(nHogar.dgii.regimen, 'NORMAL'); assert.equal(nUps.dgii, null, 'un número asignado no se verifica en la DGII');
 assert.equal(nUps.identificador, ups.negocio.identificador); assert.equal(nUps.idTipo, 'asignado');
 const rutaId = (n) => `/api/propietario/negocios/${n.uid}/identificador`;
 assert.equal((await p6(rutaId(nUps), { identificador: '131234567' }, 'token-falso', 'PATCH'))[0], 401, 'sin la clave del propietario no se cambia');

@@ -50,6 +50,8 @@ export function crearCliente({ base = () => '', token = () => null, fetchFn = (.
     avisos: () => llamar('GET', '/api/avisos'),
     avisosLeidos: (ids) => llamar('POST', '/api/avisos/leidos', { ids }),
     consultarRNC: (n) => llamar('GET', `/api/rnc/${encodeURIComponent(n)}`, undefined, { tiempo: 12000 }),
+    // Antes de tener cuenta (registro de un negocio)
+    consultarRNCRegistro: (n) => llamar('GET', `/api/rnc-registro/${encodeURIComponent(n)}`, undefined, { conToken: false, tiempo: 12000 }),
     estadoPadron: () => llamar('GET', '/api/rnc-estado'),
     actualizarPadron: () => llamar('POST', '/api/rnc-actualizar', {}, { tiempo: 240000 }),
     sync: (b) => llamar('POST', '/api/sync', b, { tiempo: 60000 }),

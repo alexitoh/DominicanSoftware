@@ -35,7 +35,12 @@ const setTimeoutOriginal = globalThis.setTimeout;
 
 const { crearServidor } = await import('../server/index.js');
 const { abrirBase } = await import('../server/db.js');
-const servidor = crearServidor({ db: abrirBase(':memory:'), secreto: 'prueba-acceso-secreto-1234567890', aprobacionAutomatica: true });
+const dbSrv = abrirBase(':memory:');
+const servidor = crearServidor({ db: dbSrv, secreto: 'prueba-acceso-secreto-1234567890', aprobacionAutomatica: true });
+const { importarPadron } = await import('../server/dgii.js');
+importarPadron(dbSrv, Buffer.from(['RNC|RAZON SOCIAL|ACTIVIDAD ECONOMICA|FECHA INICIO|ESTADO|REGIMEN',
+  '101123456|ELECTRO SONIDO SRL|VENTA DE EQUIPOS|15/03/2010|ACTIVO|NORMAL',
+  '130999888|TALLER CERRADO SRL|SERVICIOS|01/01/2005|SUSPENDIDO|RST', ''].join('\r\n'), 'latin1'));
 await new Promise((r) => servidor.listen(0, r));
 localStorage.setItem('caraudio_servidor', `http://127.0.0.1:${servidor.address().port}`);
 
@@ -64,6 +69,24 @@ await pausa();
 assert.match(texto(), /Bienvenido/);
 await pulsar('Crear mi negocio en la nube');
 assert.ok(hayCampo('RNC del negocio (opcional'), 'el registro ofrece el campo RNC');
+// Al escribir el RNC y buscar, la DGII completa el nombre y la categoría
+escribir('RNC del negocio', '101-12345-6');
+await pulsar('Buscar en la DGII');
+assert.equal(campoDe('Nombre del negocio').value, 'ELECTRO SONIDO SRL');
+assert.equal(campoDe('Categoría / régimen').value, 'NORMAL');
+assert.match(texto(), /ACTIVO en la DGII/);
+// Un RNC suspendido no completa nada y avisa su estatus
+escribir('RNC del negocio', '130999888');
+await pulsar('Buscar en la DGII');
+assert.equal(campoDe('Nombre del negocio').value, '', 'se vació lo que había puesto la búsqueda anterior');
+assert.equal(campoDe('Categoría / régimen').value, '');
+assert.match(texto(), /SUSPENDIDO/);
+// Uno que no existe
+escribir('RNC del negocio', '999999999');
+await pulsar('Buscar en la DGII');
+assert.match(texto(), /no aparece en el listado de la DGII/);
+// Sin RNC: se escribe a mano y el sistema asigna un número
+escribir('RNC del negocio', '');
 escribir('Nombre del negocio', 'Hogar');
 escribir('Tu nombre', 'Ana');
 escribir('Usuario', 'admin');
@@ -135,6 +158,29 @@ await pausa();
 await pulsar('Olvidaste tu contraseña');
 assert.ok(!hayCampo('RNC'), 'recuperar en un equipo vinculado tampoco lo pide');
 ok('con el equipo ya vinculado, ni entrar ni recuperar piden el RNC');
+
+// ---- 4. Registrar con RNC: nombre y categoría se completan solos y quedan guardados ----
+document.body.replaceChildren(); // se descarta la pantalla de recuperación que quedó abierta
+await auth.cerrarSesion();
+await na.vaciarDispositivo();
+const sesion5 = asegurarSesion();
+await pausa();
+await pulsar('Crear mi negocio en la nube');
+escribir('RNC del negocio', '101123456');
+await pulsar('Buscar en la DGII');
+assert.equal(campoDe('Nombre del negocio').value, 'ELECTRO SONIDO SRL');
+escribir('Tu nombre', 'Luis');
+escribir('Usuario', 'admin'); // el mismo usuario que en el otro negocio: ya no choca
+escribir('Correo', 'luis@x.com');
+escribir('Contraseña', 'clave1234');
+escribir('Repite la contraseña', 'clave1234');
+await pulsar('Crear mi negocio');
+await pausa(300);
+assert.match(texto(), /RNC de tu negocio/);
+assert.equal(pantalla().todos((x) => x.attrs['aria-label'] === 'Identificador del negocio')[0].texto.trim(), '101123456');
+const cfgGuardada = Object.fromEntries((await bd.consultar("SELECT clave, valor FROM config WHERE clave IN ('negocio_nombre','negocio_rnc','negocio_categoria')")).map((x) => [x.clave, x.valor]));
+assert.deepEqual(cfgGuardada, { negocio_nombre: 'ELECTRO SONIDO SRL', negocio_rnc: '101123456', negocio_categoria: 'NORMAL' });
+ok('al registrar con RNC la DGII completa el nombre y la categoría (inactivo o inexistente avisa) y todo queda guardado');
 
 servidor.close();
 console.log(`\n${n} grupos OK`);

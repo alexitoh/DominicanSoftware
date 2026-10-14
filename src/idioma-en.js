@@ -1161,4 +1161,9 @@ export const EN = {
  "Lo necesitarás (junto a tu usuario y contraseña) para entrar desde otro equipo.": "You will need it (with your username and password) to sign in from another device.",
  "Escribe el RNC de tu negocio y tu usuario. Solo se pide la primera vez en este equipo; se descargarán los datos de tu negocio. Si tu negocio no tiene RNC, usa el número que se te asignó al registrarte.": "Enter your business RNC and your username. It is only asked the first time on this device; your business data will be downloaded. If your business has no RNC, use the number assigned when you registered.",
  "Cambiar RNC": "Change RNC",
+ "Categoría / régimen en la DGII": "Category / regime at the DGII",
+ "Se completa al buscar el RNC": "Filled in when the RNC is searched",
+ "Buscar en la DGII": "Search the DGII",
+ "Buscando en la DGII…": "Searching the DGII…",
+ "Categoría / régimen en la DGII: ": "Category / regime at the DGII: ",
 };

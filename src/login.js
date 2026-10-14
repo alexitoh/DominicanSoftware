@@ -7,6 +7,7 @@ import {
   registrarNegocioNube, entrarConCuentaNube,
 } from './auth.js';
 import { urlServidor, guardarServidor } from './nube.js';
+import { enlazarBusquedaRnc, guardarDatosNegocio } from './rnc-registro.js';
 import { criptoDisponible } from './seguridad.js';
 
 // Devuelve una promesa que se resuelve con el usuario cuando ya está dentro.
@@ -223,6 +224,8 @@ async function pantallaAcceso(terminar, sesionPendiente) {
     const servidor = enNube ? servidorCampo() : null;
     const negocio = campo('Nombre del negocio', { value: cfg.negocio_nombre && cfg.negocio_nombre !== 'Mi Car Audio' ? cfg.negocio_nombre : '', autocomplete: 'organization' });
     const rnc = enNube ? campoRnc('RNC del negocio (opcional, sin guiones)') : null;
+    const categoria = enNube ? campo('Categoría / régimen en la DGII', { disabled: true, placeholder: 'Se completa al buscar el RNC', 'aria-label': 'Categoría en la DGII' }) : null;
+    const buscador = enNube ? enlazarBusquedaRnc({ rnc, nombre: negocio, categoria, antes: () => { if (servidor) guardarServidor(servidor.input.value); } }) : null;
     const nombre = campo('Tu nombre', { autocomplete: 'name' });
     const usuario = campo('Usuario', { autocapitalize: 'none', autocomplete: 'username', placeholder: 'ej. juan.perez' });
     const correo = campo('Correo', { type: 'email', autocomplete: 'email', inputmode: 'email' });
@@ -242,6 +245,7 @@ async function pantallaAcceso(terminar, sesionPendiente) {
         if (enNube) {
           guardarServidor(servidor.input.value);
           const r = await registrarNegocioNube(datos, progreso(boton));
+          await guardarDatosNegocio({ nombre: negocio.input.value, rnc: rnc.input.value, categoria: buscador.datos() ? categoria.input.value : '' });
           ident = { identificador: r.identificador, asignado: r.asignado };
           if (r.pendiente) { pantallaCodigo(r.codigo, 'Registro recibido', pantallaPendiente, ident); return; }
           codigo = r.codigo;
@@ -262,7 +266,7 @@ async function pantallaAcceso(terminar, sesionPendiente) {
       h('p', { class: 'ayuda' }, enNube
         ? 'Tus datos se guardan en la nube y podrás entrar con tu usuario o correo desde la web y desde cualquier teléfono. Sigue funcionando sin internet y se sincroniza al volver la conexión.'
         : 'Serás el administrador del negocio. Desde Usuarios podrás crear cuentas para tus empleados.'),
-      sinCripto, servidor?.el, negocio.el, rnc?.el,
+      sinCripto, servidor?.el, rnc?.el, buscador?.el, negocio.el, categoria?.el,
       rnc ? h('p', { class: 'ayuda' }, 'El RNC identifica a tu negocio al iniciar sesión, así tus usuarios no se mezclan con los de otros negocios. Si no tienes RNC, déjalo vacío: el sistema te asignará un número que deberás aprenderte.') : null,
       nombre.el, usuario.el, correo.el, n1.el, n2.el,
       h('p', { class: 'ayuda' }, 'La contraseña debe tener al menos 8 caracteres, con letras y números.'),

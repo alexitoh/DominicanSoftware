@@ -8,6 +8,7 @@ import {
 import { usuarioActual, registrarNegocioNube, subirUsuariosLocales, registrarBitacora } from './auth.js';
 import { guardarServidor } from './nube.js';
 import { consultar } from './database.js';
+import { enlazarBusquedaRnc, guardarDatosNegocio } from './rnc-registro.js';
 import { normalizarUsuario, normalizarRnc, errorRnc } from './seguridad.js';
 
 const NUBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5H7z"/></svg>';
@@ -136,6 +137,8 @@ async function formularioNuevoNegocio(alTerminar) {
   const servidor = campoServidor();
   const negocio = campo('Nombre del negocio', { value: cfg?.valor || '' });
   const rnc = campo('RNC del negocio (opcional, sin guiones)', { inputmode: 'numeric', autocomplete: 'off', maxlength: 14, placeholder: 'ej. 131234567' });
+  const categoria = campo('Categoría / régimen en la DGII', { disabled: true, placeholder: 'Se completa al buscar el RNC' });
+  const buscador = enlazarBusquedaRnc({ rnc, nombre: negocio, categoria, antes: () => guardarServidor(servidor.input.value) });
   const usuario = campo('Tu usuario', { value: yo.usuario, disabled: true });
   const correo = campo('Correo', { type: 'email', value: fila?.correo || '' });
   const clave = campo('Contraseña para la nube', { type: 'password', autocomplete: 'new-password' });
@@ -149,6 +152,7 @@ async function formularioNuevoNegocio(alTerminar) {
       const { codigo, pendiente, identificador, asignado } = await registrarNegocioNube({
         negocio: negocio.input.value, nombre: yo.nombre, usuario: yo.usuario, correo: correo.input.value, clave: clave.input.value, rnc: rnc.input.value,
       }, (p) => { boton.textContent = `Subiendo datos… ${p.subidos}`; });
+      await guardarDatosNegocio({ nombre: negocio.input.value, rnc: rnc.input.value, categoria: buscador.datos() ? categoria.input.value : '' });
       const ident = { identificador, asignado };
       if (pendiente) { cerrar(); mostrarPendiente(codigo, ident); return; }
       const entregadas = await subirUsuariosLocales();
@@ -165,7 +169,7 @@ async function formularioNuevoNegocio(alTerminar) {
   const cerrar = hoja('Crear mi negocio en la nube',
     h('div', { class: 'cuerpo' },
       h('p', { class: 'ayuda' }, 'Se sube todo lo que hay en este dispositivo (productos, ventas, clientes…). Tu usuario será el administrador de la nube. Los demás usuarios de este dispositivo se crearán con una contraseña temporal.'),
-      servidor.el, negocio.el, rnc.el,
+      servidor.el, rnc.el, buscador.el, negocio.el, categoria.el,
       h('p', { class: 'ayuda' }, 'El RNC identifica a tu negocio al iniciar sesión en otros equipos. Si no tienes RNC, déjalo vacío: el sistema te asignará un número que deberás aprenderte.'),
       usuario.el, correo.el, clave.el,
       h('p', { class: 'ayuda' }, 'Mínimo 8 caracteres, con letras y números.'),

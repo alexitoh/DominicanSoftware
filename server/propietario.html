@@ -196,7 +196,7 @@ function tarjeta(n) {
     ac.push(el('button', { class: 'btn m chico', onclick: () => eliminar(n) }, 'Eliminar'));
   }
   const dg = n.dgii;
-  const infoDgii = !dg ? '' : dg.noEncontrado ? ' · no aparece en el padrón de la DGII' : ` · DGII: ${dg.nombre} (${dg.estado})`;
+  const infoDgii = !dg ? '' : dg.noEncontrado ? ' · no aparece en el padrón de la DGII' : ` · DGII: ${dg.nombre} (${dg.estado}${dg.regimen ? ' · ' + dg.regimen : ''})`;
   const venc = n.vence ? (n.diasParaVencer < 0 ? `venció hace ${-n.diasParaVencer} día(s) (${n.vence})` : `vence ${n.vence} (en ${n.diasParaVencer} día(s))`) : 'sin vencimiento';
   return el('div', { class: 'caja neg' },
     el('h2', {}, n.nombre, el('span', { class: `estado ${n.estado}` }, ETQ[n.estado])),
