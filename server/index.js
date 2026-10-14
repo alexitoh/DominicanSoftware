@@ -57,7 +57,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     ultimoAcceso: c.ultimo_acceso,
   });
   const miembros = (negocio) => db.prepare('SELECT * FROM cuentas WHERE negocio = ? ORDER BY activo DESC, nombre').all(negocio).map(miembro);
-  const negocioDe = (uidNegocio) => db.prepare('SELECT uid, nombre, activo, plan, vence FROM negocios WHERE uid = ?').get(uidNegocio);
+  const negocioDe = (uidNegocio) => db.prepare('SELECT uid, nombre, activo, plan, vence, epoca FROM negocios WHERE uid = ?').get(uidNegocio);
 
   // null si el negocio puede usar el servicio; si no, el motivo
   function motivoBloqueo(n) {
@@ -102,7 +102,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     return {
       token: firmar({ c: cuenta.uid, n: cuenta.negocio }, secreto),
       cuenta: miembro(cuenta),
-      negocio: { uid: negocio.uid, nombre: negocio.nombre },
+      negocio: { uid: negocio.uid, nombre: negocio.nombre, epoca: negocio.epoca || 0 },
       dispositivo: { codigo: asignarDispositivo(cuenta.negocio, dispositivoUid) },
       miembros: miembros(cuenta.negocio),
       registros: contarDatos(cuenta.negocio),
@@ -408,6 +408,22 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     },
 
     // Elimina el negocio y todo lo suyo, y devuelve el espacio al disco
+    // Borra todos los datos del negocio (ventas, productos, clientes…) pero conserva su cuenta, usuarios y licencia.
+    // Los dispositivos vacían lo suyo en su próxima sincronización.
+    'POST /api/propietario/negocios/:uid/limpiar': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      if (String(b.confirmar || '').trim() !== n.nombre) falla(400, 'Para limpiar escribe el nombre exacto del negocio.');
+      const borrados = db.prepare('SELECT COUNT(*) AS c FROM registros WHERE negocio = ?').get(n.uid).c;
+      transaccion(db, () => {
+        db.prepare('DELETE FROM registros WHERE negocio = ?').run(n.uid);
+        db.prepare('UPDATE negocios SET epoca = epoca + 1 WHERE uid = ?').run(n.uid);
+      });
+      auditar('Limpió datos del negocio', n.nombre, `${borrados} registros`);
+      try { db.exec('VACUUM'); db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* el espacio queda libre para reutilizarse */ }
+      return { ok: true, registros: borrados };
+    },
     'DELETE /api/propietario/negocios/:uid': (req, b, p) => {
       autenticarPropietario(req);
       const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);
@@ -559,6 +575,10 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       const cambios = Array.isArray(b.cambios) ? b.cambios : [];
       if (cambios.length > 2000) falla(413, 'Demasiados cambios en una sola petición.');
 
+      // El propietario limpió los datos del negocio: este dispositivo debe vaciar lo que tiene y no subir nada viejo
+      if ((Number(b.epoca) || 0) !== (ctx.negocio.epoca || 0)) {
+        return { reiniciar: true, epoca: ctx.negocio.epoca || 0, aceptados: 0, ignorados: 0, cambios: [], hasta: 0, hayMas: false, miembros: miembros(negocio) };
+      }
       let aceptados = 0;
       let ignorados = 0;
       if (cambios.length) {

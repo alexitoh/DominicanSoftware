@@ -17,18 +17,30 @@ export function calcularItbis({ lineas, descuento = 0, tasa = 18, modo = 'adicio
 
 // ---------- NCF ----------
 export const TIPOS_NCF = { B01: 'Crédito fiscal', B02: 'Consumo', B14: 'Régimen especial', B15: 'Gubernamental' };
-// Comprobante que le corresponde a un cliente: el que se le fijó, o el que sale de su RNC y del régimen que tiene en la DGII.
-// Sin RNC (9 números) = consumidor final B02. RNC que empieza con 4 = institución del Estado (B15). Régimen especial o zona franca = B14. Si no, B01.
-// Es una sugerencia: siempre se puede elegir otro tipo al facturar o fijarlo en la ficha del cliente.
-export function comprobanteDeCliente(c) {
+// Comprobante que le corresponde a un cliente. Sigue la guía de comprobantes de la DGII:
+//  - B02 (consumo): consumidor final, sin RNC.
+//  - B15 (gubernamental): ventas a instituciones del Estado (su RNC empieza con 4, o su nombre es de una entidad pública).
+//  - B14 (regímenes especiales): ventas exentas a quien tiene un régimen especial (por ejemplo zonas francas).
+//  - B01 (crédito fiscal): cualquier otro contribuyente con RNC.
+// El régimen/categoría viene del listado de la DGII y se compara con las REGLAS: cada regla dice "si el régimen o la categoría contiene este texto, el comprobante es este".
+// Las reglas se editan en Ajustes. Lo que se fije en la ficha del cliente manda sobre todo, y al facturar siempre se puede elegir otro.
+export const REGLAS_COMPROBANTE_BASE = [
+  { texto: 'ZONA FRANCA', tipo: 'B14' }, { texto: 'ESPECIAL', tipo: 'B14' }, { texto: 'EXENT', tipo: 'B14' },
+  { texto: 'GUBERNAMENTAL', tipo: 'B15' }, { texto: 'GOBIERNO', tipo: 'B15' }, { texto: 'MUNICIPAL', tipo: 'B15' }, { texto: 'SECTOR PUBLICO', tipo: 'B15' },
+];
+const PLANO = (t) => String(t || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const ENTIDAD_ESTADO = /^(MINISTERIO|AYUNTAMIENTO|JUNTA (DE|MUNICIPAL|CENTRAL)|DIRECCION GENERAL|INSTITUTO NACIONAL|CONSEJO NACIONAL|SENADO|CAMARA DE (DIPUTADOS|CUENTAS)|PODER (EJECUTIVO|JUDICIAL)|PROCURADURIA|DESPACHO|GOBERNACION|CORPORACION DEL ACUEDUCTO|BANCO CENTRAL|BANCO DE RESERVAS|EDENORTE|EDESUR|EDEESTE|HOSPITAL (GENERAL|REGIONAL|DOCTOR))/;
+export function comprobanteDeCliente(c, reglas = REGLAS_COMPROBANTE_BASE) {
   const fijo = String(c?.tipo_comprobante || '').toUpperCase();
   if (TIPOS_NCF[fijo]) return { tipo: fijo, motivo: 'fijado en la ficha del cliente' };
   const doc = limpiarDocumento(c?.documento);
   if (doc.length !== 9) return { tipo: 'B02', motivo: 'cliente sin RNC: consumidor final' };
-  const reg = String(c?.regimen_dgii || '').toUpperCase();
-  if (doc.startsWith('4')) return { tipo: 'B15', motivo: 'RNC de institución del Estado' };
-  if (/ESPECIAL|ZONA.*FRANCA|FRANCA/.test(reg)) return { tipo: 'B14', motivo: `régimen ${c.regimen_dgii} en la DGII` };
-  return { tipo: 'B01', motivo: 'cliente con RNC' };
+  if (doc.startsWith('4') || ENTIDAD_ESTADO.test(PLANO(c?.nombre))) return { tipo: 'B15', motivo: 'institución del Estado' };
+  const perfil = PLANO(`${c?.categoria_dgii || ''} ${c?.regimen_dgii || ''}`);
+  for (const r of reglas || []) {
+    if (r?.texto && TIPOS_NCF[r.tipo] && perfil.includes(PLANO(r.texto))) return { tipo: r.tipo, motivo: `según la DGII (${(c.categoria_dgii || c.regimen_dgii || '').trim()}) → ${r.tipo}` };
+  }
+  return { tipo: 'B01', motivo: 'contribuyente con RNC' };
 }
 
 // Nombre que lleva la factura según el comprobante

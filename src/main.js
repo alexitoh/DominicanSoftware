@@ -1,8 +1,8 @@
 // main.js - arranque, navegación, ajustes y respaldo
 import './style.css';
 import { Capacitor } from '@capacitor/core';
-import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo, leerSecuenciasNCF, guardarSecuenciaNCF } from './database.js';
-import { TIPOS_NCF } from './itbis.js';
+import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo, leerSecuenciasNCF, guardarSecuenciaNCF, leerReglasComprobante, guardarReglasComprobante } from './database.js';
+import { TIPOS_NCF, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { validarDocumento } from './fiscal.js';
 import { estadoPadron, actualizarPadron, subirPadron } from './dgii.js';
 import { h, toast, confirmar, setMoneda, hoja, atrasAtendido } from './ui.js';
@@ -255,6 +255,19 @@ async function vistaAjustes(raiz) {
     s, sig: h('input', { class: 'campo', type: 'number', min: '0', value: s.sig || '', placeholder: 'Próximo', inputmode: 'numeric' }),
     hasta: h('input', { class: 'campo', type: 'number', min: '0', value: s.hasta || '', placeholder: 'Último', inputmode: 'numeric' }),
   }));
+  // Reglas: si el régimen/categoría que la DGII tiene para el cliente contiene un texto, se le da ese comprobante
+  const reglasLista = await leerReglasComprobante();
+  const cajaReglas = h('div', { class: 'reglas-cpb' });
+  const filasReglas = [];
+  const nuevaRegla = (r = { texto: '', tipo: 'B14' }) => {
+    const texto = h('input', { class: 'campo', value: r.texto, placeholder: 'Texto (ej. ZONA FRANCA)', 'aria-label': 'Texto de la regla', autocomplete: 'off' });
+    const tipo = h('select', { class: 'campo', 'aria-label': 'Comprobante de la regla' }, ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)));
+    tipo.value = r.tipo;
+    const fila = { texto, tipo };
+    const caja = h('div', { class: 'rejilla' }, texto, tipo, h('button', { class: 'btn chico', onClick: () => { filasReglas.splice(filasReglas.indexOf(fila), 1); caja.remove(); } }, 'Quitar'));
+    filasReglas.push(fila); cajaReglas.append(caja);
+  };
+  reglasLista.forEach(nuevaRegla);
   const errorFiscal = h('p', { class: 'error', role: 'alert' });
   async function guardarFiscal() {
     errorFiscal.textContent = '';
@@ -264,6 +277,7 @@ async function vistaAjustes(raiz) {
     if (!(tasa > 0 && tasa < 100)) { errorFiscal.textContent = 'La tasa de ITBIS no es válida.'; return; }
     try {
       for (const c of camposNcf) await guardarSecuenciaNCF(c.s.tipo, parseInt(c.sig.value, 10) || 0, parseInt(c.hasta.value, 10) || 0);
+      await guardarReglasComprobante(filasReglas.map((f) => ({ texto: f.texto.value, tipo: f.tipo.value })));
     } catch (e) { errorFiscal.textContent = e.message; return; }
     for (const [k, v] of [['negocio_rnc', doc.numero || ''], ['itbis_modo', activoFact.checked ? 'adicional' : 'no'], ['itbis_tasa', String(tasa)]]) await guardarConfig(k, v);
     toast(activoFact.checked ? 'Facturación con comprobante encendida' : 'Facturación con comprobante apagada');
@@ -319,6 +333,10 @@ async function vistaAjustes(raiz) {
       ...camposNcf.map((c) => h('div', { class: 'rejilla' },
         h('label', { class: 'etiqueta' }, `${c.s.tipo} · ${TIPOS_NCF[c.s.tipo]} · próximo`, c.sig),
         h('label', { class: 'etiqueta' }, 'Último autorizado', c.hasta))),
+      h('h3', {}, 'Comprobante según la categoría del cliente'),
+      h('p', { class: 'ayuda' }, 'La DGII asigna el comprobante según el tipo de contribuyente: B01 a contribuyentes con RNC, B02 a consumidores finales, B14 a regímenes especiales (por ejemplo zonas francas, con exención vigente) y B15 al Estado. Aquí dices con qué texto del régimen o categoría que muestra la DGII se aplica cada uno. Lo que no coincida con ninguna regla recibe B01. En la ficha de un cliente puedes fijar otro.'),
+      cajaReglas,
+      h('button', { class: 'btn chico', onClick: () => nuevaRegla() }, '+ Agregar regla'),
       errorFiscal,
       h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar'),
       seccionPadron),

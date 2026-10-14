@@ -1,11 +1,11 @@
 // clientes.js - lista, detalle con deuda y formulario de clientes
-import { consultar, ejecutar, redondear } from './database.js';
+import { consultar, ejecutar, redondear, leerReglasComprobante } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
 import { hoyISO } from './fechas.js';
 import { buscarRNC } from './dgii.js';
-import { TIPOS_NCF, NOMBRE_COMPROBANTE, comprobanteDeCliente } from './itbis.js';
+import { TIPOS_NCF, NOMBRE_COMPROBANTE, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
 
 // Lo que debe una venta a crédito: total menos lo abonado
@@ -40,14 +40,16 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
   const condicion = campoCondicion(c);
   // Comprobante que se le da a este cliente: automático (según su RNC y su régimen en la DGII) o uno fijo
   let regimenDgii = c?.regimen_dgii ?? null;
+  let reglas = REGLAS_COMPROBANTE_BASE;
+  leerReglasComprobante().then((r) => { reglas = r; pintarSugerido(); }).catch(() => {});
   const tipoCpb = h('select', { class: 'campo', 'aria-label': 'Comprobante del cliente', onChange: () => pintarSugerido() },
     h('option', { value: '' }, 'Automático (según su RNC y régimen)'),
     ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)));
   tipoCpb.value = c?.tipo_comprobante || '';
   const textoCpb = h('p', { class: 'ayuda', role: 'status' });
   function pintarSugerido() {
-    const r = comprobanteDeCliente({ tipo_comprobante: tipoCpb.value, documento: documento.value, regimen_dgii: regimenDgii });
-    textoCpb.textContent = `Se le dará: ${NOMBRE_COMPROBANTE[r.tipo]} (${r.tipo}), ${r.motivo}.`;
+    const r = comprobanteDeCliente({ tipo_comprobante: tipoCpb.value, documento: documento.value, regimen_dgii: regimenDgii, nombre: nombre.value }, reglas);
+    textoCpb.textContent = `Se le dará: ${NOMBRE_COMPROBANTE[r.tipo]} (${r.tipo}), ${r.motivo}.${regimenDgii ? ` Régimen en la DGII: ${regimenDgii}.` : ''}`;
   }
   const error = h('p', { class: 'error', role: 'alert' });
 

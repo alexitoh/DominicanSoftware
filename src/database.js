@@ -7,7 +7,7 @@ import { Share } from '@capacitor/share';
 import { defineCustomElements as jeepSqlite } from 'jeep-sqlite/loader';
 import schema from './schema.sql?raw'; // Vite: importa el archivo como texto
 import { prepararBase } from './sync-esquema.js';
-import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido, comprobanteDeCliente } from './itbis.js';
+import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { limpiarDocumento } from './fiscal.js';
 
 const DB_NAME = 'caraudio';
@@ -761,6 +761,21 @@ export async function guardarSecuenciaNCF(tipo, sig, hasta) {
   }
 }
 
+// Reglas "si el régimen o categoría de la DGII contiene X → comprobante Y" (se editan en Ajustes; se comparten entre dispositivos)
+export async function leerReglasComprobante() {
+  const [r] = await consultar("SELECT valor FROM config WHERE clave = 'cpb_reglas'");
+  try {
+    const v = JSON.parse(r?.valor || 'null');
+    if (Array.isArray(v)) return v.filter((x) => x && typeof x.texto === 'string' && TIPOS_NCF[x.tipo]);
+  } catch { /* se usan las reglas base */ }
+  return REGLAS_COMPROBANTE_BASE;
+}
+export async function guardarReglasComprobante(reglas) {
+  const limpias = (reglas || []).map((r) => ({ texto: String(r.texto || '').trim().toUpperCase().slice(0, 60), tipo: r.tipo })).filter((r) => r.texto);
+  if (limpias.some((r) => !TIPOS_NCF[r.tipo])) throw new Error('Elige el comprobante de cada regla.');
+  await ejecutar('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', ['cpb_reglas', JSON.stringify(limpias)]);
+}
+
 // Tipo de comprobante: 'auto' elige B01 (crédito fiscal) si el cliente tiene RNC y hay secuencia B01; si no, B02 (si no hay secuencia, la venta queda sin NCF).
 // Si se pide un tipo concreto, se exige que se pueda emitir: B01, B14 y B15 necesitan un cliente con RNC, y todos una secuencia autorizada con números disponibles.
 async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
@@ -777,7 +792,7 @@ async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
     tipo = pedido;
   } else {
     // Automático: el tipo que le corresponde al cliente según su ficha, su RNC y su régimen en la DGII
-    const { tipo: ideal, motivo } = comprobanteDeCliente(cli);
+    const { tipo: ideal, motivo } = comprobanteDeCliente(cli, await leerReglasComprobante());
     if (util(ideal)) tipo = ideal;
     else if (obligatorio) throw new Error(`A este cliente le corresponde ${ideal} (${TIPOS_NCF[ideal]}; ${motivo}), pero no hay números disponibles. Registra la secuencia en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
     else if (ideal !== 'B02' && util('B02')) tipo = 'B02';

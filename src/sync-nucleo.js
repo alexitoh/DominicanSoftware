@@ -67,10 +67,10 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
     await lote(ENVOLTURA(sets));
   }
 
-  async function vincular({ dispositivo, codigo, negocio, negocioNombre }) {
+  async function vincular({ dispositivo, codigo, negocio, negocioNombre, epoca = 0 }) {
     await lote([{
-      statement: 'UPDATE sync_ctl SET dispositivo = ?, codigo = ?, negocio = ?, negocio_nombre = ?, cursor = 0 WHERE id = 1',
-      values: [dispositivo, codigo, negocio, negocioNombre],
+      statement: 'UPDATE sync_ctl SET dispositivo = ?, codigo = ?, negocio = ?, negocio_nombre = ?, cursor = 0, epoca = ? WHERE id = 1',
+      values: [dispositivo, codigo, negocio, negocioNombre, epoca || 0],
     }]);
   }
 
@@ -236,8 +236,17 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
 
     for (let ronda = 0; ronda < 500; ronda++) {
       const { cambios, marcas } = await reunir();
-      const resp = await nube.sync({ dispositivo: c.dispositivo, desde: cursor, cambios, limite: 500 });
+      const resp = await nube.sync({ dispositivo: c.dispositivo, desde: cursor, cambios, limite: 500, epoca: c.epoca || 0 });
       if (resp.miembros && alMiembros) await alMiembros(resp.miembros);
+      if (resp.reiniciar) {
+        // El propietario limpió los datos del negocio: se vacía lo local y se adopta la nueva época
+        await reemplazarLocal();
+        await lote([{ statement: 'UPDATE sync_ctl SET epoca = ?, cursor = 0 WHERE id = 1', values: [resp.epoca || 0] }]);
+        c = await ctl();
+        cursor = 0;
+        total.reiniciado = true;
+        continue;
+      }
       await limpiar(marcas);
       const r = await aplicar(resp.cambios || []);
       total.subidos += resp.aceptados ?? cambios.length;

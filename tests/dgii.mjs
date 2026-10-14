@@ -113,9 +113,12 @@ const v4 = await fila(await vender({ cliente_id: sinRnc }));
 assert.deepEqual([v4.itbis, v4.total, v4.ncf], [0, 1000, null], 'apagada: sin ITBIS ni comprobante');
 // Comprobante automático según el cliente
 const itb = await import('../src/itbis.js');
-assert.deepEqual(itb.comprobanteDeCliente({ documento: '101123456' }), { tipo: 'B01', motivo: 'cliente con RNC' });
+assert.deepEqual(itb.comprobanteDeCliente({ documento: '101123456' }), { tipo: 'B01', motivo: 'contribuyente con RNC' });
 assert.equal(itb.comprobanteDeCliente({ documento: '00112345678' }).tipo, 'B02', 'cédula = consumidor final');
 assert.equal(itb.comprobanteDeCliente({ documento: '401001234', regimen_dgii: 'NORMAL' }).tipo, 'B15', 'institución del Estado');
+assert.equal(itb.comprobanteDeCliente({ documento: '130111222', nombre: 'Ministerio de Obras Públicas', regimen_dgii: 'NORMAL' }).tipo, 'B15', 'nombre de entidad pública');
+assert.equal(itb.comprobanteDeCliente({ documento: '130111222', regimen_dgii: 'NORMAL' }).tipo, 'B01');
+assert.equal(itb.comprobanteDeCliente({ documento: '130111222', regimen_dgii: 'Régimen Simplificado' }, [{ texto: 'SIMPLIFICADO', tipo: 'B02' }]).tipo, 'B02', 'regla propia (sin acentos ni mayúsculas)');
 assert.equal(itb.comprobanteDeCliente({ documento: '130999888', regimen_dgii: 'REGIMEN ESPECIAL' }).tipo, 'B14');
 assert.equal(itb.comprobanteDeCliente({ documento: '130999888', regimen_dgii: 'ZONA FRANCA' }).tipo, 'B14');
 assert.equal(itb.comprobanteDeCliente({ documento: '130999888', tipo_comprobante: 'B01', regimen_dgii: 'ESPECIAL' }).tipo, 'B01', 'lo fijado en la ficha manda');
@@ -127,6 +130,10 @@ await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_m
 await bd.guardarSecuenciaNCF('B02', 20, 50);
 await assert.rejects(vender({ cliente_id: idZf }), /le corresponde B14/, 'automático pide B14 y avisa si no hay secuencia');
 await bd.guardarSecuenciaNCF('B14', 5, 9);
+assert.equal((await bd.leerReglasComprobante()).length, itb.REGLAS_COMPROBANTE_BASE.length, 'sin configurar usa las reglas base');
+await bd.guardarReglasComprobante([{ texto: ' especial ', tipo: 'B14' }, { texto: '', tipo: 'B01' }]);
+assert.deepEqual(await bd.leerReglasComprobante(), [{ texto: 'ESPECIAL', tipo: 'B14' }], 'las reglas vacías se descartan');
+await assert.rejects(bd.guardarReglasComprobante([{ texto: 'X', tipo: 'B99' }]), /Elige el comprobante/);
 assert.match(await ncfDe(await vender({ cliente_id: idZf })), /^B14/, 'régimen especial en la DGII = B14 automático');
 assert.match(await ncfDe(await vender({ cliente_id: idFijo })), /^B02/, 'comprobante fijado en la ficha');
 assert.match(await ncfDe(await vender({ cliente_id: idZf, tipo_ncf: 'B01' })), /^B01/, 'elección manual manda sobre el automático');

@@ -97,7 +97,7 @@ export function abrirBase(ruta) {
       detalle TEXT
     );
   `);
-  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT', 'ALTER TABLE negocios ADD COLUMN precio REAL']) {
+  for (const q of ['ALTER TABLE negocios ADD COLUMN notas TEXT', 'ALTER TABLE negocios ADD COLUMN aprobado TEXT', 'ALTER TABLE negocios ADD COLUMN precio REAL', 'ALTER TABLE negocios ADD COLUMN epoca INTEGER NOT NULL DEFAULT 0']) {
     try { db.exec(q); } catch { /* la columna ya existe */ }
   }
   return db;

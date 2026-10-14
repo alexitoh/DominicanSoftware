@@ -110,7 +110,7 @@ export const TABLAS = [
 ];
 
 // Ajustes del negocio que se comparten entre dispositivos (los contadores de numeración y el idioma son de cada uno)
-export const CONFIG_COMPARTIDA = ['negocio_nombre', 'negocio_telefono', 'negocio_direccion', 'negocio_logo', 'moneda', 'margen_defecto', 'idioma_factura', 'negocio_rnc', 'itbis_modo', 'itbis_tasa',
+export const CONFIG_COMPARTIDA = ['cpb_reglas', 'negocio_nombre', 'negocio_telefono', 'negocio_direccion', 'negocio_logo', 'moneda', 'margen_defecto', 'idioma_factura', 'negocio_rnc', 'itbis_modo', 'itbis_tasa',
   'conta_inicio', 'nom_afp_emp', 'nom_sfs_emp', 'nom_afp_pat', 'nom_sfs_pat', 'nom_srl_pat', 'nom_infotep', 'nom_tope_afp', 'nom_tope_sfs', 'nom_tope_srl', 'nom_isr_exento'];
 
 export const CATEGORIAS_BASE = ['Bajos / Subwoofers', 'Bocinas', 'Amplificadores', 'Pantallas / Radios', 'Cables y accesorios', 'Otros'];
@@ -168,6 +168,7 @@ export function sentenciasColumnas() {
     s.push(`ALTER TABLE ${d.t} ADD COLUMN act INTEGER`);
   }
   s.push('ALTER TABLE usuarios ADD COLUMN uid TEXT');
+  s.push('ALTER TABLE sync_ctl ADD COLUMN epoca INTEGER NOT NULL DEFAULT 0');
   return s;
 }
 

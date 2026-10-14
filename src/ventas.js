@@ -1,5 +1,5 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
-import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal } from './database.js';
+import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal, leerReglasComprobante } from './database.js';
 import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis, comprobanteDeCliente } from './itbis.js';
 import { buscarRNC } from './dgii.js';
 import { limpiarDocumento } from './fiscal.js';
@@ -198,6 +198,7 @@ export async function vistaVentas(raiz) {
     const avisoCredito = h('p', { class: 'ayuda', role: 'status' });
     // Comprobante fiscal y consulta del RNC en la DGII
     const cfgF = await configFiscal();
+    const reglasCpb = await leerReglasComprobante();
     const tipoNcf = h('select', { class: 'campo', 'aria-label': 'Tipo de comprobante', onChange: () => pintarTotales() },
       h('option', { value: 'auto' }, 'Automático (según el cliente)'),
       ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)));
@@ -434,7 +435,7 @@ export async function vistaVentas(raiz) {
       pintarAvisoCredito();
       if (cfgF.modo !== 'no') {
         const elegido = tipoNcf.value || 'auto';
-        const sug = comprobanteDeCliente(clientesInfo.get(cliente.value));
+        const sug = comprobanteDeCliente(clientesInfo.get(cliente.value), reglasCpb);
         const t = elegido === 'auto' ? sug.tipo : elegido;
         avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]} (${t})${elegido === 'auto' ? `, ${sug.motivo}` : ', elegido por ti'}.`;
       }

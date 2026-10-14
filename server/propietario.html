@@ -189,6 +189,7 @@ function tarjeta(n) {
     else ac.push(el('button', { class: 'btn m chico', onclick: () => confirmarAccion(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar, pero sus datos se conservan.`) }, 'Suspender'));
     ac.push(el('button', { class: 'btn chico', onclick: () => editar(n) }, 'Editar'));
     ac.push(el('button', { class: 'btn chico', onclick: () => respaldo(n) }, 'Descargar respaldo'));
+    ac.push(el('button', { class: 'btn m chico', onclick: () => limpiarDatos(n) }, 'Limpiar datos'));
     ac.push(el('button', { class: 'btn m chico', onclick: () => eliminar(n) }, 'Eliminar'));
   }
   const venc = n.vence ? (n.diasParaVencer < 0 ? `venció hace ${-n.diasParaVencer} día(s) (${n.vence})` : `vence ${n.vence} (en ${n.diasParaVencer} día(s))`) : 'sin vencimiento';
@@ -261,6 +262,18 @@ async function respaldo(n) {
     document.body.append(a); a.click(); a.remove();
     toast(`Respaldo descargado (${j.registros.length} registros)`);
   } catch (e) { toast(e.message); }
+}
+
+// Borra los datos (ventas, productos, clientes…) pero deja la cuenta, los usuarios y la licencia. Pide escribir el nombre, igual que Eliminar.
+function limpiarDatos(n) {
+  const conf = el('input', { placeholder: 'Escribe el nombre exacto del negocio', autocomplete: 'off' });
+  const err = el('p', { class: 'error' });
+  modal(`Limpiar datos de "${n.nombre}"`, [
+    el('p', { class: 'aviso' }, `Se borrarán para siempre sus ${n.registros} registros (ventas, productos, clientes, inventario, contabilidad…) y los teléfonos y navegadores conectados se vaciarán solos la próxima vez que sincronicen. Se conservan el negocio, sus usuarios, sus claves y su licencia. No se puede deshacer.`),
+    el('button', { class: 'btn chico', onclick: () => respaldo(n) }, 'Descargar respaldo antes de limpiar'),
+    el('label', {}, `Para confirmar escribe: ${n.nombre}`), conf, err],
+  [el('button', { class: 'btn', onclick: cerrar }, 'Cancelar'),
+    el('button', { class: 'btn m', onclick: intentar(err, async () => { const r = await api('POST', `/api/propietario/negocios/${n.uid}/limpiar`, { confirmar: conf.value }); cerrar(); await cargar(); toast(`Datos limpiados (${r.registros} registros)`); }) }, 'Limpiar todos los datos')]);
 }
 
 function eliminar(n, rechazo = false) {

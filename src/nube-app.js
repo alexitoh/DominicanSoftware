@@ -2,6 +2,7 @@
 import { consultar, lote, onEscritura, sincronizacionLista } from './database.js';
 import { nube, ErrorNube, sesionNube, guardarSesionNube, idDispositivo, urlServidor, servidorDisponible } from './nube.js';
 import { crearMotor } from './sync-nucleo.js';
+import { toast } from './ui.js';
 import { hashClave } from './seguridad.js';
 
 export { ErrorNube, urlServidor, servidorDisponible, sincronizacionLista };
@@ -84,7 +85,7 @@ export async function adoptarRespuesta(r, clave) {
 // modo: 'subir' (los datos de este dispositivo pasan a la nube) | 'combinar' | 'reemplazar' (se queda con lo de la nube)
 export async function conectarDispositivo(r, modo, alProgreso) {
   await motor.vincular({
-    dispositivo: idDispositivo(), codigo: r.dispositivo?.codigo || '', negocio: r.negocio.uid, negocioNombre: r.negocio.nombre,
+    dispositivo: idDispositivo(), codigo: r.dispositivo?.codigo || '', negocio: r.negocio.uid, negocioNombre: r.negocio.nombre, epoca: r.negocio.epoca || 0,
   });
   if (modo === 'reemplazar') await motor.reemplazarLocal();
   else await motor.marcarTodo();
@@ -132,6 +133,11 @@ export async function sincronizarAhora() {
   try {
     const r = await motor.sincronizar();
     avisar({ fase: 'ok', ultimo: new Date(), pendientes: await motor.pendientes(), mensaje: '' });
+    if (r.reiniciado) {
+      // Los datos del negocio fueron limpiados desde el panel del propietario: se recarga para volver a empezar limpio
+      try { toast('Los datos del negocio fueron limpiados. Reiniciando…'); } catch { /* sin pantalla */ }
+      setTimeout(() => { try { location.reload(); } catch { /* sin navegador */ } }, 1200);
+    }
     if (r.bajados > 0) window.dispatchEvent(new CustomEvent('caraudio:datos-nuevos', { detail: r }));
     return r;
   } catch (e) {

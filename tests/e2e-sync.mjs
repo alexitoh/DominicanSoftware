@@ -62,7 +62,7 @@ const crearProducto = (d, codigo, nombre, stock, precio = 100) => {
 const conectar = async (d, tipo, datos) => {
   const r = await (tipo === 'registro' ? d.nube.registro({ ...datos, dispositivo: d.idDisp }) : d.nube.login({ ...datos, dispositivo: d.idDisp }));
   d.token = r.token;
-  await d.motor.vincular({ dispositivo: d.idDisp, codigo: r.dispositivo.codigo, negocio: r.negocio.uid, negocioNombre: r.negocio.nombre });
+  await d.motor.vincular({ dispositivo: d.idDisp, codigo: r.dispositivo.codigo, negocio: r.negocio.uid, negocioNombre: r.negocio.nombre, epoca: r.negocio.epoca || 0 });
   return r;
 };
 
@@ -282,6 +282,47 @@ const malo = await fetch(`${BASE}/api/rnc-importar`, { method: 'POST', headers: 
 assert.equal(malo.status, 400);
 await assert.rejects(() => crearCliente({ base: () => BASE }).consultarRNC('101123456'), /sesión/i);
 ok('el servidor guarda el listado de la DGII, lo consulta por RNC con sesión y rechaza archivos inválidos');
+
+// ---------- 9e. El propietario limpia los datos de un negocio y los dispositivos se vacían ----------
+const db5 = abrirBase(':memory:');
+const srv5 = crearServidor({ db: db5, secreto: 'sexto-secreto-largo-1234567890', clavePropietario: 'dueno-sistema-1', aprobacionAutomatica: true });
+await new Promise((r) => srv5.listen(0, r));
+const B5 = `http://127.0.0.1:${srv5.address().port}`;
+const p5 = async (ruta, cuerpo, t, metodo = 'POST') => { const r = await fetch(B5 + ruta, { method: metodo, headers: { 'content-type': 'application/json', ...(t ? { authorization: 'Bearer ' + t } : {}) }, body: cuerpo ? JSON.stringify(cuerpo) : undefined }); return [r.status, await r.json()]; };
+const T5 = (await p5('/api/propietario/login', { clave: 'dueno-sistema-1' }))[1].token;
+const D1 = await crearDispositivo('L1');
+const D2 = await crearDispositivo('L2');
+for (const d of [D1, D2]) { d.nube = crearCliente({ base: () => B5, token: () => d.token }); d.motor = crearMotor({ consultar: d.consultar, lote: d.lote, nube: d.nube }); }
+const reg5 = await conectar(D1, 'registro', { negocio: 'Negocio de Prueba', nombre: 'Dani', usuario: 'dani', correo: 'dani@x.com', clave: 'clave1234' });
+crearProducto(D1, 'LP-1', 'Producto de prueba', 5, 100);
+await D1.motor.marcarTodo();
+await D1.motor.sincronizar();
+await conectar(D2, 'login', { identificador: 'dani', clave: 'clave1234' });
+await D2.motor.sincronizar();
+assert.equal((await uno(D2, "SELECT COUNT(*) n FROM productos WHERE codigo = 'LP-1'")).n, 1, 'el segundo dispositivo ve el producto');
+// sin confirmar el nombre exacto no se borra nada
+assert.equal((await p5(`/api/propietario/negocios/${reg5.negocio.uid}/limpiar`, { confirmar: 'otro nombre' }, T5))[0], 400);
+assert.equal((await p5(`/api/propietario/negocios/${reg5.negocio.uid}/limpiar`, { confirmar: 'Negocio de Prueba' }))[0], 401, 'sin sesión de propietario no se puede');
+assert.ok(db5.prepare('SELECT COUNT(*) c FROM registros').get().c > 0);
+const limp = await p5(`/api/propietario/negocios/${reg5.negocio.uid}/limpiar`, { confirmar: 'Negocio de Prueba' }, T5);
+assert.equal(limp[0], 200);
+assert.equal(db5.prepare('SELECT COUNT(*) c FROM registros').get().c, 0, 'el servidor queda sin datos del negocio');
+assert.equal(db5.prepare('SELECT COUNT(*) c FROM cuentas').get().c, 1, 'la cuenta del negocio se conserva');
+// el dispositivo que seguía con datos viejos no los sube otra vez: se vacía
+const rLimp = await D1.motor.sincronizar();
+assert.equal(rLimp.reiniciado, true);
+assert.equal((await uno(D1, 'SELECT COUNT(*) n FROM productos')).n, 0, 'el dispositivo 1 queda vacío');
+await D2.motor.sincronizar();
+assert.equal((await uno(D2, 'SELECT COUNT(*) n FROM productos')).n, 0, 'el dispositivo 2 también');
+assert.equal(db5.prepare("SELECT COUNT(*) c FROM registros WHERE tabla = 'productos'").get().c, 0, 'los datos viejos no regresaron al servidor');
+// y se puede empezar de nuevo con normalidad
+crearProducto(D1, 'LP-2', 'Producto nuevo', 3, 50);
+await D1.motor.sincronizar();
+await D2.motor.sincronizar();
+assert.equal((await uno(D2, "SELECT COUNT(*) n FROM productos WHERE codigo = 'LP-2'")).n, 1);
+assert.equal((await uno(D2, "SELECT COUNT(*) n FROM productos WHERE codigo = 'LP-1'")).n, 0);
+srv5.close();
+ok('limpiar datos desde el panel exige el nombre exacto, conserva la cuenta y vacía los dispositivos sin que los datos viejos regresen');
 
 // ---------- 10. Seguridad y cuentas del servidor ----------
 const r = await fetch(`${BASE}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
