@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo, leerSecuenciasNCF, guardarSecuenciaNCF } from './database.js';
 import { TIPOS_NCF } from './itbis.js';
 import { validarDocumento } from './fiscal.js';
+import { estadoPadron, actualizarPadron, subirPadron } from './dgii.js';
 import { h, toast, confirmar, setMoneda, hoja, atrasAtendido } from './ui.js';
 import { setIdioma, getIdioma, instalarTraductor } from './i18n.js';
 import { asegurarSesion } from './login.js';
@@ -270,6 +271,33 @@ async function vistaAjustes(raiz) {
     toast('Datos fiscales guardados');
   }
 
+  // Padrón de contribuyentes de la DGII (vive en el servidor; solo el administrador lo actualiza)
+  const textoPadron = h('p', { class: 'ayuda', role: 'status' });
+  const errorPadron = h('p', { class: 'error', role: 'alert' });
+  const cargarEstadoPadron = async () => {
+    try {
+      const e = await estadoPadron();
+      textoPadron.textContent = e.cantidad ? `Listado de la DGII cargado: ${e.cantidad.toLocaleString('es-DO')} contribuyentes (actualizado ${String(e.actualizado).slice(0, 10)}).` : 'El listado de la DGII aún no está cargado: la consulta de RNC no funcionará hasta cargarlo.';
+    } catch { textoPadron.textContent = ''; }
+  };
+  const esAdmin = usuarioActual()?.rol === 'admin';
+  const seccionPadron = vinculado() ? h('div', {},
+    h('h3', {}, 'Consulta de RNC en la DGII'),
+    textoPadron, errorPadron,
+    esAdmin ? h('div', { class: 'acciones' },
+      h('button', { class: 'btn', onClick: async (e) => {
+        errorPadron.textContent = ''; e.target.disabled = true; textoPadron.textContent = 'Bajando el listado de la DGII… puede tardar unos minutos.';
+        try { await actualizarPadron(); toast('Listado de la DGII actualizado'); } catch (x) { errorPadron.textContent = x.message; }
+        e.target.disabled = false; await cargarEstadoPadron();
+      } }, 'Actualizar desde la DGII'),
+      h('label', { class: 'btn' }, 'Subir archivo (DGII_RNC.zip o .txt)', h('input', { type: 'file', accept: '.zip,.txt', hidden: true, onChange: async (e) => {
+        const f = e.target.files?.[0]; if (!f) return;
+        errorPadron.textContent = ''; textoPadron.textContent = 'Subiendo y procesando el archivo…';
+        try { await subirPadron(f); toast('Listado cargado'); } catch (x) { errorPadron.textContent = x.message; }
+        e.target.value = ''; await cargarEstadoPadron();
+      } }))) : null) : null;
+  if (seccionPadron) cargarEstadoPadron();
+
   raiz.replaceChildren(
     h('header', { class: 'barra' }, h('h1', {}, 'Ajustes')),
     h('section', { class: 'seccion' },
@@ -294,7 +322,8 @@ async function vistaAjustes(raiz) {
         h('label', { class: 'etiqueta' }, `${c.s.tipo} · ${TIPOS_NCF[c.s.tipo]} · próximo`, c.sig),
         h('label', { class: 'etiqueta' }, 'Último autorizado', c.hasta))),
       errorFiscal,
-      h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar datos fiscales')),
+      h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar datos fiscales'),
+      seccionPadron),
     h('section', { class: 'seccion' },
       h('h2', {}, 'Datos del negocio'),
       ...campos.map(([k, et]) => h('label', { class: 'etiqueta' }, et, inputs[k])),

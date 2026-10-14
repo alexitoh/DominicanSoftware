@@ -1,5 +1,8 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
-import { consultar, ejecutar, registrarVenta, anularVenta, redondear } from './database.js';
+import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal } from './database.js';
+import { TIPOS_NCF } from './itbis.js';
+import { buscarRNC } from './dgii.js';
+import { limpiarDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { condicionRango, rangoInicial, selectorRango, hoyISO } from './fechas.js';
 import { formularioCliente } from './clientes.js';
@@ -191,6 +194,44 @@ export async function vistaVentas(raiz) {
     const clientesInfo = new Map();
     const cliente = h('select', { class: 'campo', 'aria-label': 'Cliente', onChange: () => pintarTotales() });
     const avisoCredito = h('p', { class: 'ayuda', role: 'status' });
+    // Comprobante fiscal y consulta del RNC en la DGII
+    const cfgF = await configFiscal();
+    const tipoNcf = h('select', { class: 'campo', 'aria-label': 'Tipo de comprobante' },
+      h('option', { value: 'auto' }, 'Automático (según el cliente)'),
+      ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)),
+      h('option', { value: 'ninguno' }, 'Sin comprobante'));
+    const estatusRnc = h('p', { class: 'ayuda', role: 'status' });
+    const rncRapido = h('input', {
+      class: 'campo', inputmode: 'numeric', autocomplete: 'off', placeholder: 'RNC o cédula (consulta la DGII)', 'aria-label': 'RNC del cliente',
+      onChange: () => buscarPorRnc(),
+    });
+    async function buscarPorRnc() {
+      const num = limpiarDocumento(rncRapido.value);
+      estatusRnc.className = 'ayuda';
+      if (!num) { estatusRnc.textContent = ''; return; }
+      estatusRnc.textContent = 'Consultando la DGII…';
+      const r = await buscarRNC(num);
+      estatusRnc.textContent = r.mensaje;
+      if (r.resultado === 'inactivo' || r.resultado === 'noEncontrado' || r.resultado === 'invalido') {
+        estatusRnc.className = 'error';
+        if (r.resultado === 'inactivo') toast(r.mensaje, 'error');
+        return;
+      }
+      if (r.resultado !== 'activo') {
+        // Sin conexión o sin nube: si el cliente ya está guardado con ese documento, se elige igual
+        const [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
+        if (ya) cliente.value = String(ya.id);
+        return;
+      }
+      let [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
+      if (!ya) {
+        await ejecutar('INSERT INTO clientes (nombre, tipo_doc, documento) VALUES (?,?,?)', [r.datos.nombre, num.length === 9 ? 'rnc' : 'cedula', num]);
+        [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
+        await cargarClientes();
+      }
+      cliente.value = String(ya.id);
+      pintarTotales();
+    }
     const metodo = h('select', { class: 'campo', 'aria-label': 'Método de pago', onChange: () => pintarTotales() },
       OPCIONES_PAGO.map(([k, t]) => h('option', { value: k }, t)));
     const descuento = h('input', {
@@ -401,9 +442,21 @@ export async function vistaVentas(raiz) {
       if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente.'; cliente.focus(); return; }
       if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return; }
 
+      // Comprobantes de crédito fiscal: el RNC del cliente debe estar ACTIVO en la DGII (si no se puede consultar, se deja pasar)
+      if (cfgF.modo !== 'no' && cliente.value && tipoNcf.value !== 'B02' && tipoNcf.value !== 'ninguno') {
+        const [cl] = await consultar('SELECT documento FROM clientes WHERE id = ?', [Number(cliente.value)]);
+        if (cl?.documento && limpiarDocumento(cl.documento).length === 9) {
+          const r = await buscarRNC(cl.documento);
+          if (r.resultado === 'inactivo' || r.resultado === 'noEncontrado') {
+            error.textContent = `${r.mensaje} Cambia el comprobante a Consumo (B02) o elige otro cliente.`; return;
+          }
+        }
+      }
+
       botonCobrar.disabled = true;
       try {
         const numero = await registrarVenta({
+          tipo_ncf: cfgF.modo === 'no' ? 'ninguno' : tipoNcf.value,
           cliente_id: cliente.value ? Number(cliente.value) : null,
           items: [...carrito.values()].map((l) => ({
             producto_id: l.p.id, cantidad: l.cantidad, precio_unitario: l.precio, descuento: 0,
@@ -451,6 +504,9 @@ export async function vistaVentas(raiz) {
             class: 'btn',
             onClick: () => formularioCliente(null, async (id) => { await cargarClientes(); if (id) cliente.value = String(id); }),
           }, 'Nuevo')),
+        h('label', { class: 'etiqueta' }, 'RNC / cédula del cliente', rncRapido),
+        estatusRnc,
+        cfgF.modo === 'no' ? null : h('label', { class: 'etiqueta' }, 'Tipo de comprobante', tipoNcf),
         h('div', { class: 'rejilla' },
           h('label', { class: 'etiqueta' }, 'Método de pago', metodo),
           h('label', { class: 'etiqueta' }, 'Descuento', descuento)),

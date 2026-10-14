@@ -9,6 +9,7 @@ import {
   hashClave, verificarClave, firmar, verificar, uid, codigoRecuperacion, normalizarCodigo, normalizarUsuario,
   errorUsuario, errorCorreo, errorClave, codigoDispositivo,
 } from './seguridad.js';
+import { prepararTablaRNC, consultarRNC, estadoPadron, importarPadron, descargarPadron } from './dgii.js';
 import { abrirBase, transaccion, siguienteVersion, TABLAS_SYNC } from './db.js';
 
 const ROLES = ['admin', 'gerente', 'vendedor', 'cajero', 'almacen'];
@@ -44,8 +45,9 @@ function servirEstatico(carpeta, req, res) {
   if (req.method === 'HEAD') res.end(); else fs.createReadStream(archivo).pipe(res);
 }
 
-export function crearServidor({ db, secreto, origenes = '*', estaticos = null, clavePropietario = '', aprobacionAutomatica = false }) {
+export function crearServidor({ db, secreto, origenes = '*', estaticos = null, clavePropietario = '', aprobacionAutomatica = false, urlPadron = undefined, fetchPadron = undefined }) {
   if (!secreto || secreto.length < 16) throw new Error('Falta JWT_SECRET (mínimo 16 caracteres).');
+  prepararTablaRNC(db);
   const intentos = new Map(); // límite de intentos de acceso por IP + usuario
 
   // ---------- Utilidades ----------
@@ -134,6 +136,14 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
 
   // ---------- Rutas ----------
   const rutas = {
+    // Consulta de RNC/cédula en el padrón de la DGII (cualquier usuario con sesión)
+    'GET /api/rnc/:numero': (req, b, p) => { autenticar(req); return consultarRNC(db, p.numero); },
+    'GET /api/rnc-estado': (req) => { autenticar(req); return estadoPadron(db); },
+    'POST /api/rnc-actualizar': async (req) => {
+      exigirAdmin(autenticar(req));
+      try { return { cantidad: await descargarPadron(db, { url: urlPadron, fetchFn: fetchPadron }) }; }
+      catch (e) { falla(502, `No se pudo bajar el listado de la DGII (${e.message}). Descarga DGII_RNC.zip desde dgii.gov.do y súbelo con "Subir archivo".`); }
+    },
     'GET /api/salud': () => ({ ok: true, hora: new Date().toISOString() }),
 
     'POST /api/registro': (req, b) => {
@@ -631,6 +641,22 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       try { servirEstatico(estaticos, req, res); } catch { res.writeHead(500); res.end(); }
       return;
     }
+    if (req.method === 'POST' && ruta0 === '/api/rnc-importar') {
+      // Archivo grande (DGII_RNC.zip o .txt) en bruto, sin JSON
+      const cab = { 'Access-Control-Allow-Origin': origenes, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+      try {
+        exigirAdmin(autenticar(req));
+        const partes = []; let total = 0;
+        for await (const d of req) { total += d.length; if (total > 400 * 1024 * 1024) falla(413, 'El archivo es demasiado grande.'); partes.push(d); }
+        let n;
+        try { n = importarPadron(db, Buffer.concat(partes)); } catch (e) { falla(400, e.message); }
+        res.writeHead(200, cab); res.end(JSON.stringify({ cantidad: n }));
+      } catch (e) {
+        res.writeHead(e instanceof ErrorHttp ? e.estado : 500, cab);
+        res.end(JSON.stringify({ error: e instanceof ErrorHttp ? e.message : 'Error interno del servidor.' }));
+      }
+      return;
+    }
     const cabeceras = {
       'Access-Control-Allow-Origin': origenes,
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
@@ -670,6 +696,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const dist = path.resolve(process.env.STATIC_DIR || path.join(aqui, '..', 'dist'));
   const estaticos = fs.existsSync(path.join(dist, 'index.html')) ? dist : null;
   const puerto = Number(process.env.PORT) || 3000;
+  // Padrón de la DGII: se baja al arrancar si no hay datos o tiene más de 7 días, y se revisa cada día
+  const refrescarPadron = () => {
+    const e = estadoPadron(db);
+    if (e.cantidad && Date.now() - Date.parse(e.actualizado) < 7 * 86400000) return;
+    descargarPadron(db, { url: process.env.DGII_RNC_URL || undefined }).then((n) => console.log(`Padrón DGII actualizado: ${n} contribuyentes.`)).catch((x) => console.error(`Padrón DGII: ${x.message}`));
+  };
+  setTimeout(refrescarPadron, 15000).unref();
+  setInterval(refrescarPadron, 86400000).unref();
   crearServidor({
     db, secreto, origenes: process.env.ALLOWED_ORIGINS || '*', estaticos,
     clavePropietario: process.env.OWNER_PASSWORD || '', aprobacionAutomatica: process.env.APROBACION_AUTOMATICA === '1',

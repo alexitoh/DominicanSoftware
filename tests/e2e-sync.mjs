@@ -268,6 +268,21 @@ await A.motor.sincronizar();
 assert.equal((await uno(A, "SELECT estado FROM asientos WHERE numero = 'A-A000001'")).estado, 'anulado');
 ok('el catálogo de cuentas base no se duplica; asientos, cuentas nuevas y períodos cerrados se sincronizan entre dispositivos');
 
+// ---------- 9d. Padrón de la DGII en el servidor ----------
+assert.equal((await A.nube.consultarRNC('101123456')).padronVacio, true, 'sin listado cargado avisa que está vacío');
+const padron = ['101123456|ELECTRO SONIDO SRL|VENTA|15/03/2010|ACTIVO|NORMAL', '130999888|DISTRIBUIDORA SA|COMERCIO|01/01/2005|SUSPENDIDO|NORMAL'].join('\n');
+const sinSesion = await fetch(`${BASE}/api/rnc-importar`, { method: 'POST', body: padron });
+assert.equal(sinSesion.status, 401, 'sin sesión no se puede cargar el listado');
+const subida = await fetch(`${BASE}/api/rnc-importar`, { method: 'POST', headers: { Authorization: `Bearer ${A.token}` }, body: padron });
+assert.equal((await subida.json()).cantidad, 2);
+assert.equal((await A.nube.consultarRNC('101-12345-6')).activo, true);
+assert.equal((await A.nube.consultarRNC('130999888')).estado, 'SUSPENDIDO');
+assert.equal((await A.nube.estadoPadron()).cantidad, 2);
+const malo = await fetch(`${BASE}/api/rnc-importar`, { method: 'POST', headers: { Authorization: `Bearer ${A.token}` }, body: 'basura' });
+assert.equal(malo.status, 400);
+await assert.rejects(() => crearCliente({ base: () => BASE }).consultarRNC('101123456'), /sesión/i);
+ok('el servidor guarda el listado de la DGII, lo consulta por RNC con sesión y rechaza archivos inválidos');
+
 // ---------- 10. Seguridad y cuentas del servidor ----------
 const r = await fetch(`${BASE}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
 assert.equal(r.status, 401);

@@ -9,6 +9,7 @@ const MAPA = {
   '@capacitor/filesystem': 'vacio.mjs',
   '@capacitor/share': 'vacio.mjs',
   'jeep-sqlite/loader': 'vacio.mjs',
+  jspdf: 'vacio.mjs',
 };
 export async function resolve(spec, ctx, next) {
   if (MAPA[spec]) return { url: pathToFileURL(path.join(aqui, MAPA[spec])).href, shortCircuit: true };

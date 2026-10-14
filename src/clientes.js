@@ -4,6 +4,7 @@ import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
 import { hoyISO } from './fechas.js';
+import { buscarRNC } from './dgii.js';
 import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
 
 // Lo que debe una venta a crédito: total menos lo abonado
@@ -38,8 +39,32 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
   const condicion = campoCondicion(c);
   const error = h('p', { class: 'error', role: 'alert' });
 
+  // Consulta a la DGII: con 9 u 11 números llena el nombre solo si el contribuyente está ACTIVO; si no, avisa su estatus
+  const estatusDgii = h('p', { class: 'ayuda', role: 'status' });
+  let ultimaConsulta = null; // { numero, resultado }
+  async function consultarDgii() {
+    const num = limpiarDocumento(documento.value);
+    if (tipoDoc.value === 'dni' || !/^(\d{9}|\d{11})$/.test(num)) { estatusDgii.textContent = ''; ultimaConsulta = null; return; }
+    estatusDgii.className = 'ayuda'; estatusDgii.textContent = 'Consultando la DGII…';
+    const r = await buscarRNC(num);
+    if (limpiarDocumento(documento.value) !== num) return; // cambió mientras se consultaba
+    ultimaConsulta = { numero: num, resultado: r.resultado };
+    estatusDgii.textContent = r.mensaje;
+    estatusDgii.className = r.resultado === 'activo' ? 'ayuda' : (r.resultado === 'inactivo' || r.resultado === 'noEncontrado') ? 'error' : 'ayuda';
+    if (r.resultado === 'activo') {
+      tipoDoc.value = num.length === 9 ? 'rnc' : 'cedula';
+      if (!nombre.value.trim() || nombre.dataset.dgii === '1') { nombre.value = r.datos.nombre; nombre.dataset.dgii = '1'; }
+    }
+  }
+  documento.addEventListener('change', consultarDgii);
+  documento.addEventListener('input', () => { if (/^(\d{9}|\d{11})$/.test(limpiarDocumento(documento.value))) consultarDgii(); });
+  nombre.addEventListener('input', () => { nombre.dataset.dgii = '0'; });
+
   async function guardar() {
     error.textContent = '';
+    if (ultimaConsulta?.resultado === 'inactivo' && ultimaConsulta.numero === limpiarDocumento(documento.value)) {
+      error.textContent = `${estatusDgii.textContent} Corrige el RNC o quítalo para guardar al cliente sin documento.`; documento.focus(); return;
+    }
     const n = nombre.value.trim();
     if (!n) { error.textContent = 'Escribe el nombre del cliente.'; nombre.focus(); return; }
     const cond = condicion.valores();
@@ -91,6 +116,8 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       campo('Nombre', nombre),
       campo('Teléfono', telefono),
       h('div', { class: 'etiqueta' }, 'Identificación fiscal', h('div', { class: 'par' }, tipoDoc, documento)),
+      estatusDgii,
+      h('button', { class: 'btn chico', onClick: consultarDgii }, 'Verificar en la DGII'),
       campo('Dirección principal', direccion),
       campo('Notas', notas),
       condicion.el,

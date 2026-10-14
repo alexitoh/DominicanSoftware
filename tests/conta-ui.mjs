@@ -5,8 +5,7 @@ const mem = new Map();
 globalThis.localStorage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
 
 class Nodo {
-  constructor(tag) { this.tag = tag; this.hijos = []; this.attrs = {}; this.oyentes = {}; this.value = ''; this.checked = false; this.hidden = false; this.className = ''; this.parentElement = null; this.nodeType = 1; this.disabled = false; this.textContent = ''; }
-  get dataset() { return new Proxy({}, { get: (_, k) => this.attrs[`data-${k}`] }); }
+  constructor(tag) { this.tag = tag; this.hijos = []; this.attrs = {}; this.oyentes = {}; this.value = ''; this.checked = false; this.hidden = false; this.className = ''; this.parentElement = null; this.nodeType = 1; this.disabled = false; this.style = {}; this.dataset = {}; this.textContent = ''; }
   getAttribute(k) { return this.attrs[k]; }
   get children() { return this.hijos.filter((x) => x.nodeType === 1); }
   append(...c) { for (const x of c) { if (x == null) continue; if (x.parentElement) x.remove(); x.parentElement = this; this.hijos.push(x); } }
@@ -19,7 +18,9 @@ class Nodo {
   todos(f, out = []) { for (const x of this.hijos) { if (x.nodeType === 1) { if (f(x)) out.push(x); x.todos(f, out); } } return out; }
   querySelectorAll(s) { const t = s.replace(/[^a-z]/g, ''); return this.todos((x) => x.tag === t); }
   scrollIntoView() {}
-  get texto() { return this.hijos.map((x) => (x.nodeType === 3 ? x.texto : x.texto)).join(' '); }
+  focus() {}
+  get texto() { return [this.textContent, ...this.hijos].filter((x) => x !== '').map((x) => (typeof x === 'string' ? x : x.texto)).join(' '); }
+  get textoViejo() { return this.hijos.map((x) => (x.nodeType === 3 ? x.texto : x.texto)).join(' '); }
 }
 class Txt { constructor(t) { this.nodeType = 3; this.texto = t; this.parentElement = null; } remove() { if (this.parentElement) this.parentElement.hijos = this.parentElement.hijos.filter((x) => x !== this); } }
 globalThis.document = {
@@ -128,6 +129,26 @@ await pulsar(boton(rn, 'Nueva nómina')); await pulsar(boton(rn, 'Parámetros'))
 await pulsar(rn.todos((x) => x.className.includes('fila'))[0]);
 assert.ok(!textoDe(document.body).includes('undefined'));
 ok('formularios y detalles de catálogo, bancos, activos y nómina abren sin errores');
+
+// Facturación: tipo de comprobante y consulta del RNC
+limpiarHojas();
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo','incluido')");
+const { vistaVentas } = await import('../src/ventas.js');
+const rv = new Nodo('div'); await vistaVentas(rv); await pausa();
+await pulsar(boton(rv, 'Nueva venta'));
+const venta = document.body.hijos.at(-1);
+const selTipo = venta.todos((x) => x.tag === 'select' && x.attrs['aria-label'] === 'Tipo de comprobante')[0];
+assert.ok(selTipo, 'la venta tiene el selector de tipo de comprobante');
+assert.deepEqual(selTipo.todos((x) => x.tag === 'option').map((o) => o.attrs.value), ['auto', 'B01', 'B02', 'B14', 'B15', 'ninguno']);
+const rncBox = venta.todos((x) => x.tag === 'input' && x.attrs['aria-label'] === 'RNC del cliente')[0];
+assert.ok(rncBox, 'la venta tiene la casilla de RNC');
+rncBox.value = '101123456'; await rncBox.disparar('change'); await pausa();
+assert.ok(textoDe(venta).includes('conectado a la nube'), 'sin nube explica qué falta: ' + textoDe(venta).slice(0, 100));
+limpiarHojas();
+const { formularioCliente } = await import('../src/clientes.js');
+formularioCliente(); await pausa();
+assert.ok(textoDe(document.body).includes('Verificar en la DGII'));
+ok('la venta muestra el tipo de comprobante y la casilla de RNC; el cliente tiene el botón de la DGII');
 
 console.log(`\n${n} grupos OK`);
 process.exit(0);

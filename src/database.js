@@ -139,7 +139,7 @@ export const margenDesde = (costo, precio) => (costo > 0 ? redondear(((precio - 
 export const margenProducto = (p) => (p.margen != null ? p.margen : margenDesde(p.costo, p.precio));
 
 // metodo_pago 'credito' = venta fiada: exige cliente y admite un pago inicial
-export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null }) {
+export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null, tipo_ncf = 'auto' }) {
   if (!items.length && !servicios.length) throw new Error('Agrega al menos un producto o servicio.');
   for (const sv of servicios) {
     if (!String(sv.descripcion || '').trim()) throw new Error('Todos los servicios necesitan una descripción.');
@@ -189,7 +189,7 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     ],
     descuento, tasa: cfgF.tasa, modo: cfgF.modo,
   });
-  const ncf = cfgF.modo === 'no' ? null : await siguienteNCF(cliente_id);
+  const ncf = cfgF.modo === 'no' || tipo_ncf === 'ninguno' ? null : await siguienteNCF(cliente_id, tipo_ncf);
 
   const numero = await numeroDocumento('V', 'siguiente_numero_venta');
 
@@ -756,16 +756,26 @@ export async function guardarSecuenciaNCF(tipo, sig, hasta) {
   }
 }
 
-// Elige B01 (crédito fiscal) si el cliente tiene RNC y hay secuencia B01; si no, B02. Sin secuencia, la venta queda sin NCF.
-async function siguienteNCF(clienteId) {
+// Tipo de comprobante: 'auto' elige B01 (crédito fiscal) si el cliente tiene RNC y hay secuencia B01; si no, B02 (si no hay secuencia, la venta queda sin NCF).
+// Si se pide un tipo concreto, se exige que se pueda emitir: B01, B14 y B15 necesitan un cliente con RNC, y todos una secuencia autorizada con números disponibles.
+async function siguienteNCF(clienteId, pedido = 'auto') {
   const sec = await leerSecuenciasNCF();
   const util = (t) => sec.find((s) => s.tipo === t && s.sig > 0 && s.sig <= s.hasta);
-  let tipo = null;
+  let tieneRnc = false;
   if (clienteId) {
     const [c] = await consultar('SELECT tipo_doc, documento FROM clientes WHERE id = ?', [clienteId]);
-    if (c?.documento && limpiarDocumento(c.documento).length === 9 && util('B01')) tipo = 'B01';
+    tieneRnc = !!c?.documento && limpiarDocumento(c.documento).length === 9;
   }
-  if (!tipo && util('B02')) tipo = 'B02';
+  let tipo = null;
+  if (pedido && pedido !== 'auto') {
+    if (!TIPOS_NCF[pedido]) throw new Error('Tipo de comprobante desconocido.');
+    if (pedido !== 'B02' && !tieneRnc) throw new Error(`El comprobante ${pedido} (${TIPOS_NCF[pedido]}) necesita un cliente con RNC.`);
+    if (!util(pedido)) throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Datos fiscales.`);
+    tipo = pedido;
+  } else {
+    if (tieneRnc && util('B01')) tipo = 'B01';
+    if (!tipo && util('B02')) tipo = 'B02';
+  }
   if (!tipo) return null;
   const s = util(tipo);
   const ncf = formatearNCF(tipo, s.sig);
