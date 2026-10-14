@@ -332,3 +332,199 @@ INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('siguiente_numero_recibo', '1'),
   ('itbis_modo', 'no'),
   ('itbis_tasa', '18');
+
+-- ---------- Contabilidad ----------
+CREATE TABLE IF NOT EXISTS centros_costo (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo TEXT,
+  nombre TEXT NOT NULL,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS cuentas_contables (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo TEXT NOT NULL UNIQUE,
+  nombre TEXT NOT NULL,
+  tipo TEXT NOT NULL,                 -- activo | pasivo | patrimonio | ingreso | costo | gasto
+  grupo INTEGER NOT NULL DEFAULT 0,   -- 1 = título (no admite movimientos)
+  rol TEXT,                           -- función para la contabilización automática
+  categoria_gasto TEXT,               -- categoría de gasto de Caja que carga a esta cuenta
+  sistema INTEGER NOT NULL DEFAULT 0, -- 1 = viene con el sistema (no se borra)
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS asientos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  fecha TEXT NOT NULL,
+  concepto TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT 'manual', -- manual | apertura | cierre
+  estado TEXT NOT NULL DEFAULT 'vigente', -- vigente | anulado
+  referencia TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS asiento_lineas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asiento_id INTEGER NOT NULL REFERENCES asientos(id),
+  cuenta_id INTEGER NOT NULL REFERENCES cuentas_contables(id),
+  debe REAL NOT NULL DEFAULT 0,
+  haber REAL NOT NULL DEFAULT 0,
+  detalle TEXT,
+  centro_id INTEGER REFERENCES centros_costo(id)
+);
+CREATE INDEX IF NOT EXISTS idx_asiento_lineas ON asiento_lineas(asiento_id);
+
+CREATE TABLE IF NOT EXISTS cuentas_bancarias (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL,
+  banco TEXT,
+  numero TEXT,
+  cuenta_id INTEGER REFERENCES cuentas_contables(id),
+  predeterminada INTEGER NOT NULL DEFAULT 0,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS banco_movs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  banco_id INTEGER NOT NULL REFERENCES cuentas_bancarias(id),
+  fecha TEXT NOT NULL,
+  tipo TEXT NOT NULL,                 -- deposito | retiro | cheque | transferencia | comision | interes
+  monto REAL NOT NULL,
+  contra_cuenta_id INTEGER REFERENCES cuentas_contables(id),
+  banco_destino_id INTEGER REFERENCES cuentas_bancarias(id),
+  referencia TEXT,
+  detalle TEXT,
+  estado TEXT NOT NULL DEFAULT 'vigente'
+);
+
+CREATE TABLE IF NOT EXISTS conciliaciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  banco_id INTEGER NOT NULL REFERENCES cuentas_bancarias(id),
+  ref TEXT NOT NULL,
+  fecha TEXT NOT NULL DEFAULT (date('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS activos_fijos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo TEXT,
+  nombre TEXT NOT NULL,
+  fecha_adq TEXT NOT NULL,
+  costo REAL NOT NULL,
+  residual REAL NOT NULL DEFAULT 0,
+  vida_meses INTEGER NOT NULL,
+  contra_cuenta_id INTEGER REFERENCES cuentas_contables(id),
+  estado TEXT NOT NULL DEFAULT 'activo', -- activo | baja
+  fecha_baja TEXT,
+  notas TEXT
+);
+
+CREATE TABLE IF NOT EXISTS empleados (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL,
+  cedula TEXT,
+  cargo TEXT,
+  salario REAL NOT NULL DEFAULT 0,
+  fecha_ingreso TEXT,
+  centro_id INTEGER REFERENCES centros_costo(id),
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS nomina_corridas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  periodo TEXT NOT NULL,              -- AAAA-MM
+  fecha TEXT NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'vigente', -- vigente | anulada
+  pagada INTEGER NOT NULL DEFAULT 0,
+  fecha_pago TEXT,
+  metodo_pago TEXT,
+  notas TEXT
+);
+
+CREATE TABLE IF NOT EXISTS nomina_detalle (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  corrida_id INTEGER NOT NULL REFERENCES nomina_corridas(id),
+  empleado_id INTEGER NOT NULL REFERENCES empleados(id),
+  salario REAL NOT NULL DEFAULT 0,
+  otros_ingresos REAL NOT NULL DEFAULT 0,
+  afp REAL NOT NULL DEFAULT 0,
+  sfs REAL NOT NULL DEFAULT 0,
+  isr REAL NOT NULL DEFAULT 0,
+  otros_desc REAL NOT NULL DEFAULT 0,
+  neto REAL NOT NULL DEFAULT 0,
+  afp_pat REAL NOT NULL DEFAULT 0,
+  sfs_pat REAL NOT NULL DEFAULT 0,
+  srl_pat REAL NOT NULL DEFAULT 0,
+  infotep REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS presupuestos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  anio INTEGER NOT NULL,
+  cuenta_id INTEGER NOT NULL REFERENCES cuentas_contables(id),
+  mes INTEGER NOT NULL,
+  monto REAL NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS periodos_cerrados (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  periodo TEXT NOT NULL                -- AAAA-MM
+);
+
+INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categoria_gasto, sistema) VALUES
+  ('1', 'ACTIVOS', 'activo', 1, NULL, NULL, 1),
+  ('11', 'Activos corrientes', 'activo', 1, NULL, NULL, 1),
+  ('1101', 'Caja general', 'activo', 0, 'caja', NULL, 1),
+  ('1110', 'Bancos', 'activo', 0, 'banco', NULL, 1),
+  ('1201', 'Cuentas por cobrar clientes', 'activo', 0, 'cxc', NULL, 1),
+  ('1210', 'ITBIS pagado por adelantado', 'activo', 0, 'itbis_adelantado', NULL, 1),
+  ('1301', 'Inventario de mercancía', 'activo', 0, 'inventario', NULL, 1),
+  ('15', 'Activos no corrientes', 'activo', 1, NULL, NULL, 1),
+  ('1501', 'Mobiliario y equipos', 'activo', 0, 'activo_fijo', NULL, 1),
+  ('1599', 'Depreciación acumulada', 'activo', 0, 'dep_acumulada', NULL, 1),
+  ('2', 'PASIVOS', 'pasivo', 1, NULL, NULL, 1),
+  ('21', 'Pasivos corrientes', 'pasivo', 1, NULL, NULL, 1),
+  ('2101', 'Cuentas por pagar proveedores', 'pasivo', 0, 'cxp', NULL, 1),
+  ('2110', 'ITBIS por pagar', 'pasivo', 0, 'itbis_pagar', NULL, 1),
+  ('2120', 'TSS por pagar', 'pasivo', 0, 'tss_pagar', NULL, 1),
+  ('2121', 'ISR retenido por pagar', 'pasivo', 0, 'isr_pagar', NULL, 1),
+  ('2130', 'Sueldos por pagar', 'pasivo', 0, 'sueldos_pagar', NULL, 1),
+  ('2140', 'Otras retenciones por pagar', 'pasivo', 0, 'otros_pagar', NULL, 1),
+  ('25', 'Pasivos no corrientes', 'pasivo', 1, NULL, NULL, 1),
+  ('2501', 'Préstamos bancarios a largo plazo', 'pasivo', 0, NULL, NULL, 1),
+  ('3', 'PATRIMONIO', 'patrimonio', 1, NULL, NULL, 1),
+  ('3101', 'Capital social', 'patrimonio', 0, 'capital', NULL, 1),
+  ('3201', 'Utilidades acumuladas', 'patrimonio', 0, 'utilidades_acum', NULL, 1),
+  ('3301', 'Utilidad del ejercicio', 'patrimonio', 0, 'utilidad_ejercicio', NULL, 1),
+  ('3401', 'Retiros del propietario', 'patrimonio', 0, NULL, NULL, 1),
+  ('4', 'INGRESOS', 'ingreso', 1, NULL, NULL, 1),
+  ('4101', 'Ventas de mercancía', 'ingreso', 0, 'ventas', NULL, 1),
+  ('4102', 'Ingresos por servicios', 'ingreso', 0, 'servicios', NULL, 1),
+  ('4201', 'Otros ingresos', 'ingreso', 0, 'otros_ingresos', NULL, 1),
+  ('5', 'COSTOS', 'costo', 1, NULL, NULL, 1),
+  ('5101', 'Costo de ventas', 'costo', 0, 'costo_ventas', NULL, 1),
+  ('6', 'GASTOS', 'gasto', 1, NULL, NULL, 1),
+  ('6101', 'Sueldos y salarios', 'gasto', 0, 'gasto_sueldos', 'Sueldos', 1),
+  ('6102', 'Aportes patronales (TSS, INFOTEP)', 'gasto', 0, 'gasto_tss', NULL, 1),
+  ('6201', 'Alquiler', 'gasto', 0, NULL, 'Alquiler', 1),
+  ('6202', 'Luz y agua', 'gasto', 0, NULL, 'Luz y agua', 1),
+  ('6203', 'Internet y teléfono', 'gasto', 0, NULL, 'Internet y teléfono', 1),
+  ('6204', 'Transporte', 'gasto', 0, NULL, 'Transporte', 1),
+  ('6205', 'Mantenimiento y reparaciones', 'gasto', 0, NULL, 'Mantenimiento', 1),
+  ('6206', 'Depreciación', 'gasto', 0, 'gasto_depreciacion', NULL, 1),
+  ('6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario', NULL, 1),
+  ('6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros', 1);
+
+
+INSERT OR IGNORE INTO config (clave, valor) VALUES
+  ('siguiente_numero_asiento', '1'),
+  ('siguiente_numero_bancomov', '1'),
+  ('siguiente_numero_nomina', '1'),
+  ('conta_inicio', ''),
+  ('nom_afp_emp', '2.87'), ('nom_sfs_emp', '3.04'),
+  ('nom_afp_pat', '7.10'), ('nom_sfs_pat', '7.09'), ('nom_srl_pat', '1.10'), ('nom_infotep', '1.00'),
+  ('nom_tope_afp', '464460'), ('nom_tope_sfs', '232230'), ('nom_tope_srl', '92892'),
+  ('nom_isr_exento', '416220');

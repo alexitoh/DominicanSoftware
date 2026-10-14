@@ -12,7 +12,7 @@ import {
 import { abrirBase, transaccion, siguienteVersion, TABLAS_SYNC } from './db.js';
 
 const ROLES = ['admin', 'gerente', 'vendedor', 'cajero', 'almacen'];
-const PERMISOS = ['ventas', 'productos', 'inventario', 'compras', 'caja', 'cuentas', 'clientes', 'proveedores', 'garantias', 'reportes', 'ajustes', 'anular'];
+const PERMISOS = ['ventas', 'productos', 'inventario', 'compras', 'caja', 'cuentas', 'clientes', 'proveedores', 'garantias', 'reportes', 'contabilidad', 'ajustes', 'anular'];
 const MAX_CUERPO = 12 * 1024 * 1024;
 const LIMITE_PAGINA = 500;
 

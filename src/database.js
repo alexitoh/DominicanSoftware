@@ -96,6 +96,7 @@ export const onEscritura = (fn) => { alEscribir = fn; };
 // Usuario que tiene la sesión abierta: queda guardado en cada venta, compra y cotización
 let usuarioActualId = null;
 export const setUsuarioActual = (id) => { usuarioActualId = id ?? null; };
+export const usuarioId = () => usuarioActualId;
 
 export const consultar = async (sql, valores = []) =>
   (await db.query(sql, valores)).values ?? [];

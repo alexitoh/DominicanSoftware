@@ -77,12 +77,41 @@ export const TABLAS = [
     ],
     inmutable: true,
   },
+  // ---- Contabilidad ----
+  { t: 'centros_costo', cols: ['codigo', 'nombre', 'activo'] },
+  { t: 'cuentas_contables', cols: ['codigo', 'nombre', 'tipo', 'grupo', 'rol', 'categoria_gasto', 'sistema', 'activo'], unicos: ['codigo'] },
+  { t: 'asientos', cols: ['numero', 'fecha', 'concepto', 'tipo', 'estado', 'referencia', 'creado'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },
+  {
+    t: 'asiento_lineas', cols: ['debe', 'haber', 'detalle'],
+    refs: [{ col: 'asiento_id', tabla: 'asientos' }, { col: 'cuenta_id', tabla: 'cuentas_contables' }, { col: 'centro_id', tabla: 'centros_costo' }],
+  },
+  { t: 'cuentas_bancarias', cols: ['nombre', 'banco', 'numero', 'predeterminada', 'activo'], refs: [{ col: 'cuenta_id', tabla: 'cuentas_contables' }] },
+  {
+    t: 'banco_movs', cols: ['numero', 'fecha', 'tipo', 'monto', 'referencia', 'detalle', 'estado'],
+    refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'contra_cuenta_id', tabla: 'cuentas_contables' }, { col: 'banco_destino_id', tabla: 'cuentas_bancarias' }],
+    unicos: ['numero'],
+  },
+  { t: 'conciliaciones', cols: ['ref', 'fecha'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }] },
+  {
+    t: 'activos_fijos', cols: ['codigo', 'nombre', 'fecha_adq', 'costo', 'residual', 'vida_meses', 'estado', 'fecha_baja', 'notas'],
+    refs: [{ col: 'contra_cuenta_id', tabla: 'cuentas_contables' }],
+  },
+  { t: 'empleados', cols: ['nombre', 'cedula', 'cargo', 'salario', 'fecha_ingreso', 'activo'], refs: [{ col: 'centro_id', tabla: 'centros_costo' }] },
+  { t: 'nomina_corridas', cols: ['numero', 'periodo', 'fecha', 'estado', 'pagada', 'fecha_pago', 'metodo_pago', 'notas'], unicos: ['numero'] },
+  {
+    t: 'nomina_detalle',
+    cols: ['salario', 'otros_ingresos', 'afp', 'sfs', 'isr', 'otros_desc', 'neto', 'afp_pat', 'sfs_pat', 'srl_pat', 'infotep'],
+    refs: [{ col: 'corrida_id', tabla: 'nomina_corridas' }, { col: 'empleado_id', tabla: 'empleados' }],
+  },
+  { t: 'presupuestos', cols: ['anio', 'mes', 'monto'], refs: [{ col: 'cuenta_id', tabla: 'cuentas_contables' }] },
+  { t: 'periodos_cerrados', cols: ['periodo'] },
   { t: 'bitacora', cols: ['fecha', 'usuario', 'accion', 'detalle'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], inmutable: true },
   { t: 'config', cols: ['valor'], clave: 'clave' },
 ];
 
 // Ajustes del negocio que se comparten entre dispositivos (los contadores de numeración y el idioma son de cada uno)
-export const CONFIG_COMPARTIDA = ['negocio_nombre', 'negocio_telefono', 'negocio_direccion', 'negocio_logo', 'moneda', 'margen_defecto', 'idioma_factura', 'negocio_rnc', 'itbis_modo', 'itbis_tasa'];
+export const CONFIG_COMPARTIDA = ['negocio_nombre', 'negocio_telefono', 'negocio_direccion', 'negocio_logo', 'moneda', 'margen_defecto', 'idioma_factura', 'negocio_rnc', 'itbis_modo', 'itbis_tasa',
+  'conta_inicio', 'nom_afp_emp', 'nom_sfs_emp', 'nom_afp_pat', 'nom_sfs_pat', 'nom_srl_pat', 'nom_infotep', 'nom_tope_afp', 'nom_tope_sfs', 'nom_tope_srl', 'nom_isr_exento'];
 
 export const CATEGORIAS_BASE = ['Bajos / Subwoofers', 'Bocinas', 'Amplificadores', 'Pantallas / Radios', 'Cables y accesorios', 'Otros'];
 
@@ -98,11 +127,19 @@ const ALEATORIO = 'lower(hex(randomblob(12)))';
 // Expresión SQL del uid de un registro nuevo. prefijo: 'NEW.' en triggers, '' en actualizaciones masivas.
 function exprUid(d, prefijo) {
   if (d.t === 'config') return `${prefijo}clave`;
+  // En actualizaciones masivas (prefijo vacío) la fila se cita por el nombre de la tabla; la subconsulta usa el alias x
+  const f = prefijo || `${d.t}.`;
   if (d.t === 'categorias') {
     // Las categorías que trae la app tienen uid fijo para que todos los dispositivos coincidan
-    return `CASE WHEN ${prefijo}nombre IN (${lista(CATEGORIAS_BASE)})
-                  AND NOT EXISTS (SELECT 1 FROM categorias WHERE uid = 'c:' || lower(${prefijo}nombre))
-                THEN 'c:' || lower(${prefijo}nombre) ELSE ${ALEATORIO} END`;
+    return `CASE WHEN ${f}nombre IN (${lista(CATEGORIAS_BASE)})
+                  AND NOT EXISTS (SELECT 1 FROM categorias x WHERE x.uid = 'c:' || lower(${f}nombre))
+                THEN 'c:' || lower(${f}nombre) ELSE ${ALEATORIO} END`;
+  }
+  if (d.t === 'cuentas_contables') {
+    // Las cuentas que trae el sistema tienen uid fijo para que todos los dispositivos coincidan
+    return `CASE WHEN ${f}sistema = 1
+                  AND NOT EXISTS (SELECT 1 FROM cuentas_contables x WHERE x.uid = 'cc:' || ${f}codigo)
+                THEN 'cc:' || ${f}codigo ELSE ${ALEATORIO} END`;
   }
   return ALEATORIO;
 }

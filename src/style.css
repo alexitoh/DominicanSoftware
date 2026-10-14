@@ -332,3 +332,21 @@ textarea.campo { resize: vertical; }
 
 .linea-pago { display: grid; gap: .35rem; margin-bottom: .6rem; padding-bottom: .6rem; border-bottom: 1px dashed var(--linea); }
 .linea-pago .par { grid-template-columns: 1fr 1fr; margin-top: 0; }
+
+/* ---------- Contabilidad ---------- */
+.conta-tabs { overflow-x: auto; flex-wrap: nowrap; white-space: nowrap; margin: .5rem 1rem; }
+.conta-tabs button { flex: 0 0 auto; }
+.tabla-caja { overflow-x: auto; margin: .5rem 1rem; -webkit-overflow-scrolling: touch; }
+.tabla { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.tabla th, .tabla td { padding: .45rem .5rem; text-align: left; border-bottom: 1px solid var(--linea); vertical-align: middle; }
+.tabla th { font-weight: 600; white-space: nowrap; }
+.tabla td.num, .tabla th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tabla tr.total td { font-weight: 700; border-top: 2px solid currentColor; }
+.tabla input.campo { min-width: 5rem; padding: .3rem; }
+.cuerpo-reporte { padding-bottom: 1rem; }
+.linea-asiento { display: grid; gap: .4rem; padding: .6rem 0; border-bottom: 1px solid var(--linea); }
+.vacio-chico { padding: .75rem 1rem; }
+.enlace { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }
+.fila.apagada { opacity: .55; }
+.btn.chico { padding: .25rem .6rem; font-size: .8rem; }
+.btn.peligro { color: #b3261e; }

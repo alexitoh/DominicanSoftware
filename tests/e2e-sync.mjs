@@ -239,6 +239,35 @@ assert.equal((await uno(A, "SELECT estado FROM recibos WHERE numero = 'R-A000001
 assert.equal((await uno(A, 'SELECT COUNT(*) n FROM pagos WHERE recibo_id = ?', [idRecA])).n, 0);
 ok('los recibos de ingreso, sus métodos de pago y los pagos ligados se sincronizan y se anulan en los dos dispositivos');
 
+// ---------- 9c. Contabilidad: el catálogo base coincide y los asientos viajan con sus cuentas ----------
+const nCuentasA = (await uno(A, 'SELECT COUNT(*) n FROM cuentas_contables')).n;
+await A.motor.sincronizar();
+await B.motor.sincronizar();
+assert.equal((await uno(B, 'SELECT COUNT(*) n FROM cuentas_contables')).n, nCuentasA, 'el catálogo base no se duplica entre dispositivos');
+assert.equal((await uno(B, "SELECT uid FROM cuentas_contables WHERE codigo = '1101'")).uid, 'cc:1101');
+const idCajaA = (await uno(A, "SELECT id FROM cuentas_contables WHERE codigo = '1101'")).id;
+const idCapA = (await uno(A, "SELECT id FROM cuentas_contables WHERE codigo = '3101'")).id;
+A.run("INSERT INTO cuentas_contables (codigo, nombre, tipo) VALUES ('6210', 'Publicidad', 'gasto')");
+A.run("INSERT INTO asientos (numero, fecha, concepto) VALUES ('A-A000001', '2026-03-01', 'Aporte')");
+const idAsA = (await uno(A, "SELECT id FROM asientos WHERE numero = 'A-A000001'")).id;
+A.run('INSERT INTO asiento_lineas (asiento_id, cuenta_id, debe, haber) VALUES (?, ?, 5000, 0)', [idAsA, idCajaA]);
+A.run('INSERT INTO asiento_lineas (asiento_id, cuenta_id, debe, haber) VALUES (?, ?, 0, 5000)', [idAsA, idCapA]);
+A.run("INSERT INTO periodos_cerrados (periodo) VALUES ('2026-02')");
+await A.motor.sincronizar();
+await B.motor.sincronizar();
+const asientoB = await uno(B, "SELECT id FROM asientos WHERE numero = 'A-A000001'");
+const lineasConta = await B.consultar('SELECT c.codigo, l.debe, l.haber FROM asiento_lineas l JOIN cuentas_contables c ON c.id = l.cuenta_id WHERE l.asiento_id = ? ORDER BY l.id', [asientoB.id]);
+assert.deepEqual(lineasConta.map((l) => [l.codigo, l.debe, l.haber]), [['1101', 5000, 0], ['3101', 0, 5000]]);
+assert.equal((await uno(B, "SELECT nombre FROM cuentas_contables WHERE codigo = '6210'")).nombre, 'Publicidad');
+assert.equal((await uno(B, "SELECT COUNT(*) n FROM periodos_cerrados WHERE periodo = '2026-02'")).n, 1);
+// Anular el asiento en B llega a A
+await pausa(5);
+B.run("UPDATE asientos SET estado = 'anulado' WHERE id = ?", [asientoB.id]);
+await B.motor.sincronizar();
+await A.motor.sincronizar();
+assert.equal((await uno(A, "SELECT estado FROM asientos WHERE numero = 'A-A000001'")).estado, 'anulado');
+ok('el catálogo de cuentas base no se duplica; asientos, cuentas nuevas y períodos cerrados se sincronizan entre dispositivos');
+
 // ---------- 10. Seguridad y cuentas del servidor ----------
 const r = await fetch(`${BASE}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
 assert.equal(r.status, 401);

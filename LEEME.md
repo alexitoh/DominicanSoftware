@@ -141,3 +141,25 @@ En el navegador de la computadora la cámara funciona en http://localhost:5173. 
 **Reportes → Flujo de caja**: cobros esperados y pagos a proveedores por fecha límite, con saldo acumulado.
 
 **Límites actuales**: solo modo "precios con ITBIS incluido"; no incluye el formato 608 (NCF anulados), notas de crédito, retenciones ni comprobantes electrónicos (e-CF). El archivo TXT usa el encabezado `FORMATO|RNC|AAAAMM|cantidad` y campos separados con `|`: **valídalo con la herramienta de pre-validación de la DGII y con tu contador antes de enviarlo**.
+
+
+## Contabilidad (ERP contable)
+Módulo **Contabilidad** (permiso `contabilidad`; Administrador y Gerente lo tienen). Pestañas:
+- **Resumen**: efectivo, por cobrar/pagar, activos, pasivos, patrimonio y resultados del año. Avisa si falta asignar una cuenta o si el balance no cuadra.
+- **Asientos**: libro de asientos manuales y automáticos, nuevo asiento (partida doble, con centro de costo), anulación y saldos de apertura.
+- **Cuentas**: catálogo estándar dominicano editable (códigos 1101 Caja… 6299 Otros gastos). Cada cuenta puede tener una *función* (Caja, Bancos, CxC, Inventario, ITBIS, Ventas…) que usa la contabilización automática.
+- **Bancos**: cuentas bancarias, depósitos, retiros, cheques, transferencias, comisiones, intereses y conciliación contra el estado de cuenta.
+- **Activos fijos**: depreciación mensual en línea recta y baja.
+- **Nómina**: empleados, corrida mensual con AFP, SFS, ISR, aportes patronales (SRL, INFOTEP), pago y anulación. Los porcentajes y topes son editables en *Parámetros*.
+- **Reportes**: balance general, estado de resultados, balanza de comprobación, libro diario, libro mayor, flujo de efectivo, antigüedad de CxC y CxP, por centro de costo. Todos exportan a CSV.
+- **Presupuesto**: monto mensual por cuenta contra lo real.
+- **Ajustes**: fecha de inicio contable, cierre de períodos, cierre del ejercicio y centros de costo.
+
+Cómo funciona: ventas, cobros, compras, pagos a proveedores, gastos, activos, nómina y movimientos de banco **generan sus asientos solos** a partir de los documentos (no se duplican datos). Los asientos manuales se guardan aparte. Todo se sincroniza entre dispositivos.
+
+Límites a tener presentes:
+- Los asientos automáticos se calculan desde los documentos; cerrar un período bloquea solo asientos, banco, activos y nóminas manuales, no las ventas/compras.
+- Los ajustes de inventario y mermas no generan asiento; los centros de costo solo aplican a líneas manuales.
+- ITBIS solo en modo "incluido"; no hay 608 ni notas de crédito. La facturación electrónica (e-CF) queda para una etapa posterior.
+- **Nómina**: las tasas del empleador (AFP 7.10 %, SFS 7.09 %, SRL 1.10 %, INFOTEP 1 %), los topes y la escala del ISR son orientativos; confírmalos cada año con la TSS y la DGII. INFOTEP no lleva tope en este cálculo.
+- No sustituye a un contador: revisa los reportes con uno antes de presentarlos a la DGII.
