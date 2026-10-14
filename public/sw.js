@@ -1,7 +1,7 @@
 // Service worker: guarda la app en el dispositivo para que abra sin internet.
 // Los datos del negocio NO pasan por aquí; viven en la base de datos del navegador.
-const VERSION = 'caraudio-v2';
-const BASE = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/assets/sql-wasm.wasm'];
+const VERSION = 'caraudio-v3';
+const BASE = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/favicon.svg', '/fondo-acceso.svg', '/isotipo.svg', '/assets/sql-wasm.wasm'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(BASE).catch(() => {})).then(() => self.skipWaiting()));

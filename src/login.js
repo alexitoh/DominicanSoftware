@@ -37,7 +37,7 @@ async function pantallaAcceso(terminar, sesionPendiente) {
   const aviso = h('p', { class: 'error', role: 'alert' });
   const marco = (...hijos) => { aviso.textContent = ''; raiz.replaceChildren(
     h('div', { class: 'acceso-caja' },
-      cfg.negocio_logo ? h('img', { class: 'acceso-logo', src: cfg.negocio_logo, alt: '' }) : null,
+      cfg.negocio_logo ? h('img', { class: 'acceso-logo', src: cfg.negocio_logo, alt: '' }) : h('img', { class: 'acceso-isotipo', src: '/isotipo.svg', alt: '' }),
       h('strong', { class: 'acceso-negocio' }, cfg.negocio_nombre && cfg.negocio_nombre !== 'Mi Car Audio' ? cfg.negocio_nombre : 'Dominican Software'),
       ...hijos,
       h('p', { class: 'acceso-contacto' }, 'Soporte y ventas: ', h('strong', {}, 'Ing. David Vargas'), h('br'),
