@@ -1,6 +1,6 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
 import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal } from './database.js';
-import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis } from './itbis.js';
+import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis, comprobanteDeCliente } from './itbis.js';
 import { buscarRNC } from './dgii.js';
 import { limpiarDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
@@ -194,7 +194,7 @@ export async function vistaVentas(raiz) {
       },
     });
     const clientesInfo = new Map();
-    const cliente = h('select', { class: 'campo', 'aria-label': 'Cliente', onChange: () => pintarTotales() });
+    const cliente = h('select', { class: 'campo', 'aria-label': 'Cliente', onChange: () => { tipoNcf.value = 'auto'; pintarTotales(); aprenderRegimen(); } });
     const avisoCredito = h('p', { class: 'ayuda', role: 'status' });
     // Comprobante fiscal y consulta del RNC en la DGII
     const cfgF = await configFiscal();
@@ -207,6 +207,20 @@ export async function vistaVentas(raiz) {
       class: 'campo', inputmode: 'numeric', autocomplete: 'off', placeholder: 'RNC o cédula (consulta la DGII)', 'aria-label': 'RNC del cliente',
       onChange: () => buscarPorRnc(),
     });
+    // Si el cliente tiene RNC y aún no sabemos su régimen, se pregunta a la DGII para asignarle el comprobante correcto
+    async function aprenderRegimen() {
+      const id = cliente.value;
+      const c = clientesInfo.get(id);
+      if (!id || !c || cfgF.modo === 'no' || c.regimen_dgii || limpiarDocumento(c.documento || '').length !== 9) return;
+      const r = await buscarRNC(c.documento);
+      if (r.resultado === 'activo' && r.datos.regimen) {
+        await ejecutar('UPDATE clientes SET regimen_dgii = ? WHERE id = ?', [r.datos.regimen, Number(id)]);
+        c.regimen_dgii = r.datos.regimen;
+        if (cliente.value === id) pintarTotales();
+      } else if (r.resultado === 'inactivo') {
+        estatusRnc.className = 'error'; estatusRnc.textContent = r.mensaje;
+      }
+    }
     async function buscarPorRnc() {
       const num = limpiarDocumento(rncRapido.value);
       estatusRnc.className = 'ayuda';
@@ -231,7 +245,10 @@ export async function vistaVentas(raiz) {
         [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
         await cargarClientes();
       }
+      await ejecutar('UPDATE clientes SET regimen_dgii = ? WHERE id = ?', [r.datos.regimen || null, ya.id]);
+      await cargarClientes();
       cliente.value = String(ya.id);
+      tipoNcf.value = 'auto';
       pintarTotales();
     }
     const metodo = h('select', { class: 'campo', 'aria-label': 'Método de pago', onChange: () => pintarTotales() },
@@ -253,7 +270,7 @@ export async function vistaVentas(raiz) {
     const botonCobrar = h('button', { class: 'btn primario', onClick: () => cobrar() }, 'Cobrar');
 
     async function cargarClientes() {
-      const cs = await consultar('SELECT id, nombre, condicion, dias_credito, documento FROM clientes ORDER BY nombre');
+      const cs = await consultar('SELECT id, nombre, condicion, dias_credito, documento, tipo_comprobante, regimen_dgii FROM clientes ORDER BY nombre');
       clientesInfo.clear();
       cs.forEach((c) => clientesInfo.set(String(c.id), c));
       cliente.replaceChildren(
@@ -416,10 +433,10 @@ export async function vistaVentas(raiz) {
     function pintarTotales() {
       pintarAvisoCredito();
       if (cfgF.modo !== 'no') {
-        const doc = limpiarDocumento(clientesInfo.get(cliente.value)?.documento || '');
         const elegido = tipoNcf.value || 'auto';
-        const t = elegido === 'auto' ? (doc.length === 9 ? 'B01' : 'B02') : elegido;
-        avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]} (${t})${doc.length !== 9 && t === 'B02' ? '. Cliente sin RNC: consumidor final.' : ''}`;
+        const sug = comprobanteDeCliente(clientesInfo.get(cliente.value));
+        const t = elegido === 'auto' ? sug.tipo : elegido;
+        avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]} (${t})${elegido === 'auto' ? `, ${sug.motivo}` : ', elegido por ti'}.`;
       }
       const sub = subtotal();
       const dto = descuentoAplicado(sub);

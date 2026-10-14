@@ -142,13 +142,13 @@ assert.ok(selTipo, 'la venta tiene el selector de tipo de comprobante');
 assert.deepEqual(selTipo.todos((x) => x.tag === 'option').map((o) => o.attrs.value), ['auto', 'B01', 'B02', 'B14', 'B15']);
 const rncBox = venta.todos((x) => x.tag === 'input' && x.attrs['aria-label'] === 'RNC del cliente')[0];
 assert.ok(rncBox, 'la venta tiene la casilla de RNC');
-assert.ok(textoDe(venta).includes('Se entregará: Factura de consumo (B02). Cliente sin RNC: consumidor final.'), 'avisa el comprobante: ' + textoDe(venta).slice(-400));
+assert.ok(textoDe(venta).includes('Se entregará: Factura de consumo (B02), cliente sin RNC: consumidor final.'), 'avisa el comprobante: ' + textoDe(venta).slice(-400));
 rncBox.value = '101123456'; await rncBox.disparar('change'); await pausa();
 assert.ok(textoDe(venta).includes('conectado a la nube'), 'sin nube explica qué falta: ' + textoDe(venta).slice(0, 100));
 limpiarHojas();
 const { formularioCliente } = await import('../src/clientes.js');
 formularioCliente(); await pausa();
-assert.ok(textoDe(document.body).includes('Verificar en la DGII'));
+assert.ok(textoDe(document.body).includes('Verificar en la DGII') && textoDe(document.body).includes('Se le dará: Factura de consumo (B02)'));
 ok('la venta muestra el tipo de comprobante (con el aviso de cuál se entrega) y la casilla de RNC; el cliente tiene el botón de la DGII');
 
 console.log(`\n${n} grupos OK`);

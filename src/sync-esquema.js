@@ -6,7 +6,7 @@
 // unicos: columnas con restricción UNIQUE (si chocan al recibir, se le agrega un sufijo).
 export const TABLAS = [
   { t: 'categorias', cols: ['nombre'], unicos: ['nombre'] },
-  { t: 'clientes', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'tipo_doc', 'documento', 'limite_credito', 'creado'] },
+  { t: 'clientes', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'tipo_doc', 'documento', 'limite_credito', 'tipo_comprobante', 'regimen_dgii', 'creado'] },
   { t: 'cliente_direcciones', cols: ['etiqueta', 'direccion', 'referencia'], refs: [{ col: 'cliente_id', tabla: 'clientes' }] },
   { t: 'cliente_contactos', cols: ['nombre', 'cargo', 'telefono', 'correo'], refs: [{ col: 'cliente_id', tabla: 'clientes' }] },
   { t: 'recibos', cols: ['numero', 'fecha', 'total', 'estado', 'notas'], refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },

@@ -5,6 +5,7 @@ import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
 import { hoyISO } from './fechas.js';
 import { buscarRNC } from './dgii.js';
+import { TIPOS_NCF, NOMBRE_COMPROBANTE, comprobanteDeCliente } from './itbis.js';
 import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
 
 // Lo que debe una venta a crédito: total menos lo abonado
@@ -37,6 +38,17 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
   const documento = h('input', { class: 'campo', inputmode: 'text', autocomplete: 'off', placeholder: 'RNC, cédula o DNI', value: c?.documento ? formatearDocumento(c.tipo_doc, c.documento) : '', 'aria-label': 'Número de documento' });
   const limite = h('input', { class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: 'Sin límite', value: c?.limite_credito > 0 ? c.limite_credito : '', 'aria-label': 'Límite de crédito' });
   const condicion = campoCondicion(c);
+  // Comprobante que se le da a este cliente: automático (según su RNC y su régimen en la DGII) o uno fijo
+  let regimenDgii = c?.regimen_dgii ?? null;
+  const tipoCpb = h('select', { class: 'campo', 'aria-label': 'Comprobante del cliente', onChange: () => pintarSugerido() },
+    h('option', { value: '' }, 'Automático (según su RNC y régimen)'),
+    ...Object.entries(TIPOS_NCF).map(([k, t]) => h('option', { value: k }, `${k} · ${t}`)));
+  tipoCpb.value = c?.tipo_comprobante || '';
+  const textoCpb = h('p', { class: 'ayuda', role: 'status' });
+  function pintarSugerido() {
+    const r = comprobanteDeCliente({ tipo_comprobante: tipoCpb.value, documento: documento.value, regimen_dgii: regimenDgii });
+    textoCpb.textContent = `Se le dará: ${NOMBRE_COMPROBANTE[r.tipo]} (${r.tipo}), ${r.motivo}.`;
+  }
   const error = h('p', { class: 'error', role: 'alert' });
 
   // Consulta a la DGII: con 9 u 11 números llena el nombre solo si el contribuyente está ACTIVO; si no, avisa su estatus
@@ -52,11 +64,13 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     estatusDgii.textContent = r.mensaje;
     estatusDgii.className = r.resultado === 'activo' ? 'ayuda' : (r.resultado === 'inactivo' || r.resultado === 'noEncontrado') ? 'error' : 'ayuda';
     if (r.resultado === 'activo') {
+      regimenDgii = r.datos.regimen || null;
+      pintarSugerido();
       tipoDoc.value = num.length === 9 ? 'rnc' : 'cedula';
       if (!nombre.value.trim() || nombre.dataset.dgii === '1') { nombre.value = r.datos.nombre; nombre.dataset.dgii = '1'; }
     }
   }
-  documento.addEventListener('change', consultarDgii);
+  documento.addEventListener('change', () => { regimenDgii = null; pintarSugerido(); consultarDgii(); });
   documento.addEventListener('input', () => { if (/^(\d{9}|\d{11})$/.test(limpiarDocumento(documento.value))) consultarDgii(); });
   nombre.addEventListener('input', () => { nombre.dataset.dgii = '0'; });
 
@@ -73,7 +87,7 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     if (doc.error) { error.textContent = doc.error; documento.focus(); return; }
     const lim = limite.value === '' ? null : Number(limite.value);
     if (lim != null && !(lim >= 0)) { error.textContent = 'El límite de crédito no es válido.'; limite.focus(); return; }
-    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias, doc.tipo, doc.numero, lim || null];
+    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias, doc.tipo, doc.numero, lim || null, tipoCpb.value || null, regimenDgii];
     try {
       if (doc.numero) {
         const [otro] = await consultar('SELECT nombre FROM clientes WHERE documento = ? AND id <> ?', [doc.numero, c?.id ?? -1]);
@@ -81,11 +95,11 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       }
       let id = c?.id;
       if (nuevo) {
-        const r = await ejecutar('INSERT INTO clientes (nombre, telefono, direccion, notas, condicion, dias_credito, tipo_doc, documento, limite_credito) VALUES (?,?,?,?,?,?,?,?,?)', valores);
+        const r = await ejecutar('INSERT INTO clientes (nombre, telefono, direccion, notas, condicion, dias_credito, tipo_doc, documento, limite_credito, tipo_comprobante, regimen_dgii) VALUES (?,?,?,?,?,?,?,?,?,?,?)', valores);
         id = r?.changes?.lastId;
         if (!id) id = (await consultar('SELECT last_insert_rowid() AS id'))[0].id;
       } else {
-        await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=?, limite_credito=? WHERE id=?', [...valores, id]);
+        await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=?, limite_credito=?, tipo_comprobante=?, regimen_dgii=? WHERE id=?', [...valores, id]);
       }
       cerrar();
       toast(nuevo ? 'Cliente guardado' : 'Cambios guardados');
@@ -111,6 +125,7 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     await alGuardar(null);
   }
 
+  pintarSugerido();
   cerrar = hoja(nuevo ? 'Nuevo cliente' : 'Editar cliente',
     h('div', { class: 'cuerpo' },
       campo('Nombre', nombre),
@@ -118,6 +133,8 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       h('div', { class: 'etiqueta' }, 'Identificación fiscal', h('div', { class: 'par' }, tipoDoc, documento)),
       estatusDgii,
       h('button', { class: 'btn chico', onClick: consultarDgii }, 'Verificar en la DGII'),
+      campo('Comprobante que se le da', tipoCpb),
+      textoCpb,
       campo('Dirección principal', direccion),
       campo('Notas', notas),
       condicion.el,

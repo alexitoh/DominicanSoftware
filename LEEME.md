@@ -179,3 +179,10 @@ Límites a tener presentes:
 - Productos marcados *Exento de ITBIS* no pagan impuesto. El ITBIS se calcula después del descuento.
 - Los negocios que ya tenían "los precios incluyen ITBIS" siguen igual hasta que guarden esta sección; al guardar con el interruptor encendido pasan al ITBIS sumado.
 - Las **cotizaciones** todavía muestran el total sin ITBIS; al convertirlas en venta se suma.
+
+## Comprobante automático por cliente
+- Al elegir el cliente en la venta, el tipo de comprobante se pone solo (*Automático*) y el aviso dice cuál se entregará y por qué. Siempre se puede cambiar a mano en la lista "Tipo de comprobante".
+- Regla automática: **sin RNC (9 números)** = B02 consumidor final; **RNC que empieza con 4** (instituciones del Estado) = B15; **régimen especial o zona franca en la DGII** = B14; **cualquier otro RNC** = B01.
+- El régimen se aprende de la DGII: se guarda en el cliente al verificar su RNC (en la ficha del cliente o al elegirlo en la venta, si hay conexión).
+- En la ficha del cliente, *Comprobante que se le da* permite **fijar** uno (por ejemplo B14) y manda sobre la regla automática.
+- Importante: la regla de B14/B15 es una **sugerencia** basada en el régimen que publica la DGII y en el prefijo del RNC; confírmala con tu contador y fija el tipo en la ficha de los clientes que sean excepciones.

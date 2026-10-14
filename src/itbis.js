@@ -17,6 +17,20 @@ export function calcularItbis({ lineas, descuento = 0, tasa = 18, modo = 'adicio
 
 // ---------- NCF ----------
 export const TIPOS_NCF = { B01: 'Crédito fiscal', B02: 'Consumo', B14: 'Régimen especial', B15: 'Gubernamental' };
+// Comprobante que le corresponde a un cliente: el que se le fijó, o el que sale de su RNC y del régimen que tiene en la DGII.
+// Sin RNC (9 números) = consumidor final B02. RNC que empieza con 4 = institución del Estado (B15). Régimen especial o zona franca = B14. Si no, B01.
+// Es una sugerencia: siempre se puede elegir otro tipo al facturar o fijarlo en la ficha del cliente.
+export function comprobanteDeCliente(c) {
+  const fijo = String(c?.tipo_comprobante || '').toUpperCase();
+  if (TIPOS_NCF[fijo]) return { tipo: fijo, motivo: 'fijado en la ficha del cliente' };
+  const doc = limpiarDocumento(c?.documento);
+  if (doc.length !== 9) return { tipo: 'B02', motivo: 'cliente sin RNC: consumidor final' };
+  const reg = String(c?.regimen_dgii || '').toUpperCase();
+  if (doc.startsWith('4')) return { tipo: 'B15', motivo: 'RNC de institución del Estado' };
+  if (/ESPECIAL|ZONA.*FRANCA|FRANCA/.test(reg)) return { tipo: 'B14', motivo: `régimen ${c.regimen_dgii} en la DGII` };
+  return { tipo: 'B01', motivo: 'cliente con RNC' };
+}
+
 // Nombre que lleva la factura según el comprobante
 export const NOMBRE_COMPROBANTE = { B01: 'Factura de crédito fiscal', B02: 'Factura de consumo', B14: 'Factura de régimen especial', B15: 'Factura gubernamental' };
 export const formatearNCF = (tipo, n) => `${tipo}${String(n).padStart(8, '0')}`;

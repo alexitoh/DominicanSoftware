@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS clientes (
   tipo_doc TEXT,        -- rnc | cedula | dni (identificación fiscal)
   documento TEXT,       -- número sin guiones ni espacios
   limite_credito REAL,  -- tope de deuda a crédito (vacío = sin límite)
+  tipo_comprobante TEXT, -- B01 | B02 | B14 | B15 (vacío = automático según su RNC)
+  regimen_dgii TEXT,    -- régimen que la DGII tiene registrado para su RNC (se llena al verificarlo)
   creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 

@@ -7,7 +7,7 @@ import { Share } from '@capacitor/share';
 import { defineCustomElements as jeepSqlite } from 'jeep-sqlite/loader';
 import schema from './schema.sql?raw'; // Vite: importa el archivo como texto
 import { prepararBase } from './sync-esquema.js';
-import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido } from './itbis.js';
+import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido, comprobanteDeCliente } from './itbis.js';
 import { limpiarDocumento } from './fiscal.js';
 
 const DB_NAME = 'caraudio';
@@ -55,6 +55,8 @@ export async function initDB() {
     'ALTER TABLE clientes ADD COLUMN tipo_doc TEXT',
     'ALTER TABLE clientes ADD COLUMN documento TEXT',
     'ALTER TABLE clientes ADD COLUMN limite_credito REAL',
+    'ALTER TABLE clientes ADD COLUMN tipo_comprobante TEXT',
+    'ALTER TABLE clientes ADD COLUMN regimen_dgii TEXT',
     'ALTER TABLE proveedores ADD COLUMN condicion TEXT',
     'ALTER TABLE proveedores ADD COLUMN dias_credito INTEGER',
     'ALTER TABLE ventas ADD COLUMN usuario_id INTEGER',
@@ -764,11 +766,9 @@ export async function guardarSecuenciaNCF(tipo, sig, hasta) {
 async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
   const sec = await leerSecuenciasNCF();
   const util = (t) => sec.find((s) => s.tipo === t && s.sig > 0 && s.sig <= s.hasta);
-  let tieneRnc = false;
-  if (clienteId) {
-    const [c] = await consultar('SELECT tipo_doc, documento FROM clientes WHERE id = ?', [clienteId]);
-    tieneRnc = !!c?.documento && limpiarDocumento(c.documento).length === 9;
-  }
+  let cli = null;
+  if (clienteId) [cli] = await consultar('SELECT tipo_doc, documento, tipo_comprobante, regimen_dgii FROM clientes WHERE id = ?', [clienteId]);
+  const tieneRnc = !!cli?.documento && limpiarDocumento(cli.documento).length === 9;
   let tipo = null;
   if (pedido && pedido !== 'auto') {
     if (!TIPOS_NCF[pedido]) throw new Error('Tipo de comprobante desconocido.');
@@ -776,12 +776,11 @@ async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
     if (!util(pedido)) throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante.`);
     tipo = pedido;
   } else {
-    if (tieneRnc) {
-      if (util('B01')) tipo = 'B01';
-      else if (obligatorio) throw new Error('No hay números disponibles de B01 (Crédito fiscal) para este cliente con RNC. Registra la secuencia en Ajustes → Facturación con comprobante, o elige Consumo (B02).');
-    }
-    if (!tipo && util('B02')) tipo = 'B02';
-    if (!tipo && obligatorio) throw new Error('No hay números disponibles de B02 (Consumo). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante.');
+    // Automático: el tipo que le corresponde al cliente según su ficha, su RNC y su régimen en la DGII
+    const { tipo: ideal, motivo } = comprobanteDeCliente(cli);
+    if (util(ideal)) tipo = ideal;
+    else if (obligatorio) throw new Error(`A este cliente le corresponde ${ideal} (${TIPOS_NCF[ideal]}; ${motivo}), pero no hay números disponibles. Registra la secuencia en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
+    else if (ideal !== 'B02' && util('B02')) tipo = 'B02';
   }
   if (!tipo) return null;
   const s = util(tipo);
