@@ -1,5 +1,6 @@
 // proveedores.js - lista y formulario de proveedores
 import { consultar, ejecutar } from './database.js';
+import { TIPOS_DOC, validarDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
 
@@ -15,6 +16,9 @@ export function formularioProveedor(p = null, alGuardar = () => {}) {
   const direccion = h('input', { class: 'campo', value: p?.direccion ?? '' });
   const notas = h('textarea', { class: 'campo', rows: '2' }, p?.notas ?? '');
   const condicion = campoCondicion(p);
+  const tipoDoc = h('select', { class: 'campo', 'aria-label': 'Tipo de documento' }, TIPOS_DOC.map((t) => h('option', { value: t.id }, t.nombre || t.id.toUpperCase())));
+  tipoDoc.value = p?.tipo_doc || 'rnc';
+  const documento = h('input', { class: 'campo', value: p?.documento ?? '', inputmode: 'numeric', placeholder: 'RNC o cédula (para el 606)', autocomplete: 'off' });
   const error = h('p', { class: 'error', role: 'alert' });
 
   async function guardar() {
@@ -23,15 +27,17 @@ export function formularioProveedor(p = null, alGuardar = () => {}) {
     if (!n) { error.textContent = 'Escribe el nombre del proveedor.'; nombre.focus(); return; }
     const cond = condicion.valores();
     if (cond.error) { error.textContent = cond.error; cond.foco?.focus(); return; }
-    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias];
+    const doc = validarDocumento(tipoDoc.value, documento.value);
+    if (doc.error) { error.textContent = doc.error; documento.focus(); return; }
+    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias, doc.numero ? doc.tipo : null, doc.numero];
     try {
       let id = p?.id;
       if (nuevo) {
-        const r = await ejecutar('INSERT INTO proveedores (nombre, telefono, direccion, notas, condicion, dias_credito) VALUES (?,?,?,?,?,?)', valores);
+        const r = await ejecutar('INSERT INTO proveedores (nombre, telefono, direccion, notas, condicion, dias_credito, tipo_doc, documento) VALUES (?,?,?,?,?,?,?,?)', valores);
         id = r?.changes?.lastId;
         if (!id) id = (await consultar('SELECT last_insert_rowid() AS id'))[0].id;
       } else {
-        await ejecutar('UPDATE proveedores SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=? WHERE id=?', [...valores, id]);
+        await ejecutar('UPDATE proveedores SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=? WHERE id=?', [...valores, id]);
       }
       cerrar();
       toast(nuevo ? 'Proveedor guardado' : 'Cambios guardados');
@@ -60,6 +66,7 @@ export function formularioProveedor(p = null, alGuardar = () => {}) {
       campo('Nombre', nombre),
       campo('Teléfono', telefono),
       campo('Dirección', direccion),
+      h('div', { class: 'rejilla' }, campo('Tipo de documento', tipoDoc), campo('Documento', documento)),
       campo('Notas', notas),
       condicion.el,
       error,

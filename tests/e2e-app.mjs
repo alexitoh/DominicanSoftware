@@ -153,6 +153,124 @@ assert.ok(volver);
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 1, 'los datos del primer negocio vuelven desde la nube');
 ok('se puede crear otro negocio en el mismo dispositivo y volver al anterior desde la nube');
 
+// ---- límite de crédito del cliente ----
+await bd.ejecutar("INSERT INTO clientes (nombre, tipo_doc, documento, limite_credito, condicion, dias_credito) VALUES ('Taller Limite', 'rnc', '131234567', 300, 'credito', 30)");
+const cLim = (await uno("SELECT id FROM clientes WHERE nombre = 'Taller Limite'")).id;
+const pLim = (await uno("SELECT id FROM productos WHERE codigo = 'B-1'")).id;
+await bd.ejecutar('UPDATE productos SET stock_actual = 100 WHERE id = ?', [pLim]);
+await bd.registrarVenta({ cliente_id: cLim, metodo_pago: 'credito', inicial: 0, dias_credito: 30, items: [{ producto_id: pLim, cantidad: 2, precio_unitario: 100 }] }); // debe 200
+await assert.rejects(() => bd.registrarVenta({ cliente_id: cLim, metodo_pago: 'credito', inicial: 0, dias_credito: 30, items: [{ producto_id: pLim, cantidad: 2, precio_unitario: 100 }] }), /límite de crédito/);
+await bd.registrarVenta({ cliente_id: cLim, metodo_pago: 'credito', inicial: 100, dias_credito: 30, items: [{ producto_id: pLim, cantidad: 2, precio_unitario: 100 }] }); // 200 + 100 = 300: justo en el límite
+await assert.rejects(() => bd.registrarVenta({ cliente_id: cLim, metodo_pago: 'credito', inicial: 0, items: [{ producto_id: pLim, cantidad: 1, precio_unitario: 100 }] }), /límite de crédito/);
+await bd.registrarVenta({ cliente_id: cLim, metodo_pago: 'efectivo', items: [{ producto_id: pLim, cantidad: 1, precio_unitario: 100 }] }); // al contado no cuenta
+ok('el límite de crédito impide ventas fiadas que lo pasen; al contado se vende normal');
+
+// ---- recibos de ingreso: varios métodos, varias facturas ----
+const pend0 = await bd.facturasPendientes(cLim);
+assert.equal(pend0.length, 2);
+const [f1, f2] = pend0; // 200 y 100 pendientes
+assert.equal(f1.saldo, 200); assert.equal(f2.saldo, 100);
+const base = { clienteId: cLim, aplicaciones: [{ ventaId: f1.id, monto: 200 }, { ventaId: f2.id, monto: 50 }] };
+await assert.rejects(() => bd.registrarCobro({ ...base, metodos: [{ metodo: 'efectivo', monto: 150 }, { metodo: 'cheque', monto: 100 }] }), /número de cheque/);
+await assert.rejects(() => bd.registrarCobro({ ...base, metodos: [{ metodo: 'efectivo', monto: 150 }] }), /debe ser igual/);
+await assert.rejects(() => bd.registrarCobro({ ...base, aplicaciones: [{ ventaId: f2.id, monto: 150 }], metodos: [{ metodo: 'efectivo', monto: 150 }] }), /no puede pasar/);
+await assert.rejects(() => bd.registrarCobro({ ...base, metodos: [{ metodo: 'bitcoin', monto: 250 }] }), /no válido/);
+assert.equal((await uno('SELECT COUNT(*) AS n FROM recibos')).n, 0, 'los intentos rechazados no dejan nada');
+const cobro1 = await bd.registrarCobro({ ...base, notas: 'Pago parcial', metodos: [{ metodo: 'efectivo', monto: 150 }, { metodo: 'cheque', monto: 100, referencia: 'Cheque 1234 Popular' }] });
+assert.match(cobro1.numero, /^R-[A-Z]?000001$/);
+const pagosRec = await bd.consultar('SELECT venta_id, monto, metodo FROM pagos WHERE recibo_id = ? ORDER BY id', [cobro1.id]);
+assert.deepEqual(pagosRec.map((x) => [x.venta_id === f1.id ? 'F1' : 'F2', x.monto, x.metodo]), [['F1', 150, 'efectivo'], ['F1', 50, 'cheque'], ['F2', 50, 'cheque']]);
+const pend1 = await bd.facturasPendientes(cLim);
+assert.equal(pend1.length, 1); assert.equal(pend1[0].saldo, 50, 'la segunda factura queda con 50 pendientes (pago parcial)');
+assert.equal((await uno('SELECT total FROM recibos WHERE id = ?', [cobro1.id])).total, 250);
+assert.equal((await bd.consultar('SELECT metodo, monto, referencia FROM recibo_metodos WHERE recibo_id = ? ORDER BY id', [cobro1.id])).length, 2);
+const resCaja = await bd.resumenCaja({ id: -1, fecha_apertura: '2000-01-01 00:00:00', efectivo_inicial: 0 });
+assert.equal(resCaja.cheque, 100, 'los cheques cobrados salen aparte del efectivo de la caja');
+// otro cobro: el número avanza y una factura saldada ya no se puede cobrar
+const cobro2 = await bd.registrarCobro({ clienteId: cLim, aplicaciones: [{ ventaId: f2.id, monto: 50 }], metodos: [{ metodo: 'transferencia', monto: 50, referencia: 'REF-9' }] });
+assert.match(cobro2.numero, /000002$/);
+assert.equal((await bd.facturasPendientes(cLim)).length, 0);
+await assert.rejects(() => bd.registrarCobro({ clienteId: cLim, aplicaciones: [{ ventaId: f2.id, monto: 10 }], metodos: [{ metodo: 'efectivo', monto: 10 }] }), /ya no tiene saldo/);
+// anular devuelve la deuda
+await bd.anularRecibo(cobro1.id);
+assert.equal((await bd.facturasPendientes(cLim)).reduce((s, f) => s + f.saldo, 0), 250);
+await assert.rejects(() => bd.anularRecibo(cobro1.id), /ya está anulado/);
+assert.equal((await uno('SELECT estado FROM recibos WHERE id = ?', [cobro1.id])).estado, 'anulado');
+ok('un recibo cobra varias facturas con efectivo y cheque a la vez, valida lo rechazable, separa el cheque en la caja y se puede anular');
+
+// ---- ITBIS, NCF, 606/607 y reportes de negocio ----
+const itb = await import('../src/itbis.js');
+const rf = await import('../src/reportes-fiscal.js');
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }], tasa: 18 }), 18);
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }, { neto: 100, exento: true }], tasa: 18 }), 18, 'lo exento no lleva ITBIS');
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118, exento: false }], descuento: 11.8, tasa: 18 }), 16.2, 'el descuento baja la base');
+assert.equal(itb.calcularItbis({ lineas: [{ neto: 118 }], tasa: 18, modo: 'no' }), 0);
+const mesAct = (await uno("SELECT strftime('%Y-%m', 'now', 'localtime') AS m")).m;
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo', 'incluido')");
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('negocio_rnc', '131234567')");
+await bd.guardarSecuenciaNCF('B02', 1, 2);
+await bd.guardarSecuenciaNCF('B01', 10, 11);
+await assert.rejects(() => bd.guardarSecuenciaNCF('B02', 9, 3), /no puede ser mayor/);
+await bd.ejecutar("INSERT INTO productos (codigo, nombre, costo, precio, stock_actual, itbis_exento) VALUES ('EX-1', 'Libro exento', 20, 100, 50, 1)");
+await bd.ejecutar("INSERT INTO productos (codigo, nombre, costo, precio, stock_actual) VALUES ('GR-1', 'Cable gravado', 40, 118, 50)");
+const pEx = (await uno("SELECT id FROM productos WHERE codigo = 'EX-1'")).id;
+const pGr = (await uno("SELECT id FROM productos WHERE codigo = 'GR-1'")).id;
+await bd.ejecutar("INSERT INTO clientes (nombre, tipo_doc, documento) VALUES ('Empresa SRL', 'rnc', '101123456')");
+const cEmp = (await uno("SELECT id FROM clientes WHERE nombre = 'Empresa SRL'")).id;
+await bd.registrarVenta({ items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }] });                       // B02...01, ITBIS 18
+await bd.registrarVenta({ cliente_id: cEmp, items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }, { producto_id: pEx, cantidad: 1, precio_unitario: 100 }] }); // B01...10, ITBIS 18
+await bd.registrarVenta({ cliente_id: cEmp, metodo_pago: 'credito', dias_credito: 15, items: [{ producto_id: pGr, cantidad: 2, precio_unitario: 118 }] }); // B01...11, ITBIS 36
+await bd.registrarVenta({ items: [{ producto_id: pEx, cantidad: 1, precio_unitario: 100 }] });                       // B02...02, ITBIS 0
+await bd.registrarVenta({ items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }], metodo_pago: 'tarjeta' }); // sin secuencia: sin NCF
+const vf = await bd.consultar("SELECT ncf, itbis, total FROM ventas WHERE ncf IS NOT NULL OR itbis > 0 ORDER BY id DESC LIMIT 5");
+const porNcf = Object.fromEntries(vf.filter((x) => x.ncf).map((x) => [x.ncf, x.itbis]));
+assert.deepEqual(porNcf, { B0200000001: 18, B0100000010: 18, B0100000011: 36, B0200000002: 0 }, 'B01 para clientes con RNC, B02 para el resto, ITBIS solo de lo gravado');
+assert.equal((await uno('SELECT itbis, ncf FROM ventas ORDER BY id DESC LIMIT 1')).ncf, null, 'sin secuencia disponible la venta queda sin NCF');
+const sinNcf = await uno('SELECT id FROM ventas ORDER BY id DESC LIMIT 1');
+await assert.rejects(() => bd.asignarNCFVenta(sinNcf.id, 'XX'), /formato/);
+await assert.rejects(() => bd.asignarNCFVenta(sinNcf.id, 'B0200000001'), /ya se usó/);
+await bd.asignarNCFVenta(sinNcf.id, 'B0200000050');
+// compras y gastos con comprobante
+await bd.ejecutar("INSERT INTO proveedores (nombre, tipo_doc, documento) VALUES ('Distribuidora SA', 'rnc', '130999888')");
+const prov = (await uno("SELECT id FROM proveedores WHERE nombre = 'Distribuidora SA'")).id;
+await assert.rejects(() => bd.registrarCompra({ proveedor_id: prov, ncf: 'malo', items: [{ producto_id: pGr, cantidad: 1, costo_unitario: 100 }] }), /NCF/);
+await assert.rejects(() => bd.registrarCompra({ proveedor_id: prov, itbis: 500, items: [{ producto_id: pGr, cantidad: 1, costo_unitario: 100 }] }), /ITBIS/);
+await bd.registrarCompra({ proveedor_id: prov, ncf: 'B0100000777', itbis: 18, items: [{ producto_id: pGr, cantidad: 1, costo_unitario: 118 }] });
+await bd.registrarCompra({ proveedor_id: prov, items: [{ producto_id: pGr, cantidad: 1, costo_unitario: 50 }] });
+if (!(await bd.cajaAbierta())) await bd.abrirCaja(0);
+await bd.registrarGasto({ concepto: 'Internet', categoria: 'Servicios', monto: 59, itbis: 9, ncf: 'B0100000123', documento: '101-00000-1' });
+const imp = await rf.datosImpuestos(mesAct);
+assert.equal(imp.cobrado, 90, 'ITBIS cobrado: 18 + 18 + 36 + 0 + 18 (la de tarjeta)');
+assert.equal(imp.pagado, 27, 'ITBIS pagado: compra 18 + gasto 9');
+assert.equal(imp.aPagar, 63);
+assert.equal(imp.filas607.length, 5, 'las 5 ventas con NCF entran al 607');
+assert.equal(imp.filas606.length, 2, 'compra y gasto con NCF entran al 606');
+assert.ok(imp.avisos.some((a) => /compras sin NCF/.test(a)), 'avisa de la compra sin NCF');
+const f01 = imp.filas607.find((f) => f[2] === 'B0100000010');
+assert.equal(f01.length, 23); assert.equal(f01[0], '101123456'); assert.equal(f01[1], '1'); assert.equal(f01[7], '200.00'); assert.equal(f01[8], '18.00'); assert.equal(f01[16], '218.00', 'pagada en efectivo');
+assert.equal(imp.filas607.find((f) => f[2] === 'B0100000011')[19], '236.00', 'la venta a crédito va en la columna de crédito');
+const f606 = imp.filas606.find((f) => f[3] === 'B0100000777');
+assert.equal(f606.length, 23); assert.equal(f606[8], '100.00'); assert.equal(f606[10], '18.00'); assert.equal(f606[2], '09');
+assert.equal(imp.filas606.find((f) => f[3] === 'B0100000123')[0], '101000001', 'el RNC del gasto se limpia');
+const txt = itb.textoDGII('607', '131234567', mesAct.replace('-', ''), imp.filas607);
+assert.equal(txt.split('\r\n')[0], `607|131234567|${mesAct.replace('-', '')}|5`);
+assert.equal(itb.nombreArchivoDGII('607', '13-12345-67', '202601'), 'DGII_F_607_131234567_202601.TXT');
+assert.ok(itb.csv(['a', 'b'], [['x,y', 'z']]).includes('"x,y"'));
+// negocio y P&L
+const neg = await rf.datosNegocio('mes', null);
+assert.ok(neg.porCliente.find((x) => x.nombre === 'Empresa SRL'));
+assert.ok(neg.porCategoria.length >= 1 && neg.porProducto.length >= 2);
+assert.equal(neg.pyg.bruta, neg.pyg.ingresos - neg.pyg.costo);
+assert.equal(neg.pyg.neta, Math.round((neg.pyg.bruta - neg.pyg.gastos) * 100) / 100);
+assert.equal(neg.pyg.gastos, 50, 'el gasto se muestra sin su ITBIS (59 - 9)');
+// flujo de caja
+const flujo = await rf.datosFlujo();
+assert.ok(flujo.totalEntra > 0);
+const sumaEntra = flujo.tramos.reduce((s, t) => s + t.entra, 0);
+assert.ok(Math.abs(sumaEntra - flujo.totalEntra) < 0.01, 'todo lo por cobrar cae en algún tramo');
+assert.equal(flujo.tramos.at(-1).acumulado, Math.round((flujo.inicial + flujo.totalEntra - flujo.totalSale) * 100) / 100);
+ok('el ITBIS y el NCF se asignan solos, los 607/606 y el resumen de ITBIS cuadran, y salen el P&L, las ventas por cliente/producto y el flujo de caja');
+
 // ---- avisos en el dispositivo ----
 dbSrv.prepare("INSERT INTO avisos (negocio, titulo, mensaje, nivel, caduca) VALUES (NULL, 'Novedad', 'Hay una versión nueva', 'info', '2099-01-01')").run();
 let av = await na.cargarAvisos();

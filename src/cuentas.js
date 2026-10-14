@@ -2,7 +2,7 @@
 import { consultar, registrarPagoCompra, redondear } from './database.js';
 import { h, hoja, toast, dinero } from './ui.js';
 
-const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia' };
+const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque' };
 const fechaCorta = (f) => (f || '').slice(0, 10).split('-').reverse().join('/');
 const hoyISO = () => {
   const d = new Date();

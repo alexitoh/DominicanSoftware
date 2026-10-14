@@ -1,9 +1,10 @@
 // clientes.js - lista, detalle con deuda y formulario de clientes
 import { consultar, ejecutar, redondear } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
-import { formularioAbono } from './cobros.js';
+import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
 import { hoyISO } from './fechas.js';
+import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
 
 // Lo que debe una venta a crédito: total menos lo abonado
 const SALDO = `(v.total - COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.venta_id = v.id), 0))`;
@@ -29,6 +30,11 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
   const telefono = h('input', { class: 'campo', type: 'tel', inputmode: 'tel', value: c?.telefono ?? '' });
   const direccion = h('input', { class: 'campo', value: c?.direccion ?? '' });
   const notas = h('textarea', { class: 'campo', rows: '2' }, c?.notas ?? '');
+  const tipoDoc = h('select', { class: 'campo', 'aria-label': 'Tipo de documento' },
+    ...TIPOS_DOC.map((t) => h('option', { value: t.id }, t.nombre)));
+  tipoDoc.value = c?.tipo_doc || 'rnc';
+  const documento = h('input', { class: 'campo', inputmode: 'text', autocomplete: 'off', placeholder: 'RNC, cédula o DNI', value: c?.documento ? formatearDocumento(c.tipo_doc, c.documento) : '', 'aria-label': 'Número de documento' });
+  const limite = h('input', { class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: 'Sin límite', value: c?.limite_credito > 0 ? c.limite_credito : '', 'aria-label': 'Límite de crédito' });
   const condicion = campoCondicion(c);
   const error = h('p', { class: 'error', role: 'alert' });
 
@@ -38,15 +44,23 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     if (!n) { error.textContent = 'Escribe el nombre del cliente.'; nombre.focus(); return; }
     const cond = condicion.valores();
     if (cond.error) { error.textContent = cond.error; cond.foco?.focus(); return; }
-    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias];
+    const doc = validarDocumento(tipoDoc.value, documento.value);
+    if (doc.error) { error.textContent = doc.error; documento.focus(); return; }
+    const lim = limite.value === '' ? null : Number(limite.value);
+    if (lim != null && !(lim >= 0)) { error.textContent = 'El límite de crédito no es válido.'; limite.focus(); return; }
+    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias, doc.tipo, doc.numero, lim || null];
     try {
+      if (doc.numero) {
+        const [otro] = await consultar('SELECT nombre FROM clientes WHERE documento = ? AND id <> ?', [doc.numero, c?.id ?? -1]);
+        if (otro) { error.textContent = `Ese documento ya pertenece a "${otro.nombre}".`; documento.focus(); return; }
+      }
       let id = c?.id;
       if (nuevo) {
-        const r = await ejecutar('INSERT INTO clientes (nombre, telefono, direccion, notas, condicion, dias_credito) VALUES (?,?,?,?,?,?)', valores);
+        const r = await ejecutar('INSERT INTO clientes (nombre, telefono, direccion, notas, condicion, dias_credito, tipo_doc, documento, limite_credito) VALUES (?,?,?,?,?,?,?,?,?)', valores);
         id = r?.changes?.lastId;
         if (!id) id = (await consultar('SELECT last_insert_rowid() AS id'))[0].id;
       } else {
-        await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=? WHERE id=?', [...valores, id]);
+        await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=?, limite_credito=? WHERE id=?', [...valores, id]);
       }
       cerrar();
       toast(nuevo ? 'Cliente guardado' : 'Cambios guardados');
@@ -64,6 +78,8 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     }
     const ok = await confirmar('Quitar cliente', `Se eliminará a "${c.nombre}".`, 'Quitar cliente');
     if (!ok) return;
+    await ejecutar('DELETE FROM cliente_direcciones WHERE cliente_id = ?', [c.id]);
+    await ejecutar('DELETE FROM cliente_contactos WHERE cliente_id = ?', [c.id]);
     await ejecutar('DELETE FROM clientes WHERE id = ?', [c.id]);
     cerrar();
     toast('Cliente quitado');
@@ -74,13 +90,63 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     h('div', { class: 'cuerpo' },
       campo('Nombre', nombre),
       campo('Teléfono', telefono),
-      campo('Dirección', direccion),
+      h('div', { class: 'etiqueta' }, 'Identificación fiscal', h('div', { class: 'par' }, tipoDoc, documento)),
+      campo('Dirección principal', direccion),
       campo('Notas', notas),
       condicion.el,
+      campo('Límite de crédito (0 o vacío = sin límite)', limite),
       error,
       h('div', { class: 'acciones' },
         nuevo ? null : h('button', { class: 'btn peligro', onClick: quitar }, 'Quitar cliente'),
         h('button', { class: 'btn primario', onClick: guardar }, 'Guardar cliente'))));
+}
+
+const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque', credito: 'Crédito' };
+
+// Formulario genérico para una dirección o un contacto: campos [clave, etiqueta, requerido, atributos]
+function formularioHijo({ titulo, tabla, clienteId, fila, campos, alGuardar }) {
+  const entradas = campos.map(([k, et, req, attr]) => ({ k, req, et, input: h('input', { class: 'campo', value: fila?.[k] ?? '', autocomplete: 'off', ...(attr || {}) }) }));
+  const error = h('p', { class: 'error', role: 'alert' });
+  let cerrar = () => {};
+  async function guardar() {
+    error.textContent = '';
+    const v = Object.fromEntries(entradas.map((e) => [e.k, e.input.value.trim() || null]));
+    const falta = entradas.find((e) => e.req && !v[e.k]);
+    if (falta) { error.textContent = `Escribe: ${falta.et}.`; falta.input.focus(); return; }
+    try {
+      if (fila) await ejecutar(`UPDATE ${tabla} SET ${entradas.map((e) => `${e.k}=?`).join(', ')} WHERE id=?`, [...entradas.map((e) => v[e.k]), fila.id]);
+      else await ejecutar(`INSERT INTO ${tabla} (cliente_id, ${entradas.map((e) => e.k).join(', ')}) VALUES (?, ${entradas.map(() => '?').join(', ')})`, [clienteId, ...entradas.map((e) => v[e.k])]);
+      cerrar();
+      await alGuardar();
+    } catch (e) { error.textContent = `No se pudo guardar: ${e.message || e}`; }
+  }
+  async function quitar() {
+    const ok = await confirmar('Quitar', '¿Quitar este registro del cliente?', 'Quitar');
+    if (!ok) return;
+    await ejecutar(`DELETE FROM ${tabla} WHERE id = ?`, [fila.id]);
+    cerrar();
+    await alGuardar();
+  }
+  cerrar = hoja(titulo, h('div', { class: 'cuerpo' },
+    ...entradas.map((e) => h('label', { class: 'etiqueta' }, e.et, e.input)),
+    error,
+    h('div', { class: 'acciones' },
+      fila ? h('button', { class: 'btn peligro', onClick: quitar }, 'Quitar') : null,
+      h('button', { class: 'btn primario', onClick: guardar }, 'Guardar'))));
+}
+
+function formularioDireccion(clienteId, fila, alGuardar) {
+  formularioHijo({
+    titulo: fila ? 'Editar dirección' : 'Nueva dirección de entrega', tabla: 'cliente_direcciones', clienteId, fila, alGuardar,
+    campos: [['etiqueta', 'Nombre (Casa, Oficina, Almacén…)', false], ['direccion', 'Dirección', true], ['referencia', 'Referencia o indicaciones', false]],
+  });
+}
+
+function formularioContacto(clienteId, fila, alGuardar) {
+  formularioHijo({
+    titulo: fila ? 'Editar contacto' : 'Nuevo contacto', tabla: 'cliente_contactos', clienteId, fila, alGuardar,
+    campos: [['nombre', 'Nombre', true], ['cargo', 'Cargo o relación', false], ['telefono', 'Teléfono', false, { type: 'tel', inputmode: 'tel' }], ['correo', 'Correo', false, { type: 'email', inputmode: 'email' }]],
+  });
 }
 
 export async function vistaClientes(raiz) {
@@ -89,7 +155,7 @@ export async function vistaClientes(raiz) {
   const lista = h('div', { class: 'lista' });
 
   const buscador = h('input', {
-    class: 'campo', type: 'search', placeholder: 'Buscar por nombre o teléfono',
+    class: 'campo', type: 'search', placeholder: 'Buscar por nombre, teléfono o documento',
     'aria-label': 'Buscar cliente',
     onInput: (e) => { estado.texto = e.target.value; pintar(); },
   });
@@ -114,14 +180,15 @@ export async function vistaClientes(raiz) {
       dato('Por cobrar', dinero(r.por_cobrar)));
 
     const like = `%${estado.texto.trim()}%`;
-    let filas = await consultar(`${CLIENTES} WHERE c.nombre LIKE ? OR c.telefono LIKE ? ORDER BY c.nombre`, [like, like]);
+    const soloDoc = limpiarDocumento(estado.texto);
+    let filas = await consultar(`${CLIENTES} WHERE c.nombre LIKE ? OR c.telefono LIKE ? OR c.documento LIKE ? ORDER BY c.nombre`, [like, like, soloDoc ? `%${soloDoc}%` : '\u0000']);
     if (estado.soloDeuda) filas = filas.filter((c) => c.deuda > 0.005);
 
     lista.replaceChildren(...(filas.length
       ? filas.map((c) => h('button', { class: 'fila inventario', onClick: () => detalleCliente(c.id) },
           h('span', { class: 'datos' },
             h('strong', {}, c.nombre),
-            h('small', {}, c.telefono || 'Sin teléfono'),
+            h('small', {}, [c.telefono || 'Sin teléfono', c.documento ? textoDocumento(c.tipo_doc, c.documento) : null].filter(Boolean).join(' · ')),
             textoCondicion(c) ? h('small', {}, textoCondicion(c)) : null),
           h('span', { class: 'precio' }, dinero(c.total),
             h('small', { class: 'bloque' }, `${c.compras} ${c.compras === 1 ? 'compra' : 'compras'}`),
@@ -145,17 +212,28 @@ export async function vistaClientes(raiz) {
       .map((v) => ({ ...v, saldo: redondear(v.total - v.pagado) }))
       .filter((v) => v.saldo > 0.005);
 
+    const direcciones = await consultar('SELECT * FROM cliente_direcciones WHERE cliente_id = ? ORDER BY id', [id]);
+    const contactos = await consultar('SELECT * FROM cliente_contactos WHERE cliente_id = ? ORDER BY id', [id]);
+    const historial = await consultar(
+      `SELECT v.id, v.numero, v.fecha, v.total, v.metodo_pago, v.estado FROM ventas v WHERE v.cliente_id = ? ORDER BY v.id DESC LIMIT 100`, [id]);
+    const deudaActual = Math.max(0, c.deuda);
+    const limite = c.limite_credito > 0 ? c.limite_credito : null;
+
     let cerrar = () => {};
     const refrescar = async () => { cerrar(); await pintar(); await detalleCliente(id); };
+    const recargar = async () => { cerrar(); await detalleCliente(id); };
 
     cerrar = hoja(c.nombre,
       h('div', { class: 'cuerpo' },
         h('p', { class: 'ayuda' }, [c.telefono, c.direccion].filter(Boolean).join(', ') || 'Sin datos de contacto'),
+        c.documento ? h('p', { class: 'ayuda' }, `Identificación: ${textoDocumento(c.tipo_doc, c.documento)}`) : null,
         textoCondicion(c) ? h('p', { class: 'ayuda' }, `Condición de pago: ${textoCondicion(c)}`) : null,
         h('div', { class: 'totales' },
           renglon('Compras', String(c.compras)),
           renglon('Total comprado', dinero(c.total)),
-          renglon('Pendiente de pago', dinero(Math.max(0, c.deuda)), 'gran')),
+          limite ? renglon('Límite de crédito', dinero(limite)) : null,
+          limite ? renglon('Crédito disponible', dinero(Math.max(0, limite - deudaActual)), deudaActual > limite ? 'deuda' : '') : null,
+          renglon('Pendiente de pago', dinero(deudaActual), 'gran')),
         pendientes.length ? h('h3', {}, 'Ventas a crédito pendientes') : h('p', { class: 'ayuda' }, 'No tiene deudas pendientes.'),
         pendientes.length
           ? h('div', { class: 'carrito' }, pendientes.map((v) => h('div', { class: 'linea' },
@@ -165,13 +243,46 @@ export async function vistaClientes(raiz) {
                   `${v.fecha.slice(0, 10)}, total ${dinero(v.total)}${v.vence ? `, ${v.vence < hoyISO() ? 'vencida' : 'vence'} ${v.vence.split('-').reverse().join('/')}` : ''}`),
                 h('button', { class: 'btn', onClick: () => formularioAbono(v, refrescar) }, 'Registrar abono')))))
           : null,
+        seccionDirecciones(direcciones),
+        seccionContactos(contactos),
+        h('h3', {}, 'Historial de compras'),
+        historial.length
+          ? h('div', { class: 'carrito' }, historial.map((v) => h('div', { class: 'linea' },
+              h('div', { class: 'linea-cab' }, h('strong', {}, v.numero), h('span', {}, dinero(v.total))),
+              h('div', { class: 'linea-pie' }, h('small', { class: v.estado === 'anulada' ? 'deuda' : 'ayuda' },
+                `${v.fecha.slice(0, 10)} · ${METODOS[v.metodo_pago] || v.metodo_pago}${v.estado === 'anulada' ? ' · anulada' : ''}`)))))
+          : h('p', { class: 'ayuda' }, 'Todavía no tiene compras.'),
         h('div', { class: 'acciones' },
-          h('button', { class: 'btn', onClick: () => { cerrar(); formularioCliente(c, pintar); } }, 'Editar cliente'))));
+          h('button', { class: 'btn', onClick: () => { cerrar(); formularioCliente(c, pintar); } }, 'Editar cliente'),
+          h('button', { class: 'btn', onClick: () => listaRecibos({ clienteId: id, alCambiar: refrescar }) }, 'Recibos'),
+          pendientes.length ? h('button', { class: 'btn primario', onClick: () => { cerrar(); formularioCobro({ clienteId: id, alGuardar: async () => { await pintar(); } }); } }, 'Cobrar') : null)));
+
+    function seccionDirecciones(lista) {
+      return h('div', {},
+        h('h3', {}, 'Direcciones de entrega'),
+        lista.length ? lista.map((d) => h('div', { class: 'fila-simple' },
+          h('span', { class: 'datos' }, h('strong', {}, d.etiqueta || 'Dirección'), h('small', {}, [d.direccion, d.referencia].filter(Boolean).join(' · '))),
+          h('button', { class: 'btn chico', onClick: () => formularioDireccion(id, d, recargar) }, 'Editar')))
+          : h('p', { class: 'ayuda' }, c.direccion ? 'Solo tiene la dirección principal.' : 'No tiene direcciones guardadas.'),
+        h('button', { class: 'btn chico', onClick: () => formularioDireccion(id, null, recargar) }, 'Agregar dirección'));
+    }
+
+    function seccionContactos(lista) {
+      return h('div', {},
+        h('h3', {}, 'Contactos'),
+        lista.length ? lista.map((k) => h('div', { class: 'fila-simple' },
+          h('span', { class: 'datos' }, h('strong', {}, k.nombre), h('small', {}, [k.cargo, k.telefono, k.correo].filter(Boolean).join(' · ') || 'Sin datos')),
+          h('button', { class: 'btn chico', onClick: () => formularioContacto(id, k, recargar) }, 'Editar')))
+          : h('p', { class: 'ayuda' }, 'No tiene contactos asociados.'),
+        h('button', { class: 'btn chico', onClick: () => formularioContacto(id, null, recargar) }, 'Agregar contacto'));
+    }
   }
 
   raiz.replaceChildren(
     h('header', { class: 'barra' },
       h('h1', {}, 'Clientes'),
+      h('button', { class: 'btn claro', onClick: () => formularioCobro({ alGuardar: pintar }) }, 'Cobrar'),
+      h('button', { class: 'btn claro', onClick: () => listaRecibos({ alCambiar: pintar }) }, 'Recibos'),
       h('button', { class: 'btn claro', onClick: () => formularioCliente(null, pintar) }, 'Nuevo cliente')),
     resumen,
     h('div', { class: 'filtros' }, buscador, segmento),

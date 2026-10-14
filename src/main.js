@@ -1,7 +1,9 @@
 // main.js - arranque, navegación, ajustes y respaldo
 import './style.css';
 import { Capacitor } from '@capacitor/core';
-import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo } from './database.js';
+import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo, leerSecuenciasNCF, guardarSecuenciaNCF } from './database.js';
+import { TIPOS_NCF } from './itbis.js';
+import { validarDocumento } from './fiscal.js';
 import { h, toast, confirmar, setMoneda, hoja, atrasAtendido } from './ui.js';
 import { setIdioma, getIdioma, instalarTraductor } from './i18n.js';
 import { asegurarSesion } from './login.js';
@@ -241,6 +243,31 @@ async function vistaAjustes(raiz) {
   }, h('option', { value: 'app' }, 'Igual que la app'), h('option', { value: 'es' }, 'Español'), h('option', { value: 'en' }, 'English'));
   selFactura.value = cfg.idioma_factura || 'app';
 
+  // Datos fiscales: RNC, ITBIS y secuencias de NCF autorizadas por la DGII (las secuencias son de este dispositivo)
+  const rncNegocio = h('input', { class: 'campo', value: cfg.negocio_rnc ?? '', inputmode: 'numeric', placeholder: '9 números', autocomplete: 'off' });
+  const selItbis = h('select', { class: 'campo', 'aria-label': 'ITBIS' },
+    h('option', { value: 'no' }, 'No calcular ITBIS'), h('option', { value: 'incluido' }, 'Los precios ya incluyen ITBIS'));
+  selItbis.value = cfg.itbis_modo === 'incluido' ? 'incluido' : 'no';
+  const tasaItbis = h('input', { class: 'campo', type: 'number', min: '0', step: '0.01', value: cfg.itbis_tasa || '18', inputmode: 'decimal' });
+  const secuencias = await leerSecuenciasNCF();
+  const camposNcf = secuencias.map((s) => ({
+    s, sig: h('input', { class: 'campo', type: 'number', min: '0', value: s.sig || '', placeholder: 'Próximo', inputmode: 'numeric' }),
+    hasta: h('input', { class: 'campo', type: 'number', min: '0', value: s.hasta || '', placeholder: 'Último', inputmode: 'numeric' }),
+  }));
+  const errorFiscal = h('p', { class: 'error', role: 'alert' });
+  async function guardarFiscal() {
+    errorFiscal.textContent = '';
+    const doc = validarDocumento('rnc', rncNegocio.value);
+    if (doc.error) { errorFiscal.textContent = doc.error; return; }
+    const tasa = parseFloat(tasaItbis.value);
+    if (!(tasa > 0 && tasa < 100)) { errorFiscal.textContent = 'La tasa de ITBIS no es válida.'; return; }
+    try {
+      for (const c of camposNcf) await guardarSecuenciaNCF(c.s.tipo, parseInt(c.sig.value, 10) || 0, parseInt(c.hasta.value, 10) || 0);
+    } catch (e) { errorFiscal.textContent = e.message; return; }
+    for (const [k, v] of [['negocio_rnc', doc.numero || ''], ['itbis_modo', selItbis.value], ['itbis_tasa', String(tasa)]]) await guardarConfig(k, v);
+    toast('Datos fiscales guardados');
+  }
+
   raiz.replaceChildren(
     h('header', { class: 'barra' }, h('h1', {}, 'Ajustes')),
     h('section', { class: 'seccion' },
@@ -255,6 +282,17 @@ async function vistaAjustes(raiz) {
       h('div', { class: 'acciones' },
         quitarLogo,
         h('label', { class: 'btn primario' }, 'Elegir logo', archivoLogo))),
+    h('section', { class: 'seccion' },
+      h('h2', {}, 'Datos fiscales (DGII)'),
+      h('p', { class: 'ayuda' }, 'Para el ITBIS y los reportes 606 y 607. Escribe en NCF los rangos que la DGII te autorizó: las ventas toman el siguiente número solas. Si usas varios dispositivos, dale a cada uno un rango distinto.'),
+      h('label', { class: 'etiqueta' }, 'RNC del negocio', rncNegocio),
+      h('label', { class: 'etiqueta' }, 'ITBIS', selItbis),
+      h('label', { class: 'etiqueta' }, 'Tasa de ITBIS (%)', tasaItbis),
+      ...camposNcf.map((c) => h('div', { class: 'rejilla' },
+        h('label', { class: 'etiqueta' }, `${c.s.tipo} · ${TIPOS_NCF[c.s.tipo]} · próximo`, c.sig),
+        h('label', { class: 'etiqueta' }, 'Último autorizado', c.hasta))),
+      errorFiscal,
+      h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar datos fiscales')),
     h('section', { class: 'seccion' },
       h('h2', {}, 'Datos del negocio'),
       ...campos.map(([k, et]) => h('label', { class: 'etiqueta' }, et, inputs[k])),

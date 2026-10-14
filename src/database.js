@@ -7,6 +7,8 @@ import { Share } from '@capacitor/share';
 import { defineCustomElements as jeepSqlite } from 'jeep-sqlite/loader';
 import schema from './schema.sql?raw'; // Vite: importa el archivo como texto
 import { prepararBase } from './sync-esquema.js';
+import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido } from './itbis.js';
+import { limpiarDocumento } from './fiscal.js';
 
 const DB_NAME = 'caraudio';
 export const esWeb = Capacitor.getPlatform() === 'web';
@@ -49,11 +51,25 @@ export async function initDB() {
     'ALTER TABLE productos ADD COLUMN margen REAL',
     'ALTER TABLE clientes ADD COLUMN condicion TEXT',
     'ALTER TABLE clientes ADD COLUMN dias_credito INTEGER',
+    'ALTER TABLE pagos ADD COLUMN recibo_id INTEGER',
+    'ALTER TABLE clientes ADD COLUMN tipo_doc TEXT',
+    'ALTER TABLE clientes ADD COLUMN documento TEXT',
+    'ALTER TABLE clientes ADD COLUMN limite_credito REAL',
     'ALTER TABLE proveedores ADD COLUMN condicion TEXT',
     'ALTER TABLE proveedores ADD COLUMN dias_credito INTEGER',
     'ALTER TABLE ventas ADD COLUMN usuario_id INTEGER',
     'ALTER TABLE compras ADD COLUMN usuario_id INTEGER',
     'ALTER TABLE cotizaciones ADD COLUMN usuario_id INTEGER',
+    'ALTER TABLE productos ADD COLUMN itbis_exento INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE ventas ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE ventas ADD COLUMN ncf TEXT',
+    'ALTER TABLE compras ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE compras ADD COLUMN ncf TEXT',
+    'ALTER TABLE gastos ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE gastos ADD COLUMN ncf TEXT',
+    'ALTER TABLE gastos ADD COLUMN documento TEXT',
+    'ALTER TABLE proveedores ADD COLUMN tipo_doc TEXT',
+    'ALTER TABLE proveedores ADD COLUMN documento TEXT',
   ]) {
     try { await db.execute(alter); } catch { /* la columna ya existe */ }
   }
@@ -145,16 +161,43 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
   if (metodo_pago === 'credito') {
     if (!cliente_id) throw new Error('Para vender a crédito elige un cliente.');
     if (inicial < 0 || redondear(inicial) > total) throw new Error('El pago inicial no puede ser mayor que el total.');
+    // Límite de crédito del cliente: lo que ya debe más lo que queda pendiente de esta venta no puede pasarlo
+    const [lim] = await consultar('SELECT nombre, limite_credito FROM clientes WHERE id = ?', [cliente_id]);
+    if (lim?.limite_credito > 0) {
+      const [{ deuda }] = await consultar(
+        `SELECT COALESCE(SUM(v.total - COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.venta_id = v.id), 0)), 0) AS deuda
+           FROM ventas v WHERE v.cliente_id = ? AND v.estado = 'completada' AND v.metodo_pago = 'credito'`, [cliente_id]);
+      const nueva = redondear(total - inicial);
+      if (redondear(deuda + nueva) > lim.limite_credito + 0.005) {
+        throw new Error(`Supera el límite de crédito de ${lim.nombre} (${redondear(lim.limite_credito)}): ya debe ${redondear(deuda)} y esta venta deja ${nueva} pendiente. Cobra un pago inicial mayor o ajusta el límite en Clientes.`);
+      }
+    }
   }
+
+  // ITBIS (si el negocio lo usa) y comprobante fiscal
+  const cfgF = await configFiscal();
+  const exentos = new Map();
+  for (const it of items) {
+    const [px] = await consultar('SELECT itbis_exento FROM productos WHERE id = ?', [it.producto_id]);
+    exentos.set(it.producto_id, !!px?.itbis_exento);
+  }
+  const itbis = calcularItbis({
+    lineas: [
+      ...items.map((i) => ({ neto: i.cantidad * i.precio_unitario - (i.descuento || 0), exento: exentos.get(i.producto_id) })),
+      ...servicios.map((s) => ({ neto: s.cantidad * s.precio_unitario, exento: false })),
+    ],
+    descuento, tasa: cfgF.tasa, modo: cfgF.modo,
+  });
+  const ncf = cfgF.modo === 'no' ? null : await siguienteNCF(cliente_id);
 
   const numero = await numeroDocumento('V', 'siguiente_numero_venta');
 
   // 2. Guardar todo en una sola transacción
   const set = [
     {
-      statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId],
+      statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId, itbis, ncf?.ncf ?? null],
     },
   ];
   for (const it of items) {
@@ -310,6 +353,96 @@ export async function registrarAbono({ ventaId, monto, metodo = 'efectivo', nota
     [ventaId, redondear(monto), metodo, nota || null]);
 }
 
+// ---------- Recibos de ingreso (cobros) ----------
+export const METODOS_COBRO = ['efectivo', 'tarjeta', 'transferencia', 'cheque'];
+
+// Saldo pendiente de cada factura a crédito de un cliente, de la más antigua a la más nueva
+export async function facturasPendientes(clienteId) {
+  const filas = await consultar(
+    `SELECT v.id, v.numero, v.fecha, v.total, (SELECT vence FROM cuentas_cobrar WHERE venta_id = v.id) AS vence,
+            COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.venta_id = v.id), 0) AS pagado
+       FROM ventas v
+      WHERE v.cliente_id = ? AND v.estado = 'completada' AND v.metodo_pago = 'credito'
+      ORDER BY v.id`, [clienteId]);
+  return filas.map((v) => ({ ...v, saldo: redondear(v.total - v.pagado) })).filter((v) => v.saldo > 0.005);
+}
+
+// Un cobro: uno o varios métodos de pago aplicados a una o varias facturas del cliente (pago parcial o total).
+// metodos: [{ metodo, monto, referencia }]  aplicaciones: [{ ventaId, monto }]  (las dos listas deben sumar lo mismo)
+// Devuelve { numero, id }.
+export async function registrarCobro({ clienteId, metodos, aplicaciones, notas = '' }) {
+  const cent = (n) => Math.round(Number(n) * 100);
+  if (!clienteId) throw new Error('Elige el cliente.');
+  const [cli] = await consultar('SELECT id FROM clientes WHERE id = ?', [clienteId]);
+  if (!cli) throw new Error('El cliente no existe.');
+  const pagos = (metodos || []).filter((m) => Number(m.monto) > 0);
+  const apps = (aplicaciones || []).filter((a) => Number(a.monto) > 0);
+  if (!pagos.length) throw new Error('Escribe cuánto te pagó el cliente.');
+  if (!apps.length) throw new Error('Elige a qué facturas se aplica el pago.');
+  for (const m of pagos) {
+    if (!METODOS_COBRO.includes(m.metodo)) throw new Error('Método de pago no válido.');
+    if (m.metodo === 'cheque' && !String(m.referencia || '').trim()) throw new Error('Escribe el número de cheque.');
+  }
+  const recibido = pagos.reduce((s, m) => s + cent(m.monto), 0);
+  const aplicado = apps.reduce((s, a) => s + cent(a.monto), 0);
+  if (recibido !== aplicado) {
+    throw new Error(`Lo recibido (${(recibido / 100).toFixed(2)}) debe ser igual a lo aplicado a las facturas (${(aplicado / 100).toFixed(2)}).`);
+  }
+  const pendientes = new Map((await facturasPendientes(clienteId)).map((v) => [v.id, v]));
+  const vistas = new Set();
+  for (const a of apps) {
+    const v = pendientes.get(a.ventaId);
+    if (!v) throw new Error('Una de las facturas ya no tiene saldo pendiente.');
+    if (vistas.has(a.ventaId)) throw new Error('Una factura aparece dos veces.');
+    vistas.add(a.ventaId);
+    if (cent(a.monto) > cent(v.saldo)) throw new Error(`Lo aplicado a ${v.numero} no puede pasar de lo pendiente (${v.saldo.toFixed(2)}).`);
+  }
+
+  const numero = await numeroDocumento('R', 'siguiente_numero_recibo');
+  const set = [{
+    statement: 'INSERT INTO recibos (numero, cliente_id, total, notas, usuario_id) VALUES (?, ?, ?, ?, ?)',
+    values: [numero, clienteId, recibido / 100, notas || null, usuarioActualId],
+  }];
+  const reciboId = '(SELECT id FROM recibos WHERE numero = ?)';
+  for (const m of pagos) {
+    set.push({
+      statement: `INSERT INTO recibo_metodos (recibo_id, metodo, monto, referencia) VALUES (${reciboId}, ?, ?, ?)`,
+      values: [numero, m.metodo, cent(m.monto) / 100, String(m.referencia || '').trim() || null],
+    });
+  }
+  // Se reparte cada método entre las facturas en orden: así cada pago de factura queda con un solo método (la caja lo necesita así)
+  const restoMetodo = pagos.map((m) => ({ metodo: m.metodo, resto: cent(m.monto) }));
+  let i = 0;
+  for (const a of apps) {
+    let porAplicar = cent(a.monto);
+    while (porAplicar > 0) {
+      const m = restoMetodo[i];
+      const parte = Math.min(porAplicar, m.resto);
+      set.push({
+        statement: `INSERT INTO pagos (venta_id, monto, metodo, nota, recibo_id) VALUES (?, ?, ?, ?, ${reciboId})`,
+        values: [a.ventaId, parte / 100, m.metodo, `Recibo ${numero}`, numero],
+      });
+      m.resto -= parte; porAplicar -= parte;
+      if (m.resto === 0) i++;
+    }
+  }
+  set.push({ statement: "UPDATE config SET valor = CAST(valor AS INTEGER) + 1 WHERE clave = 'siguiente_numero_recibo'", values: [] });
+  await transaccion(set);
+  const [r] = await consultar('SELECT id FROM recibos WHERE numero = ?', [numero]);
+  return { numero, id: r.id };
+}
+
+// Anula un recibo: las facturas vuelven a deber lo que se había cobrado con él
+export async function anularRecibo(reciboId) {
+  const [r] = await consultar('SELECT estado FROM recibos WHERE id = ?', [reciboId]);
+  if (!r) throw new Error('El recibo no existe.');
+  if (r.estado === 'anulado') throw new Error('El recibo ya está anulado.');
+  await transaccion([
+    { statement: "UPDATE recibos SET estado = 'anulado' WHERE id = ?", values: [reciboId] },
+    { statement: 'DELETE FROM pagos WHERE recibo_id = ?', values: [reciboId] },
+  ]);
+}
+
 // ---------- Compras a proveedores ----------
 // items: [{ producto_id, cantidad, costo_unitario, precio_venta (opcional) }]
 // Suma las unidades al inventario. Si actualizarCosto es true, el costo de compra pasa a ser el costo del producto;
@@ -318,7 +451,7 @@ export async function registrarAbono({ ventaId, monto, metodo = 'efectivo', nota
 // En crédito: exige proveedor, admite un pago inicial (inicial, pagado con metodo_inicial) y un plazo en días.
 export async function registrarCompra({
   proveedor_id = null, referencia = null, items, actualizarCosto = true, actualizarPrecio = false,
-  forma_pago = 'efectivo', inicial = 0, metodo_inicial = 'efectivo', plazo_dias = null,
+  forma_pago = 'efectivo', inicial = 0, metodo_inicial = 'efectivo', plazo_dias = null, ncf = null, itbis = 0,
 }) {
   if (!items?.length) throw new Error('Agrega al menos un producto.');
   for (const it of items) {
@@ -336,11 +469,13 @@ export async function registrarCompra({
     if (!(inicial >= 0) || redondear(inicial) > total) throw new Error('El pago inicial no puede ser mayor que el total.');
     if (plazo_dias != null && !(plazo_dias >= 0)) throw new Error('El plazo debe ser un número de días válido.');
   }
+  if (!(itbis >= 0) || redondear(itbis) > total) throw new Error('El ITBIS de la compra no es válido.');
+  if (ncf && !ncfValido(ncf)) throw new Error('El NCF no tiene el formato correcto (por ejemplo B0100000001).');
   const numero = await numeroDocumento('C', 'siguiente_numero_compra');
 
   const set = [{
-    statement: 'INSERT INTO compras (numero, proveedor_id, referencia, total, usuario_id) VALUES (?, ?, ?, ?, ?)',
-    values: [numero, proveedor_id, referencia, total, usuarioActualId],
+    statement: 'INSERT INTO compras (numero, proveedor_id, referencia, total, usuario_id, itbis, ncf) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    values: [numero, proveedor_id, referencia, total, usuarioActualId, redondear(itbis), ncf ? String(ncf).trim().toUpperCase() : null],
   }];
   for (const it of items) {
     set.push({
@@ -490,20 +625,23 @@ export async function resumenCaja(caja, hasta = null) {
     proveedores_otros: redondear(proveedores.filter((x) => x.metodo !== 'efectivo').reduce((t, x) => t + x.monto, 0)),
     tarjeta: redondear(suma(ventas, 'tarjeta') + suma(cobros, 'tarjeta')),
     transferencia: redondear(suma(ventas, 'transferencia') + suma(cobros, 'transferencia')),
+    cheque: redondear(suma(ventas, 'cheque') + suma(cobros, 'cheque')),
     gastos_otros: redondear(gastos.filter((g) => g.metodo !== 'efectivo').reduce((s, g) => s + g.monto, 0)),
   };
   r.esperado = redondear(r.inicial + r.ventas_efectivo + r.cobros_efectivo - r.gastos_efectivo - r.proveedores_efectivo);
   return r;
 }
 
-export async function registrarGasto({ concepto, categoria = null, monto, metodo = 'efectivo', nota = null }) {
+export async function registrarGasto({ concepto, categoria = null, monto, metodo = 'efectivo', nota = null, ncf = null, itbis = 0, documento = null }) {
   const caja = await cajaAbierta();
   if (!caja) throw new Error('Abre la caja para registrar gastos.');
   if (!concepto?.trim()) throw new Error('Escribe en qué se gastó.');
   if (!(monto > 0)) throw new Error('El monto del gasto debe ser mayor que cero.');
+  if (!(itbis >= 0) || redondear(itbis) > redondear(monto)) throw new Error('El ITBIS del gasto no es válido.');
+  if (ncf && !ncfValido(ncf)) throw new Error('El NCF no tiene el formato correcto (por ejemplo B0100000001).');
   await ejecutar(
-    'INSERT INTO gastos (caja_id, concepto, categoria, monto, metodo, nota) VALUES (?,?,?,?,?,?)',
-    [caja.id, concepto.trim(), categoria, redondear(monto), metodo, nota]);
+    'INSERT INTO gastos (caja_id, concepto, categoria, monto, metodo, nota, itbis, ncf, documento) VALUES (?,?,?,?,?,?,?,?,?)',
+    [caja.id, concepto.trim(), categoria, redondear(monto), metodo, nota, redondear(itbis), ncf ? String(ncf).trim().toUpperCase() : null, documento ? limpiarDocumento(documento) : null]);
 }
 
 export async function eliminarGasto(id) {
@@ -591,4 +729,64 @@ export async function restaurarRespaldo(archivo) {
   await sqlite.closeConnection(DB_NAME, false);
   await sqlite.importFromJson(JSON.stringify(json));
   await initDB(); // reabre la base ya restaurada
+}
+
+// ---------- Datos fiscales: ITBIS y secuencias de NCF (las secuencias son de este dispositivo) ----------
+export async function configFiscal() {
+  const f = Object.fromEntries((await consultar("SELECT clave, valor FROM config WHERE clave IN ('itbis_modo','itbis_tasa')")).map((r) => [r.clave, r.valor]));
+  const tasa = parseFloat(f.itbis_tasa);
+  return { modo: f.itbis_modo === 'incluido' ? 'incluido' : 'no', tasa: tasa > 0 ? tasa : 18 };
+}
+
+// Secuencias autorizadas por la DGII: ncf_<tipo>_sig (próximo número) y ncf_<tipo>_hasta (último autorizado)
+export async function leerSecuenciasNCF() {
+  const filas = await consultar("SELECT clave, valor FROM config WHERE clave LIKE 'ncf\\_%' ESCAPE '\\'");
+  const c = Object.fromEntries(filas.map((r) => [r.clave, r.valor]));
+  return Object.keys(TIPOS_NCF).map((tipo) => ({
+    tipo, sig: parseInt(c[`ncf_${tipo}_sig`], 10) || 0, hasta: parseInt(c[`ncf_${tipo}_hasta`], 10) || 0,
+  }));
+}
+
+export async function guardarSecuenciaNCF(tipo, sig, hasta) {
+  if (!TIPOS_NCF[tipo]) throw new Error('Tipo de NCF desconocido.');
+  if (sig && hasta && sig > hasta) throw new Error('El número inicial no puede ser mayor que el final.');
+  for (const [k, v] of [[`ncf_${tipo}_sig`, sig || 0], [`ncf_${tipo}_hasta`, hasta || 0]]) {
+    await ejecutar('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', [k, String(v)]);
+  }
+}
+
+// Elige B01 (crédito fiscal) si el cliente tiene RNC y hay secuencia B01; si no, B02. Sin secuencia, la venta queda sin NCF.
+async function siguienteNCF(clienteId) {
+  const sec = await leerSecuenciasNCF();
+  const util = (t) => sec.find((s) => s.tipo === t && s.sig > 0 && s.sig <= s.hasta);
+  let tipo = null;
+  if (clienteId) {
+    const [c] = await consultar('SELECT tipo_doc, documento FROM clientes WHERE id = ?', [clienteId]);
+    if (c?.documento && limpiarDocumento(c.documento).length === 9 && util('B01')) tipo = 'B01';
+  }
+  if (!tipo && util('B02')) tipo = 'B02';
+  if (!tipo) return null;
+  const s = util(tipo);
+  const ncf = formatearNCF(tipo, s.sig);
+  await ejecutar('UPDATE config SET valor = ? WHERE clave = ?', [String(s.sig + 1), `ncf_${tipo}_sig`]);
+  return { ncf, tipo };
+}
+
+export async function asignarNCFVenta(ventaId, ncf) {
+  const v = String(ncf || '').trim().toUpperCase();
+  if (v && !ncfValido(v)) throw new Error('El NCF no tiene el formato correcto (por ejemplo B0200000001).');
+  if (v) {
+    const [u] = await consultar('SELECT numero FROM ventas WHERE ncf = ? AND id <> ?', [v, ventaId]);
+    if (u) throw new Error(`Ese NCF ya se usó en la venta ${u.numero}.`);
+  }
+  await ejecutar('UPDATE ventas SET ncf = ? WHERE id = ?', [v || null, ventaId]);
+}
+
+// Guarda un archivo de texto (reportes TXT/CSV): descarga en el navegador o lo comparte desde el teléfono
+export async function exportarTexto(nombre, texto, tipo = 'text/plain') {
+  if (esWeb) { descargarArchivo(nombre, texto, `${tipo};charset=utf-8`); return nombre; }
+  await Filesystem.writeFile({ path: nombre, data: texto, directory: Directory.Documents, encoding: Encoding.UTF8 });
+  const { uri } = await Filesystem.getUri({ path: nombre, directory: Directory.Documents });
+  await Share.share({ title: nombre, url: uri });
+  return nombre;
 }

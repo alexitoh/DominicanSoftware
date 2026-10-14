@@ -129,6 +129,7 @@ export async function vistaProductos(raiz) {
 
     const stockInicial = nuevo ? numero('0', false) : null;
     const stockMinimo = numero(p?.stock_minimo ?? 0, false);
+    const exento = h('input', { type: 'checkbox', checked: !!p?.itbis_exento });
     const ubicacion = h('input', { class: 'campo', value: p?.ubicacion ?? '', placeholder: 'Ej. Estante B2' });
 
     const vistaFoto = h('div', { class: 'foto' });
@@ -172,9 +173,9 @@ export async function vistaProductos(raiz) {
 
         if (nuevo) {
           const set = [{
-            statement: `INSERT INTO productos (codigo, nombre, categoria_id, marca, costo, precio, margen, stock_actual, stock_minimo, ubicacion, foto)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-            values: [cod, nombreV, catId, mar, costoV, precioV, margenV, inicialV, minimoV, ubi, foto],
+            statement: `INSERT INTO productos (codigo, nombre, categoria_id, marca, costo, precio, margen, stock_actual, stock_minimo, ubicacion, foto, itbis_exento)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            values: [cod, nombreV, catId, mar, costoV, precioV, margenV, inicialV, minimoV, ubi, foto, exento.checked ? 1 : 0],
           }];
           if (inicialV > 0) {
             set.push({
@@ -186,9 +187,9 @@ export async function vistaProductos(raiz) {
           await transaccion(set);
         } else {
           await ejecutar(
-            `UPDATE productos SET codigo=?, nombre=?, categoria_id=?, marca=?, costo=?, precio=?, margen=?, stock_minimo=?, ubicacion=?, foto=?
+            `UPDATE productos SET codigo=?, nombre=?, categoria_id=?, marca=?, costo=?, precio=?, margen=?, stock_minimo=?, ubicacion=?, foto=?, itbis_exento=?
               WHERE id = ?`,
-            [cod, nombreV, catId, mar, costoV, precioV, margenV, minimoV, ubi, foto, p.id]);
+            [cod, nombreV, catId, mar, costoV, precioV, margenV, minimoV, ubi, foto, exento.checked ? 1 : 0, p.id]);
         }
         cerrar();
         toast(nuevo ? 'Producto guardado' : 'Cambios guardados');
@@ -234,6 +235,7 @@ export async function vistaProductos(raiz) {
           nuevo ? campo('Cantidad inicial', stockInicial) : null,
           campo('Stock mínimo', stockMinimo, 'Avisa cuando baje de este número.')),
         campo('Ubicación en almacén', ubicacion),
+        h('label', { class: 'etiqueta' }, exento, ' Exento de ITBIS (no cobra impuesto)'),
         h('div', { class: 'fotobloque' }, vistaFoto, h('label', { class: 'btn' }, 'Elegir foto', archivo)),
         nuevo ? null : h('p', { class: 'ayuda' }, `Stock actual: ${p.stock_actual}. Para cambiarlo usa Inventario, así queda registrado.`),
         error,

@@ -6,8 +6,9 @@ import { Share } from '@capacitor/share';
 import { consultar, esWeb, descargarArchivo } from './database.js';
 import { dinero } from './ui.js';
 import { traducir, getIdioma } from './i18n.js';
+import { textoDocumento } from './fiscal.js';
 
-const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', credito: 'Crédito' };
+const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque', credito: 'Crédito' };
 
 export function fechaLegible(f) {
   // "2026-10-12 14:20:05" -> "12/10/2026 14:20"
@@ -28,7 +29,7 @@ export function medirImagen(dataUrl) {
 
 export async function crearPDF(ventaId) {
   const [v] = await consultar(
-    `SELECT v.*, c.nombre AS cliente, c.telefono AS cliente_tel
+    `SELECT v.*, c.nombre AS cliente, c.telefono AS cliente_tel, c.tipo_doc AS cliente_tipo_doc, c.documento AS cliente_doc
        FROM ventas v LEFT JOIN clientes c ON c.id = v.cliente_id WHERE v.id = ?`, [ventaId]);
   if (!v) throw new Error('La venta no existe');
   const items = await consultar(
@@ -90,6 +91,8 @@ export async function crearPDF(ventaId) {
   y += 5;
   doc.text(`${L('Cliente')}: ${L(v.cliente || 'Cliente general')}`, M, y);
   if (v.cliente_tel) doc.text(L(`Tel. ${v.cliente_tel}`), DER, y, { align: 'right' });
+  if (v.ncf) { y += 5; doc.text(`NCF: ${v.ncf}`, M, y); }
+  if (v.cliente_doc) { y += 5; doc.text(`${L(textoDocumento(v.cliente_tipo_doc, v.cliente_doc))}`, M, y); }
 
   // Tabla de productos
   y += 7;
@@ -148,6 +151,11 @@ export async function crearPDF(ventaId) {
   doc.setFont('helvetica', 'bold').setFontSize(12);
   doc.text(L('TOTAL'), 100, y, { align: 'right' });
   doc.text(dinero(v.total), DER - 2, y, { align: 'right' });
+  if (v.itbis > 0) {
+    y += 5;
+    doc.setFont('helvetica', 'normal').setFontSize(9);
+    doc.text(L(`ITBIS incluido: ${dinero(v.itbis)}`), DER - 2, y, { align: 'right' });
+  }
 
   if (v.metodo_pago === 'credito') {
     doc.setFont('helvetica', 'normal').setFontSize(10);

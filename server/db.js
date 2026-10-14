@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const TABLAS_SYNC = [
-  'categorias', 'productos', 'clientes', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'pagos',
+  'categorias', 'productos', 'clientes', 'cliente_direcciones', 'cliente_contactos', 'recibos', 'recibo_metodos', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'pagos',
   'cuentas_cobrar', 'garantias', 'garantia_reclamos', 'compras', 'compra_detalle', 'cuentas_pagar', 'pagos_compra',
   'caja', 'gastos', 'cotizaciones', 'cotizacion_detalle', 'movimientos_inventario', 'bitacora', 'config',
 ];

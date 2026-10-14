@@ -3,6 +3,7 @@ import { consultar } from './database.js';
 import { h, dinero } from './ui.js';
 import { condicionRango, rangoInicial, selectorRango, hoyISO } from './fechas.js';
 import { textoCondicion } from './condicion.js';
+import { vistaImpuestos, vistaNegocio, vistaFlujo } from './reportes-fiscal.js';
 
 const PERIODOS = [['hoy', 'Hoy'], ['semana', '7 días'], ['mes', 'Mes'], ['anio', 'Año'], ['rango', 'Rango'], ['todo', 'Todo']];
 
@@ -18,7 +19,7 @@ export function condicionFecha(periodo, col, rango) {
   }
 }
 
-const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', credito: 'Crédito (fiado)' };
+const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque', credito: 'Crédito (fiado)' };
 const renglon = (a, b, clase = '') => h('div', { class: clase }, h('span', {}, a), h('span', {}, b));
 
 export async function datosReporte(periodo, rango) {
@@ -143,11 +144,15 @@ export async function vistaReportes(raiz) {
   const barraPeriodo = h('div', { class: 'filtros' }, segmento, filaRango.el);
   const contenido = h('div');
   let pestana = 'general';
-  const pintarPestanas = () => pestanas.replaceChildren(...[['general', 'Resumen'], ['facturas', 'Reporte de facturas']].map(([id, t]) =>
+  const pintarPestanas = () => pestanas.replaceChildren(...[['general', 'Resumen'], ['negocio', 'Negocio y P&L'], ['flujo', 'Flujo de caja'], ['impuestos', 'Impuestos'], ['facturas', 'Facturas']].map(([id, t]) =>
     h('button', { 'aria-pressed': String(pestana === id), onClick: async () => {
       pestana = id; pintarPestanas();
       barraPeriodo.style.display = id === 'general' ? '' : 'none';
-      if (id === 'general') { contenido.replaceChildren(cuerpo); await pintar(); } else { await vistaFacturas(contenido); }
+      if (id === 'general') { contenido.replaceChildren(cuerpo); await pintar(); }
+      else if (id === 'negocio') await vistaNegocio(contenido);
+      else if (id === 'flujo') await vistaFlujo(contenido);
+      else if (id === 'impuestos') await vistaImpuestos(contenido);
+      else await vistaFacturas(contenido);
     } }, t)));
 
   const pintarSegmento = () => segmento.replaceChildren(...PERIODOS.map(([id, t]) =>

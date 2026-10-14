@@ -15,9 +15,9 @@ const PERIODOS = {
   mes: "strftime('%Y-%m', v.fecha) = strftime('%Y-%m', 'now', 'localtime')",
   todas: '1 = 1',
 };
-const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', credito: 'Crédito' };
+const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque', credito: 'Crédito' };
 const OPCIONES_PAGO = [
-  ['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta'], ['transferencia', 'Transferencia'], ['credito', 'Crédito (fiado)'],
+  ['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta'], ['transferencia', 'Transferencia'], ['cheque', 'Cheque'], ['credito', 'Crédito (fiado)'],
 ];
 const PAGADO = '(SELECT COALESCE(SUM(p.monto), 0) FROM pagos p WHERE p.venta_id = v.id)';
 

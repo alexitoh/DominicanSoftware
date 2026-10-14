@@ -137,6 +137,8 @@ export async function vistaCompras(raiz) {
     });
     const provInfo = new Map();
     const proveedor = h('select', { class: 'campo', 'aria-label': 'Proveedor', onChange: () => aplicarCondicion() });
+    const ncfC = h('input', { class: 'campo', placeholder: 'B0100000001 (opcional)', autocomplete: 'off', 'aria-label': 'NCF' });
+    const itbisC = h('input', { class: 'campo', type: 'number', min: '0', step: '0.01', inputmode: 'decimal', placeholder: '0.00', 'aria-label': 'ITBIS de la compra' });
     const referencia = h('input', { class: 'campo', placeholder: 'Opcional', autocomplete: 'off', 'aria-label': 'Número de factura del proveedor' });
     const margenGlobal = h('input', {
       class: 'campo', type: 'number', inputmode: 'decimal', step: '0.01', placeholder: 'Ej. 30',
@@ -146,12 +148,12 @@ export async function vistaCompras(raiz) {
     const actualizarPrecio = h('input', { type: 'checkbox', checked: true });
     const botonRegistrar = h('button', { class: 'btn primario', onClick: () => registrar() }, 'Registrar compra');
     const formaPago = h('select', { class: 'campo', 'aria-label': 'Forma de pago', onChange: () => mostrarCredito() },
-      [['efectivo', 'Contado, efectivo'], ['tarjeta', 'Contado, tarjeta'], ['transferencia', 'Contado, transferencia'], ['credito', 'Crédito (por pagar)']]
+      [['efectivo', 'Contado, efectivo'], ['tarjeta', 'Contado, tarjeta'], ['transferencia', 'Contado, transferencia'], ['cheque', 'Contado, cheque'], ['credito', 'Crédito (por pagar)']]
         .map(([k, t]) => h('option', { value: k }, t)));
     const plazo = h('input', { class: 'campo', type: 'number', inputmode: 'numeric', min: '0', step: '1', value: '30', 'aria-label': 'Plazo en días' });
     const inicial = h('input', { class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: '0.00', 'aria-label': 'Pago inicial' });
     const metodoInicial = h('select', { class: 'campo', 'aria-label': 'Método del pago inicial' },
-      [['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta'], ['transferencia', 'Transferencia']].map(([k, t]) => h('option', { value: k }, t)));
+      [['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta'], ['transferencia', 'Transferencia'], ['cheque', 'Cheque']].map(([k, t]) => h('option', { value: k }, t)));
     const bloqueCredito = h('div', { class: 'cuerpo sin-borde' },
       h('div', { class: 'rejilla' },
         h('label', { class: 'etiqueta' }, 'Plazo (días)', plazo),
@@ -333,6 +335,8 @@ export async function vistaCompras(raiz) {
         const numero = await registrarCompra({
           proveedor_id: proveedor.value ? Number(proveedor.value) : null,
           referencia: referencia.value.trim() || null,
+          ncf: ncfC.value.trim() || null,
+          itbis: parseFloat(itbisC.value) || 0,
           items: [...carrito.values()].map((l) => ({
             producto_id: l.p.id, cantidad: l.cantidad, costo_unitario: l.costo, precio_venta: l.precio,
           })),
@@ -361,6 +365,7 @@ export async function vistaCompras(raiz) {
             onClick: () => formularioProveedor(null, async (id) => { await cargarProveedores(); if (id) { proveedor.value = String(id); aplicarCondicion(); } }),
           }, 'Nuevo')),
         h('label', { class: 'etiqueta' }, 'Factura del proveedor', referencia),
+        h('div', { class: 'rejilla' }, h('label', { class: 'etiqueta' }, 'NCF de la factura', ncfC), h('label', { class: 'etiqueta' }, 'ITBIS incluido', itbisC)),
         h('label', { class: 'etiqueta' }, 'Forma de pago', formaPago),
         bloqueCredito,
         h('label', { class: 'etiqueta' }, 'Margen de ganancia para todos los productos (%)', margenGlobal,

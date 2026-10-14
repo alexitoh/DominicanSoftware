@@ -193,6 +193,52 @@ assert.equal((await uno(A, "SELECT stock_actual s FROM productos WHERE codigo = 
 assert.equal((await uno(C, 'SELECT COUNT(*) n FROM categorias')).n, 6, 'categorías base no se duplican al combinar');
 ok('un dispositivo con datos propios se combina con los de la nube');
 
+// ---------- 9b. Ficha ampliada del cliente: documento, límite, direcciones y contactos ----------
+A.run("UPDATE clientes SET tipo_doc = 'rnc', documento = '101123456', limite_credito = 5000 WHERE nombre = 'Juan'");
+const idJuanA = (await uno(A, "SELECT id FROM clientes WHERE nombre = 'Juan'")).id;
+A.run("INSERT INTO cliente_direcciones (cliente_id, etiqueta, direccion, referencia) VALUES (?, 'Almacén', 'Calle 5 #10', 'Frente al colmado')", [idJuanA]);
+A.run("INSERT INTO cliente_contactos (cliente_id, nombre, cargo, telefono) VALUES (?, 'Marta', 'Compras', '809-222')", [idJuanA]);
+await A.motor.sincronizar();
+await B.motor.sincronizar();
+const juanB = await uno(B, "SELECT id, tipo_doc, documento, limite_credito FROM clientes WHERE nombre = 'Juan'");
+assert.deepEqual({ tipo_doc: juanB.tipo_doc, documento: juanB.documento, limite_credito: juanB.limite_credito }, { tipo_doc: 'rnc', documento: '101123456', limite_credito: 5000 });
+assert.equal((await uno(B, 'SELECT direccion FROM cliente_direcciones WHERE cliente_id = ?', [juanB.id])).direccion, 'Calle 5 #10', 'la dirección llega ligada al cliente correcto');
+assert.equal((await uno(B, 'SELECT nombre FROM cliente_contactos WHERE cliente_id = ?', [juanB.id])).nombre, 'Marta');
+// B edita el contacto y borra la dirección: A lo ve
+await pausa(5);
+B.run("UPDATE cliente_contactos SET telefono = '809-333' WHERE nombre = 'Marta'");
+B.run('DELETE FROM cliente_direcciones WHERE cliente_id = ?', [juanB.id]);
+await B.motor.sincronizar();
+await A.motor.sincronizar();
+assert.equal((await uno(A, "SELECT telefono FROM cliente_contactos WHERE nombre = 'Marta'")).telefono, '809-333');
+assert.equal((await uno(A, 'SELECT COUNT(*) n FROM cliente_direcciones')).n, 0);
+assert.equal(await A.motor.pendientes(), 0);
+ok('documento fiscal, límite de crédito, direcciones y contactos del cliente se sincronizan entre dispositivos');
+
+// Recibo de ingreso con dos métodos y su pago ligado
+A.run("INSERT INTO recibos (numero, cliente_id, total, notas) VALUES ('R-A000001', ?, 120, 'Abono')", [idJuanA]);
+const idRecA = (await uno(A, "SELECT id FROM recibos WHERE numero = 'R-A000001'")).id;
+A.run("INSERT INTO recibo_metodos (recibo_id, metodo, monto, referencia) VALUES (?, 'efectivo', 70, NULL)", [idRecA]);
+A.run("INSERT INTO recibo_metodos (recibo_id, metodo, monto, referencia) VALUES (?, 'cheque', 50, 'Cheque 77')", [idRecA]);
+A.run("INSERT INTO pagos (venta_id, monto, metodo, nota, recibo_id) VALUES (?, 120, 'efectivo', 'Recibo R-A000001', ?)", [vc, idRecA]);
+await A.motor.sincronizar();
+await B.motor.sincronizar();
+const recB = await uno(B, "SELECT id, total, cliente_id FROM recibos WHERE numero = 'R-A000001'");
+assert.equal(recB.total, 120);
+assert.equal((await uno(B, 'SELECT nombre FROM clientes WHERE id = ?', [recB.cliente_id])).nombre, 'Juan');
+assert.equal((await uno(B, 'SELECT COUNT(*) n FROM recibo_metodos WHERE recibo_id = ?', [recB.id])).n, 2);
+assert.equal((await uno(B, "SELECT referencia FROM recibo_metodos WHERE metodo = 'cheque'")).referencia, 'Cheque 77');
+assert.equal((await uno(B, 'SELECT p.monto FROM pagos p WHERE p.recibo_id = ?', [recB.id])).monto, 120, 'el pago llega ligado a su recibo');
+// Anular en B (borra el pago, marca el recibo): A lo ve
+await pausa(5);
+B.run("UPDATE recibos SET estado = 'anulado' WHERE id = ?", [recB.id]);
+B.run('DELETE FROM pagos WHERE recibo_id = ?', [recB.id]);
+await B.motor.sincronizar();
+await A.motor.sincronizar();
+assert.equal((await uno(A, "SELECT estado FROM recibos WHERE numero = 'R-A000001'")).estado, 'anulado');
+assert.equal((await uno(A, 'SELECT COUNT(*) n FROM pagos WHERE recibo_id = ?', [idRecA])).n, 0);
+ok('los recibos de ingreso, sus métodos de pago y los pagos ligados se sincronizan y se anulan en los dos dispositivos');
+
 // ---------- 10. Seguridad y cuentas del servidor ----------
 const r = await fetch(`${BASE}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
 assert.equal(r.status, 401);

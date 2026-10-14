@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS productos (
   ubicacion TEXT,
   foto TEXT,
   activo INTEGER NOT NULL DEFAULT 1,
+  itbis_exento INTEGER NOT NULL DEFAULT 0,
   creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -36,8 +37,32 @@ CREATE TABLE IF NOT EXISTS clientes (
   notas TEXT,
   condicion TEXT,       -- contado | credito (vacío = sin definir)
   dias_credito INTEGER, -- días para pagar si es a crédito
+  tipo_doc TEXT,        -- rnc | cedula | dni (identificación fiscal)
+  documento TEXT,       -- número sin guiones ni espacios
+  limite_credito REAL,  -- tope de deuda a crédito (vacío = sin límite)
   creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+
+-- Direcciones de envío o entrega de un cliente (la dirección de la ficha es la principal)
+CREATE TABLE IF NOT EXISTS cliente_direcciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id),
+  etiqueta TEXT,        -- Casa, Oficina, Almacén…
+  direccion TEXT NOT NULL,
+  referencia TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cliente_dir ON cliente_direcciones(cliente_id);
+
+-- Personas de contacto asociadas a un cliente
+CREATE TABLE IF NOT EXISTS cliente_contactos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id),
+  nombre TEXT NOT NULL,
+  cargo TEXT,
+  telefono TEXT,
+  correo TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cliente_cont ON cliente_contactos(cliente_id);
 
 CREATE TABLE IF NOT EXISTS ventas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,9 +72,11 @@ CREATE TABLE IF NOT EXISTS ventas (
   subtotal REAL NOT NULL DEFAULT 0,
   descuento REAL NOT NULL DEFAULT 0,
   total REAL NOT NULL DEFAULT 0,
-  metodo_pago TEXT NOT NULL DEFAULT 'efectivo', -- efectivo | tarjeta | transferencia
+  metodo_pago TEXT NOT NULL DEFAULT 'efectivo', -- efectivo | tarjeta | transferencia | cheque
   estado TEXT NOT NULL DEFAULT 'completada',    -- completada | anulada
-  notas TEXT
+  notas TEXT,
+  itbis REAL NOT NULL DEFAULT 0,
+  ncf TEXT
 );
 
 CREATE TABLE IF NOT EXISTS venta_detalle (
@@ -82,12 +109,35 @@ CREATE TABLE IF NOT EXISTS movimientos_inventario (
 );
 
 -- Abonos e inicial de las ventas a crédito (metodo_pago = 'credito')
+-- Recibo de ingreso: un cobro a un cliente que puede pagar varias facturas con varios métodos de pago
+CREATE TABLE IF NOT EXISTS recibos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id),
+  total REAL NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'vigente', -- vigente | anulado
+  notas TEXT,
+  usuario_id INTEGER
+);
+-- Cómo se pagó el recibo: una línea por método (efectivo, tarjeta, transferencia, cheque)
+CREATE TABLE IF NOT EXISTS recibo_metodos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  recibo_id INTEGER NOT NULL REFERENCES recibos(id),
+  metodo TEXT NOT NULL,
+  monto REAL NOT NULL,
+  referencia TEXT       -- número de cheque, banco o referencia de la transferencia
+);
+CREATE INDEX IF NOT EXISTS idx_recibos_cliente ON recibos(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_recibo_metodos ON recibo_metodos(recibo_id);
+
 CREATE TABLE IF NOT EXISTS pagos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   venta_id INTEGER NOT NULL REFERENCES ventas(id),
   monto REAL NOT NULL,
   metodo TEXT NOT NULL DEFAULT 'efectivo',
   nota TEXT,
+  recibo_id INTEGER REFERENCES recibos(id),
   fecha TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -108,6 +158,8 @@ CREATE TABLE IF NOT EXISTS proveedores (
   notas TEXT,
   condicion TEXT,
   dias_credito INTEGER,
+  tipo_doc TEXT,
+  documento TEXT,
   creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -119,7 +171,9 @@ CREATE TABLE IF NOT EXISTS compras (
   referencia TEXT,
   total REAL NOT NULL DEFAULT 0,
   estado TEXT NOT NULL DEFAULT 'completada',
-  notas TEXT
+  notas TEXT,
+  itbis REAL NOT NULL DEFAULT 0,
+  ncf TEXT
 );
 
 CREATE TABLE IF NOT EXISTS compra_detalle (
@@ -170,7 +224,10 @@ CREATE TABLE IF NOT EXISTS gastos (
   categoria TEXT,
   monto REAL NOT NULL,
   metodo TEXT NOT NULL DEFAULT 'efectivo',
-  nota TEXT
+  nota TEXT,
+  itbis REAL NOT NULL DEFAULT 0,
+  ncf TEXT,
+  documento TEXT
 );
 
 -- Garantías de los productos vendidos (una por línea de venta que la lleve)
@@ -271,4 +328,7 @@ INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('moneda', 'RD$'),
   ('siguiente_numero_venta', '1'),
   ('siguiente_numero_compra', '1'),
-  ('siguiente_numero_cotizacion', '1');
+  ('siguiente_numero_cotizacion', '1'),
+  ('siguiente_numero_recibo', '1'),
+  ('itbis_modo', 'no'),
+  ('itbis_tasa', '18');

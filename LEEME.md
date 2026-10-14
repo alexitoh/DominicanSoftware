@@ -104,6 +104,22 @@ En el navegador de la computadora la cámara funciona en http://localhost:5173. 
 
 32. **Usuarios y acceso**: al abrir la app por primera vez se pide crear la cuenta del administrador (negocio, nombre, usuario, correo y contraseña) y se muestra un código de recuperación que hay que guardar. Después se entra con usuario o correo y contraseña (se puede mantener la sesión). El administrador gestiona empleados en el módulo "Usuarios": rol (Administrador, Gerente, Vendedor, Cajero, Almacén), a qué módulos puede entrar, permiso de anular, activar o desactivar, restablecer contraseña (queda una temporal que debe cambiar) y la pestaña "Actividad" con la bitácora. Cada venta, compra y cotización guarda quién la hizo y Reportes muestra ventas por vendedor. El círculo con las iniciales (arriba a la derecha) abre "Mi cuenta": cambiar contraseña y cerrar sesión. Las contraseñas se guardan con hash (PBKDF2). Tras 5 intentos fallidos se bloquea 1 minuto. Si ya tenías datos, se conservan: solo se pide crear la cuenta. Al restaurar un respaldo la app se reinicia y vuelve a pedir el acceso. Más adelante, ver PLAN-NUBE.md para cuentas en la nube.
 
+## Ficha ampliada del cliente
+
+- **Identificación fiscal:** en Clientes elige RNC (9 números), Cédula (11) o DNI/otro y escribe el número. No acepta el mismo documento en dos clientes. Sale en la factura PDF y se puede buscar por él.
+- **Límite de crédito:** tope de lo que el cliente puede deber. Una venta a crédito que lo pase se rechaza (con un pago inicial mayor sí entra). Vacío o 0 = sin límite. El detalle muestra el límite y el crédito disponible.
+- **Historial de compras:** el detalle del cliente lista todas sus ventas (fecha, forma de pago, total, anuladas) junto con su saldo pendiente.
+- **Direcciones de entrega:** las que hagan falta, además de la principal (nombre, dirección y referencia).
+- **Contactos:** personas asociadas (nombre, cargo, teléfono, correo).
+- Todo se sincroniza con la nube igual que el resto.
+
+## Cobros y recibos de ingreso
+
+- **Clientes > Cobrar** (o "Registrar abono" en una factura): elige las facturas a pagar y cuánto se aplica a cada una; puede ser pago parcial o total. Si no escribes montos, se reparte solo de la factura más antigua a la más nueva.
+- **Varios métodos en un mismo cobro:** efectivo, tarjeta, transferencia y cheque (con número de cheque y banco). "Agregar otro método de pago" suma otra línea. Lo recibido debe ser igual a lo aplicado a las facturas.
+- Cada cobro genera un **recibo** (R-000001, con la letra del dispositivo si está en la nube) que se puede compartir en PDF. **Clientes > Recibos** lista los últimos 100; desde el detalle se puede anular y las facturas vuelven a deber lo cobrado.
+- La caja separa lo cobrado en efectivo (entra al cajón) de tarjeta, transferencia y cheques. El cheque también se puede usar como forma de pago en ventas, compras y gastos.
+
 ## Nube y sincronización
 
 33. **Trabajar sin internet y sincronizar**: la app guarda todo primero en el dispositivo (siempre funciona sin internet) y, si el negocio está conectado a la nube, sube los cambios y baja los de otros dispositivos cuando hay conexión (cada ~45 segundos, al volver el internet y poco después de cada cambio). Arriba, a la derecha, el icono de nube muestra el estado (verde: al día, azul parpadeando: sincronizando, gris: sin conexión, naranja: hay que volver a entrar) y cuántos cambios faltan por subir.
@@ -113,3 +129,15 @@ En el navegador de la computadora la cámara funciona en http://localhost:5173. 
     - **Respaldo**: con la nube conectada los datos se recuperan entrando en otro dispositivo; "Restaurar desde un archivo" se oculta.
     - **Servidor**: ver `DESPLIEGUE.md` (Railway o VPS) y `server/README.md`. Pruebas automáticas: `npm run prueba`.
 
+
+## Impuestos y reportes de negocio (DGII)
+
+**Configuración** (Ajustes → Datos fiscales): RNC del negocio, si los precios incluyen ITBIS y la tasa (18 %), y los rangos de NCF autorizados por la DGII (B01 crédito fiscal, B02 consumo, B14, B15). Cada venta toma sola el siguiente NCF: B01 si el cliente tiene RNC, B02 si no. Las secuencias son **de cada dispositivo** (no se sincronizan): con varios dispositivos, dale a cada uno un rango distinto. Los productos pueden marcarse como *Exentos de ITBIS*.
+
+**Datos que se capturan**: ventas guardan ITBIS y NCF; compras y gastos tienen campos de NCF e ITBIS incluido; proveedores tienen RNC/cédula.
+
+**Reportes → Impuestos**: ITBIS cobrado vs. pagado del mes, lista de pendientes (ventas sin NCF, compras sin comprobante) y exportación de los formatos **607** (ventas) y **606** (compras y gastos) en TXT y CSV.
+**Reportes → Negocio y P&L**: pérdidas y ganancias, y ventas por cliente, vendedor, producto, categoría y mes.
+**Reportes → Flujo de caja**: cobros esperados y pagos a proveedores por fecha límite, con saldo acumulado.
+
+**Límites actuales**: solo modo "precios con ITBIS incluido"; no incluye el formato 608 (NCF anulados), notas de crédito, retenciones ni comprobantes electrónicos (e-CF). El archivo TXT usa el encabezado `FORMATO|RNC|AAAAMM|cantidad` y campos separados con `|`: **valídalo con la herramienta de pre-validación de la DGII y con tu contador antes de enviarlo**.

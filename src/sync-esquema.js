@@ -6,19 +6,23 @@
 // unicos: columnas con restricción UNIQUE (si chocan al recibir, se le agrega un sufijo).
 export const TABLAS = [
   { t: 'categorias', cols: ['nombre'], unicos: ['nombre'] },
-  { t: 'clientes', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'creado'] },
-  { t: 'proveedores', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'creado'] },
+  { t: 'clientes', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'tipo_doc', 'documento', 'limite_credito', 'creado'] },
+  { t: 'cliente_direcciones', cols: ['etiqueta', 'direccion', 'referencia'], refs: [{ col: 'cliente_id', tabla: 'clientes' }] },
+  { t: 'cliente_contactos', cols: ['nombre', 'cargo', 'telefono', 'correo'], refs: [{ col: 'cliente_id', tabla: 'clientes' }] },
+  { t: 'recibos', cols: ['numero', 'fecha', 'total', 'estado', 'notas'], refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },
+  { t: 'recibo_metodos', cols: ['metodo', 'monto', 'referencia'], refs: [{ col: 'recibo_id', tabla: 'recibos' }] },
+  { t: 'proveedores', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'tipo_doc', 'documento', 'creado'] },
   {
     t: 'productos',
-    cols: ['codigo', 'nombre', 'marca', 'costo', 'precio', 'margen', 'stock_minimo', 'ubicacion', 'foto', 'activo', 'creado'],
+    cols: ['codigo', 'nombre', 'marca', 'costo', 'precio', 'margen', 'stock_minimo', 'ubicacion', 'foto', 'activo', 'itbis_exento', 'creado'],
     refs: [{ col: 'categoria_id', tabla: 'categorias' }],
     unicos: ['codigo'],
     // El stock NO viaja: se calcula sumando los movimientos de inventario de todos los dispositivos
-    disparar: ['codigo', 'nombre', 'categoria_id', 'marca', 'costo', 'precio', 'margen', 'stock_minimo', 'ubicacion', 'foto', 'activo'],
+    disparar: ['codigo', 'nombre', 'categoria_id', 'marca', 'costo', 'precio', 'margen', 'stock_minimo', 'ubicacion', 'foto', 'activo', 'itbis_exento'],
   },
   {
     t: 'ventas',
-    cols: ['numero', 'fecha', 'subtotal', 'descuento', 'total', 'metodo_pago', 'estado', 'notas'],
+    cols: ['numero', 'fecha', 'subtotal', 'descuento', 'total', 'metodo_pago', 'estado', 'notas', 'itbis', 'ncf'],
     refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }],
     unicos: ['numero'],
   },
@@ -28,7 +32,7 @@ export const TABLAS = [
     refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'producto_id', tabla: 'productos' }],
   },
   { t: 'venta_servicios', cols: ['descripcion', 'cantidad', 'precio_unitario'], refs: [{ col: 'venta_id', tabla: 'ventas' }] },
-  { t: 'pagos', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'venta_id', tabla: 'ventas' }] },
+  { t: 'pagos', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'recibo_id', tabla: 'recibos' }] },
   { t: 'cuentas_cobrar', cols: ['vence'], refs: [{ col: 'venta_id', tabla: 'ventas' }] },
   {
     t: 'garantias',
@@ -38,7 +42,7 @@ export const TABLAS = [
   { t: 'garantia_reclamos', cols: ['fecha', 'problema', 'resolucion', 'estado'], refs: [{ col: 'garantia_id', tabla: 'garantias' }] },
   {
     t: 'compras',
-    cols: ['numero', 'fecha', 'referencia', 'total', 'estado', 'notas'],
+    cols: ['numero', 'fecha', 'referencia', 'total', 'estado', 'notas', 'itbis', 'ncf'],
     refs: [{ col: 'proveedor_id', tabla: 'proveedores' }, { col: 'usuario_id', tabla: 'usuarios' }],
     unicos: ['numero'],
   },
@@ -50,7 +54,7 @@ export const TABLAS = [
   { t: 'cuentas_pagar', cols: ['vence'], refs: [{ col: 'compra_id', tabla: 'compras' }] },
   { t: 'pagos_compra', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'compra_id', tabla: 'compras' }] },
   { t: 'caja', cols: ['fecha_apertura', 'efectivo_inicial', 'estado', 'fecha_cierre', 'efectivo_esperado', 'efectivo_contado', 'diferencia', 'notas'] },
-  { t: 'gastos', cols: ['fecha', 'concepto', 'categoria', 'monto', 'metodo', 'nota'], refs: [{ col: 'caja_id', tabla: 'caja' }] },
+  { t: 'gastos', cols: ['fecha', 'concepto', 'categoria', 'monto', 'metodo', 'nota', 'itbis', 'ncf', 'documento'], refs: [{ col: 'caja_id', tabla: 'caja' }] },
   {
     t: 'cotizaciones',
     cols: ['numero', 'fecha', 'cliente_nombre', 'subtotal', 'descuento', 'total', 'validez_dias', 'estado', 'notas'],
@@ -78,7 +82,7 @@ export const TABLAS = [
 ];
 
 // Ajustes del negocio que se comparten entre dispositivos (los contadores de numeración y el idioma son de cada uno)
-export const CONFIG_COMPARTIDA = ['negocio_nombre', 'negocio_telefono', 'negocio_direccion', 'negocio_logo', 'moneda', 'margen_defecto', 'idioma_factura'];
+export const CONFIG_COMPARTIDA = ['negocio_nombre', 'negocio_telefono', 'negocio_direccion', 'negocio_logo', 'moneda', 'margen_defecto', 'idioma_factura', 'negocio_rnc', 'itbis_modo', 'itbis_tasa'];
 
 export const CATEGORIAS_BASE = ['Bajos / Subwoofers', 'Bocinas', 'Amplificadores', 'Pantallas / Radios', 'Cables y accesorios', 'Otros'];
 
@@ -152,6 +156,8 @@ export function sentenciasTriggers() {
         UPDATE ${d.t} SET uid = COALESCE(uid, ${exprUid(d, 'NEW.')}), dirty = 1, act = ${AHORA} WHERE ${llave} = ${nuevaLlave};
         DELETE FROM sync_borrados WHERE tabla = '${d.t}' AND uid = (SELECT uid FROM ${d.t} WHERE ${llave} = ${nuevaLlave});
       END`);
+    // Si cambia la lista de columnas vigiladas, el trigger viejo se reemplaza
+    if (d.disparar) s.push(`DROP TRIGGER IF EXISTS sync1_au_${d.t}`);
     const columnas = d.disparar ? ` OF ${d.disparar.join(', ')}` : '';
     s.push(`CREATE TRIGGER IF NOT EXISTS sync1_au_${d.t} AFTER UPDATE${columnas} ON ${d.t}
       WHEN ${APLICANDO} AND NEW.act IS OLD.act${filtroConfig(d, 'NEW.')}

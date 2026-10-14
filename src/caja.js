@@ -7,7 +7,7 @@ import { h, hoja, toast, dinero, confirmar } from './ui.js';
 const CATEGORIAS = [
   'Alquiler', 'Luz y agua', 'Internet y teléfono', 'Transporte', 'Sueldos', 'Pago a proveedor', 'Mantenimiento', 'Otros',
 ];
-const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia' };
+const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque' };
 
 const renglon = (a, b, clase = '') => h('div', { class: clase }, h('span', {}, a), h('span', {}, b));
 const campo = (etiqueta, input) => h('label', { class: 'etiqueta' }, etiqueta, input);
@@ -61,7 +61,7 @@ export async function vistaCaja(raiz) {
   async function bloqueAbierta(caja) {
     const r = await resumenCaja(caja);
     const gastos = await consultar('SELECT * FROM gastos WHERE caja_id = ? ORDER BY id DESC', [caja.id]);
-    const fueraDeCaja = `Fuera del cajón: tarjeta ${dinero(r.tarjeta)}, transferencia ${dinero(r.transferencia)}.`
+    const fueraDeCaja = `Fuera del cajón: tarjeta ${dinero(r.tarjeta)}, transferencia ${dinero(r.transferencia)}${r.cheque > 0 ? `, cheques ${dinero(r.cheque)}` : ''}.`
       + (r.gastos_otros > 0 ? ` Gastos pagados sin efectivo: ${dinero(r.gastos_otros)}.` : '')
       + (r.proveedores_otros > 0 ? ` Pagos a proveedores sin efectivo: ${dinero(r.proveedores_otros)}.` : '');
 
@@ -101,6 +101,9 @@ export async function vistaCaja(raiz) {
     const metodo = h('select', { class: 'campo', 'aria-label': 'Método de pago' },
       Object.entries(METODOS).map(([k, t]) => h('option', { value: k }, t)));
     const nota = h('input', { class: 'campo', placeholder: 'Opcional', autocomplete: 'off' });
+    const ncfG = h('input', { class: 'campo', placeholder: 'B0100000001 (opcional)', autocomplete: 'off' });
+    const itbisG = h('input', { class: 'campo', type: 'number', min: '0', step: '0.01', inputmode: 'decimal', placeholder: '0.00' });
+    const docG = h('input', { class: 'campo', inputmode: 'numeric', placeholder: 'RNC del suplidor', autocomplete: 'off' });
     const error = h('p', { class: 'error', role: 'alert' });
     const boton = h('button', { class: 'btn primario', onClick: guardar }, 'Guardar gasto');
 
@@ -114,6 +117,7 @@ export async function vistaCaja(raiz) {
         await registrarGasto({
           concepto: concepto.value, categoria: categoria.value, monto: m,
           metodo: metodo.value, nota: nota.value.trim() || null,
+          ncf: ncfG.value.trim() || null, itbis: parseFloat(itbisG.value) || 0, documento: docG.value.trim() || null,
         });
         cerrar();
         toast('Gasto registrado');
@@ -130,6 +134,8 @@ export async function vistaCaja(raiz) {
         h('div', { class: 'rejilla' }, campo('Categoría', categoria), campo('Monto', monto)),
         campo('Pagado con', metodo),
         campo('Nota', nota),
+        h('div', { class: 'rejilla' }, campo('NCF', ncfG), campo('ITBIS incluido', itbisG)),
+        campo('RNC del suplidor', docG),
         error,
         h('div', { class: 'acciones' }, boton)));
   }
