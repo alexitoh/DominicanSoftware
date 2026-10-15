@@ -164,6 +164,13 @@ Límites a tener presentes:
 - **Nómina**: las tasas del empleador (AFP 7.10 %, SFS 7.09 %, SRL 1.10 %, INFOTEP 1 %), los topes y la escala del ISR son orientativos; confírmalos cada año con la TSS y la DGII. INFOTEP no lleva tope en este cálculo.
 - No sustituye a un contador: revisa los reportes con uno antes de presentarlos a la DGII.
 
+## Cliente al facturar: búsqueda, RNC y datos obligatorios
+- La barra **Cliente** de Nueva venta busca mientras escribes (nombre, teléfono o RNC) y sugiere clientes; vacía = Cliente general.
+- Si escribes un **RNC/cédula completo** (9 u 11 números) y ya existe, se elige solo; si no existe, se consulta la DGII y, si está activo, el cliente se **guarda automáticamente**.
+- Todo cliente con RNC/cédula debe tener **teléfono y dirección** (obligatorios): aparece un aviso para llenarlos y no se puede cobrar hasta guardarlos (también aplica a clientes antiguos que no los tenían).
+- Al elegir un cliente con RNC se llena el campo RNC y el comprobante automático pasa a fiscal (B01, o el que corresponda por su régimen).
+- Si escribes texto sin elegir a nadie de la lista, no se factura como "Cliente general" por error: pide elegir o borrar.
+
 ## Tipo de comprobante y consulta de RNC en la DGII
 - **Al facturar** (si el ITBIS está activo): eliges *Automático*, B01 Crédito fiscal, B02 Consumo, B14 Régimen especial, B15 Gubernamental o *Sin comprobante*. B01, B14 y B15 exigen un cliente con RNC y una secuencia autorizada con números disponibles (Ajustes → Datos fiscales); si no, la venta se rechaza con el motivo y no gasta números.
 - **Casilla "RNC / cédula del cliente"** en la venta y en el formulario del cliente: al escribir el RNC consulta el listado de la DGII. Si el contribuyente está **ACTIVO** llena el nombre (y en la venta crea o elige al cliente). Si no, muestra su estatus (por ejemplo "SUSPENDIDO" o "DADO DE BAJA") y no lo usa; para B01/B14/B15 la venta se bloquea.

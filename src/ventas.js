@@ -1,8 +1,8 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
-import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal, leerReglasComprobante } from './database.js';
+import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal, leerReglasComprobante, anotar } from './database.js';
 import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis, comprobanteDeCliente } from './itbis.js';
 import { buscarRNC } from './dgii.js';
-import { limpiarDocumento } from './fiscal.js';
+import { limpiarDocumento, formatearDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { condicionRango, rangoInicial, selectorRango, hoyISO } from './fechas.js';
 import { formularioCliente } from './clientes.js';
@@ -194,7 +194,26 @@ export async function vistaVentas(raiz) {
       },
     });
     const clientesInfo = new Map();
-    const cliente = h('select', { class: 'campo', 'aria-label': 'Cliente', onChange: () => { tipoNcf.value = 'auto'; pintarTotales(); aprenderRegimen(); } });
+    // Cliente: barra de búsqueda con sugerencias (por nombre, teléfono o RNC). `cliente.value` es el id elegido ('' = cliente general).
+    let clienteSel = '';
+    const cliente = {
+      get value() { return clienteSel; },
+      set value(id) { seleccionarCliente(id); },
+      focus() { buscaCliente.focus(); },
+    };
+    const sugerencias = h('div', { class: 'resultados', role: 'listbox', 'aria-label': 'Sugerencias de clientes' });
+    const buscaCliente = h('input', {
+      class: 'campo', type: 'search', autocomplete: 'off', 'aria-label': 'Cliente',
+      placeholder: 'Cliente general. Escribe un nombre o RNC para buscar',
+      onInput: () => escribiendoCliente(),
+      onKeydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const primero = sugerencias.querySelector('button[data-id]');
+        if (primero) primero.click();
+      },
+    });
+    const datosPendientes = h('div');
     const avisoCredito = h('p', { class: 'ayuda', role: 'status' });
     // Comprobante fiscal y consulta del RNC en la DGII
     const cfgF = await configFiscal();
@@ -222,10 +241,14 @@ export async function vistaVentas(raiz) {
         estatusRnc.className = 'error'; estatusRnc.textContent = r.mensaje;
       }
     }
-    async function buscarPorRnc() {
-      const num = limpiarDocumento(rncRapido.value);
+    async function buscarPorRnc(origen = rncRapido) {
+      const num = limpiarDocumento(origen.value);
       estatusRnc.className = 'ayuda';
       if (!num) { estatusRnc.textContent = ''; return; }
+      // 1) ¿Ya existe un cliente con ese documento? Se elige directo.
+      const [existente] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
+      if (existente) { estatusRnc.textContent = ''; seleccionarCliente(existente.id); return; }
+      // 2) Si no, se consulta la DGII y el cliente se crea solo
       estatusRnc.textContent = 'Consultando la DGII…';
       const r = await buscarRNC(num);
       estatusRnc.textContent = r.mensaje;
@@ -234,23 +257,78 @@ export async function vistaVentas(raiz) {
         if (r.resultado === 'inactivo') toast(r.mensaje, 'error');
         return;
       }
-      if (r.resultado !== 'activo') {
-        // Sin conexión o sin nube: si el cliente ya está guardado con ese documento, se elige igual
-        const [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
-        if (ya) cliente.value = String(ya.id);
-        return;
-      }
-      let [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
-      if (!ya) {
-        await ejecutar('INSERT INTO clientes (nombre, tipo_doc, documento) VALUES (?,?,?)', [r.datos.nombre, num.length === 9 ? 'rnc' : 'cedula', num]);
-        [ya] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
-        await cargarClientes();
-      }
-      await ejecutar('UPDATE clientes SET regimen_dgii = ? WHERE id = ?', [r.datos.regimen || null, ya.id]);
+      if (r.resultado !== 'activo') return; // sin nube o sin conexión: se puede crear a mano con "Nuevo"
+      await ejecutar('INSERT INTO clientes (nombre, tipo_doc, documento, regimen_dgii) VALUES (?,?,?,?)',
+        [r.datos.nombre, num.length === 9 ? 'rnc' : 'cedula', num, r.datos.regimen || null]);
+      const [nuevo] = await consultar('SELECT id FROM clientes WHERE documento = ?', [num]);
+      await anotar('Cliente creado', `${r.datos.nombre} (desde la DGII al facturar)`);
       await cargarClientes();
-      cliente.value = String(ya.id);
+      seleccionarCliente(nuevo.id);
+      estatusRnc.textContent = `${r.mensaje}. Cliente guardado: completa su teléfono y dirección para continuar.`;
+    }
+
+    // Mientras se escribe en la barra del cliente: sugerencias; con un RNC/cédula completo se busca o se crea el cliente
+    let tokenBusqueda = 0;
+    async function escribiendoCliente() {
+      const texto = buscaCliente.value.trim();
+      const mio = ++tokenBusqueda;
+      if (clienteSel) { clienteSel = ''; rncRapido.value = ''; datosPendientes.replaceChildren(); tipoNcf.value = 'auto'; pintarTotales(); }
+      estatusRnc.textContent = '';
+      if (!texto) { sugerencias.replaceChildren(); return; }
+      const num = limpiarDocumento(texto);
+      if (/^(\d{9}|\d{11})$/.test(num)) { sugerencias.replaceChildren(); await buscarPorRnc(buscaCliente); return; }
+      const like = `%${texto}%`;
+      const likeNum = num ? `%${num}%` : like;
+      const filas = await consultar(
+        `SELECT id, nombre, telefono, documento FROM clientes
+          WHERE nombre LIKE ? OR telefono LIKE ? OR documento LIKE ?
+          ORDER BY (nombre LIKE ?) DESC, nombre LIMIT 8`, [like, like, likeNum, `${texto}%`]);
+      if (mio !== tokenBusqueda) return; // llegó una búsqueda más reciente
+      sugerencias.replaceChildren(...(filas.length
+        ? filas.map((c) => h('button', { class: 'resultado', 'data-id': String(c.id), onClick: () => seleccionarCliente(c.id) },
+            h('span', { class: 'datos' }, h('strong', {}, c.nombre),
+              h('small', {}, [c.documento ? formatearDocumento(c.tipo_doc || 'rnc', c.documento) : '', c.telefono || ''].filter(Boolean).join(' · ') || 'Sin documento')),
+            ))
+        : [h('p', { class: 'vacio' }, 'No hay clientes con esa búsqueda. Escribe un RNC completo o toca "Nuevo".')]));
+    }
+
+    // Elige un cliente (o ninguno): rellena la barra y el RNC, y el comprobante se ajusta solo
+    function seleccionarCliente(id) {
+      const c = clientesInfo.get(String(id));
+      clienteSel = c ? String(id) : '';
+      tokenBusqueda++;
+      buscaCliente.value = c ? c.nombre : '';
+      rncRapido.value = c?.documento ? formatearDocumento(c.tipo_doc || 'rnc', c.documento) : '';
+      sugerencias.replaceChildren();
       tipoNcf.value = 'auto';
+      pintarPendientes();
       pintarTotales();
+      aprenderRegimen();
+    }
+
+    // Un cliente con RNC/cédula no puede facturarse sin teléfono y dirección: se piden aquí mismo
+    const faltanDatos = (c) => !!c?.documento && (!String(c.telefono || '').trim() || !String(c.direccion || '').trim());
+    function pintarPendientes() {
+      const c = clientesInfo.get(clienteSel);
+      if (!faltanDatos(c)) { datosPendientes.replaceChildren(); return; }
+      const tel = h('input', { class: 'campo', type: 'tel', inputmode: 'tel', value: c.telefono || '', placeholder: 'Teléfono', 'aria-label': 'Teléfono del cliente' });
+      const dir = h('input', { class: 'campo', value: c.direccion || '', placeholder: 'Dirección', 'aria-label': 'Dirección del cliente' });
+      const aviso = h('p', { class: 'error', role: 'alert' });
+      const guardarDatos = async () => {
+        if (!tel.value.trim()) { aviso.textContent = 'El teléfono es obligatorio.'; tel.focus(); return; }
+        if (!dir.value.trim()) { aviso.textContent = 'La dirección es obligatoria.'; dir.focus(); return; }
+        await ejecutar('UPDATE clientes SET telefono = ?, direccion = ? WHERE id = ?', [tel.value.trim(), dir.value.trim(), Number(clienteSel)]);
+        await anotar('Cliente modificado', `${c.nombre} (teléfono y dirección al facturar)`);
+        const id = clienteSel;
+        await cargarClientes();
+        seleccionarCliente(id);
+        estatusRnc.textContent = '';
+      };
+      datosPendientes.replaceChildren(
+        h('p', { class: 'ayuda' }, `Para facturar a ${c.nombre} completa su teléfono y dirección (obligatorios).`),
+        h('div', { class: 'rejilla' }, tel, dir),
+        aviso,
+        h('button', { class: 'btn', onClick: guardarDatos }, 'Guardar datos del cliente'));
     }
     const metodo = h('select', { class: 'campo', 'aria-label': 'Método de pago', onChange: () => pintarTotales() },
       OPCIONES_PAGO.map(([k, t]) => h('option', { value: k }, t)));
@@ -271,12 +349,9 @@ export async function vistaVentas(raiz) {
     const botonCobrar = h('button', { class: 'btn primario', onClick: () => cobrar() }, 'Cobrar');
 
     async function cargarClientes() {
-      const cs = await consultar('SELECT id, nombre, condicion, dias_credito, documento, tipo_comprobante, regimen_dgii FROM clientes ORDER BY nombre');
+      const cs = await consultar('SELECT id, nombre, telefono, direccion, tipo_doc, condicion, dias_credito, documento, tipo_comprobante, regimen_dgii FROM clientes ORDER BY nombre');
       clientesInfo.clear();
       cs.forEach((c) => clientesInfo.set(String(c.id), c));
-      cliente.replaceChildren(
-        h('option', { value: '' }, 'Cliente general'),
-        ...cs.map((c) => h('option', { value: c.id }, textoCondicion(c) ? `${c.nombre} (${textoCondicion(c)})` : c.nombre)));
     }
 
     // Días que tendrá el cliente para pagar una venta a crédito (30 si no tiene condición definida)
@@ -437,6 +512,8 @@ export async function vistaVentas(raiz) {
         const elegido = tipoNcf.value || 'auto';
         const sug = comprobanteDeCliente(clientesInfo.get(cliente.value), reglasCpb);
         const t = elegido === 'auto' ? sug.tipo : elegido;
+        const opAuto = tipoNcf.options?.[0];
+        if (opAuto) opAuto.textContent = `Automático: ${NOMBRE_COMPROBANTE[sug.tipo]} (${sug.tipo})`;
         avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]} (${t})${elegido === 'auto' ? `, ${sug.motivo}` : ', elegido por ti'}.`;
       }
       const sub = subtotal();
@@ -474,6 +551,9 @@ export async function vistaVentas(raiz) {
       const ini = esCredito ? Math.max(parseFloat(inicial.value) || 0, 0) : 0;
       if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente.'; cliente.focus(); return; }
       if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return; }
+
+      if (buscaCliente.value.trim() && !cliente.value) { error.textContent = 'Elige un cliente de la lista, o borra la búsqueda para facturar a Cliente general.'; buscaCliente.focus(); return; }
+      if (faltanDatos(clientesInfo.get(cliente.value))) { error.textContent = 'Completa el teléfono y la dirección del cliente antes de continuar.'; datosPendientes.querySelector('input')?.focus(); return; }
 
       // Comprobantes de crédito fiscal: el RNC del cliente debe estar ACTIVO en la DGII (si no se puede consultar, se deja pasar)
       if (cfgF.modo !== 'no' && cliente.value && tipoNcf.value !== 'B02' && tipoNcf.value !== 'ninguno') {
@@ -532,13 +612,15 @@ export async function vistaVentas(raiz) {
         h('h3', {}, 'Productos de la venta'),
         lineas,
         h('div', { class: 'cliente-fila' },
-          h('label', { class: 'etiqueta' }, 'Cliente', cliente),
+          h('label', { class: 'etiqueta' }, 'Cliente', buscaCliente),
           h('button', {
             class: 'btn',
             onClick: () => formularioCliente(null, async (id) => { await cargarClientes(); if (id) cliente.value = String(id); }),
           }, 'Nuevo')),
+        sugerencias,
         h('label', { class: 'etiqueta' }, 'RNC / cédula del cliente', rncRapido),
         estatusRnc,
+        datosPendientes,
         cfgF.modo === 'no' ? null : h('label', { class: 'etiqueta' }, 'Tipo de comprobante', tipoNcf),
         cfgF.modo === 'no' ? null : avisoNcf,
         h('div', { class: 'rejilla' },
