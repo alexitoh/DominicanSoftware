@@ -267,6 +267,7 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     // El número de comprobante ya se había entregado y la factura no se guardó: ese número queda anulado y hay que repetir la factura
     if (ncf?.clave && reservaNCF) {
       await reservaNCF.anular(ncf.clave, 'La factura no se pudo guardar').catch(() => {});
+      await registrarNcfAnulado({ ncf: ncf.ncf, motivo: `La factura no se pudo guardar (${e.message || e})`.slice(0, 200) }).catch(() => {});
       throw new Error(`No se pudo guardar la factura (${e.message || e}). El comprobante ${ncf.ncf} quedó anulado: vuelve a realizar la factura.`);
     }
     throw e;
@@ -836,6 +837,16 @@ async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
 }
 
 const claveAleatoria = () => (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`).replace(/-/g, '');
+
+// Un comprobante que el sistema entregó y la factura no se guardó: queda anulado, anotado en la bitácora y listo para el formato 608
+export async function registrarNcfAnulado({ ncf, motivo = 'La factura no se pudo guardar', origen = 'sistema' }) {
+  const [ya] = await consultar('SELECT id FROM ncf_anulados WHERE ncf = ?', [ncf]);
+  if (ya) return false;
+  await ejecutar('INSERT INTO ncf_anulados (ncf, tipo, motivo, origen, usuario_id) VALUES (?, ?, ?, ?, ?)', [ncf, String(ncf).slice(0, 3), motivo, origen, usuarioActualId]);
+  await ejecutar("INSERT INTO bitacora (usuario_id, usuario, accion, detalle) VALUES (?, (SELECT usuario FROM usuarios WHERE id = ?), 'Comprobante anulado por el sistema', ?)",
+    [usuarioActualId, usuarioActualId, `${ncf}: ${motivo}. Revisa el formato 608 en Reportes → Impuestos.`]);
+  return true;
+}
 
 export async function asignarNCFVenta(ventaId, ncf) {
   const v = String(ncf || '').trim().toUpperCase();

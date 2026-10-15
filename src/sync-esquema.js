@@ -105,6 +105,7 @@ export const TABLAS = [
   },
   { t: 'presupuestos', cols: ['anio', 'mes', 'monto'], refs: [{ col: 'cuenta_id', tabla: 'cuentas_contables' }] },
   { t: 'periodos_cerrados', cols: ['periodo'] },
+  { t: 'ncf_anulados', cols: ['fecha', 'ncf', 'tipo', 'motivo', 'origen'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], unicos: ['ncf'] },
   { t: 'bitacora', cols: ['fecha', 'usuario', 'accion', 'detalle'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], inmutable: true },
   { t: 'config', cols: ['valor'], clave: 'clave' },
 ];

@@ -1,11 +1,12 @@
 // nube-app.js - une la app con la nube: vínculo del dispositivo, usuarios espejo y sincronización automática.
 import {
-  consultar, lote, onEscritura, sincronizacionLista, configurarReservaNCF, leerSecuenciasNCF, limpiarSecuenciaLocalNCF,
+  consultar, lote, onEscritura, sincronizacionLista, configurarReservaNCF, registrarNcfAnulado, leerSecuenciasNCF, limpiarSecuenciaLocalNCF,
 } from './database.js';
 import { nube, ErrorNube, sesionNube, guardarSesionNube, idDispositivo, urlServidor, servidorDisponible } from './nube.js';
 import { crearMotor } from './sync-nucleo.js';
 import { toast } from './ui.js';
 import { hashClave } from './seguridad.js';
+import { formatearNCF } from './itbis.js';
 
 export { ErrorNube, urlServidor, servidorDisponible, sincronizacionLista };
 
@@ -169,7 +170,10 @@ async function anularPendientesNCF() {
   if (!lista.length) return;
   const quedan = [];
   for (const p of lista) {
-    try { await nube.anularNcf({ clave: p.clave, motivo: p.motivo }); } catch (e) { if (sinConexion(e)) quedan.push(p); }
+    try {
+      const r = await nube.anularNcf({ clave: p.clave, motivo: p.motivo });
+      if (r?.anulado) await registrarNcfAnulado({ ncf: formatearNCF(r.tipo, r.numero), motivo: p.motivo }); // consta en el 608 y en la bitácora
+    } catch (e) { if (sinConexion(e)) quedan.push(p); }
   }
   guardarPendientesNCF(quedan);
 }
@@ -233,6 +237,7 @@ export async function sincronizarAhora() {
   try {
     const r = await motor.sincronizar();
     avisar({ fase: 'ok', ultimo: new Date(), pendientes: await motor.pendientes(), mensaje: '' });
+    anularPendientesNCF().catch(() => {}); // comprobantes que quedaron en duda por un corte de internet
     if (r.reiniciado) {
       // Los datos del negocio fueron limpiados desde el panel del propietario: se recarga para volver a empezar limpio
       try { toast('Los datos del negocio fueron limpiados. Reiniciando…'); } catch { /* sin pantalla */ }

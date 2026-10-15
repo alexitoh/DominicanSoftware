@@ -2,7 +2,7 @@
 // Las claves con {} son plantillas: cada {} captura un valor que se reinserta en la salida ({1}, {2}... para cambiar el orden).
 export const EN = {
  "Por falta de conexión a internet el sistema no pudo realizar esta factura. Conéctate e intenta de nuevo.": "The system could not complete this invoice because there is no internet connection. Connect and try again.",
- "Comprobantes anulados porque la factura no se llegó a guardar (úsalos para el formato 608): {}": "Receipt numbers voided because the invoice was not saved (use them for form 608): {}",
+ "Comprobantes anulados porque la factura no se llegó a guardar (están en Reportes → Impuestos, formato 608): {}": "Receipt numbers voided because the invoice was not saved (listed in Reports → Taxes, form 608): {}",
  "Continuar": "Continue",
  "Para facturar con comprobante este equipo necesita conexión a internet: el número de comprobante lo asigna el servidor. Conéctate e intenta de nuevo.": "To invoice with a receipt number this device needs an internet connection: the server assigns the number. Connect and try again.",
  "Las secuencias son de este negocio y se guardan en el servidor: todos los equipos del negocio usan la misma y cada factura pide su número al servidor, así no se repite ninguno. Sin internet el equipo no puede facturar (solo consultar).": "Sequences belong to this business and are stored on the server: every device of the business uses the same one and each invoice asks the server for its number, so none is repeated. Without internet the device cannot invoice (lookups only).",

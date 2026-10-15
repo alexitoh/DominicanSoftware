@@ -343,11 +343,21 @@ ok('el dispositivo descarga los avisos y los marca como leídos');
   const lista = await nube.ncf();
   assert.deepEqual(lista.anulados.map((x) => `${x.tipo}${x.numero}`), ['B14104'], 'el comprobante perdido consta como anulado');
   assert.equal((await fv('B14')).slice(antes).pop(), 'B1400000105', 'la factura siguiente usa el número que sigue');
+  assert.deepEqual((await bd.consultar('SELECT ncf, origen FROM ncf_anulados ORDER BY id')).map((x) => x.ncf), ['B1400000104'], 'el equipo guarda el comprobante anulado para el 608');
+  assert.ok((await bd.consultar("SELECT detalle FROM bitacora WHERE accion = 'Comprobante anulado por el sistema'")).some((x) => x.detalle.includes('B1400000104')), 'consta en la bitácora');
   // Caso raro 2: el número se entrega pero la factura no se puede guardar en el equipo. Se anula y se pide repetir
   await bd.ejecutar("CREATE TRIGGER t_falla_venta BEFORE INSERT ON ventas BEGIN SELECT RAISE(ABORT, 'falla simulada'); END");
   await assert.rejects(() => venta14(), /No se pudo guardar la factura.*B1400000106 quedó anulado.*vuelve a realizar la factura/);
   await bd.ejecutar('DROP TRIGGER t_falla_venta');
   assert.ok((await nube.ncf()).anulados.some((x) => x.numero === 106), 'el número 106 consta como anulado en el servidor');
+  assert.deepEqual((await bd.consultar('SELECT ncf FROM ncf_anulados ORDER BY id')).map((x) => x.ncf), ['B1400000104', 'B1400000106']);
+  // Reporte: el formato 608 lleva los dos y el resumen avisa
+  const rf = await import('../src/reportes-fiscal.js');
+  const imp = await rf.datosImpuestos(new Date().toISOString().slice(0, 7));
+  const f608 = imp.filas608.map((r) => r[0]);
+  assert.ok(f608.includes('B1400000104') && f608.includes('B1400000106'), 'el 608 incluye los comprobantes anulados por el sistema');
+  assert.ok(imp.filas608.every((r) => /^\d{8}$/.test(r[1]) && /^(04|08)$/.test(r[2])), 'fecha AAAAMMDD y tipo de anulación');
+  assert.ok(imp.avisos.some((a) => /no se llegó a guardar/.test(a) && a.includes('B1400000106')), 'el resumen avisa para actuar');
   await venta14();
   assert.equal((await fv('B14')).slice(antes).pop(), 'B1400000107');
   // Migración: lo que el equipo tenía solo para sí (modo anterior) pasa a ser del negocio

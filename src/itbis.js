@@ -101,6 +101,12 @@ export function textoDGII(formato, rnc, periodo, filas) {
 }
 export const nombreArchivoDGII = (formato, rnc, periodo) => `DGII_F_${formato}_${limpiarDocumento(rnc)}_${periodo}.TXT`;
 
+// Formato 608 (comprobantes anulados): NCF | fecha AAAAMMDD | tipo de anulación.
+// Tipos de la DGII: 04 corrección de la información, 08 errores en la secuencia de NCF (así se reporta lo que el sistema anuló por falla).
+export function filas608(anulados) {
+  return anulados.map((a) => [a.ncf, String(a.fecha || '').slice(0, 10).replace(/-/g, ''), a.tipo_anulacion || '08']);
+}
+export const ENCABEZADOS_608 = ['NCF', 'Fecha del comprobante', 'Tipo de anulación'];
 export const ENCABEZADOS_607 = ['RNC/Cédula', 'Tipo ID', 'NCF', 'NCF modificado', 'Tipo ingreso', 'Fecha', 'Fecha retención', 'Monto facturado', 'ITBIS facturado', 'ITBIS retenido', 'ITBIS percibido', 'Retención renta', 'ISR percibido', 'Selectivo', 'Otros impuestos', 'Propina', 'Efectivo', 'Cheque/Transf.', 'Tarjeta', 'Crédito', 'Bonos', 'Permuta', 'Otras formas'];
 export const ENCABEZADOS_606 = ['RNC/Cédula', 'Tipo ID', 'Tipo bienes/servicios', 'NCF', 'NCF modificado', 'Fecha comprobante', 'Fecha pago', 'Monto servicios', 'Monto bienes', 'Total facturado', 'ITBIS facturado', 'ITBIS retenido', 'ITBIS proporcionalidad', 'ITBIS al costo', 'ITBIS por adelantar', 'ITBIS percibido', 'Tipo retención ISR', 'Retención renta', 'ISR percibido', 'Selectivo', 'Otros impuestos', 'Propina', 'Forma de pago'];
 

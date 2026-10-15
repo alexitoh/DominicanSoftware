@@ -261,7 +261,7 @@ async function vistaAjustes(raiz) {
   const secuencias = ncfNube
     ? (ncfServidor?.secuencias || []).map((x) => ({ tipo: x.tipo, sig: x.siguiente, hasta: x.hasta }))
     : await leerSecuenciasNCF();
-  const anuladosNcf = (ncfServidor?.anulados || []).map((x) => `${x.tipo}${String(x.numero).padStart(8, '0')}`);
+  const anuladosNcf = (await consultar('SELECT ncf FROM ncf_anulados ORDER BY id DESC LIMIT 20')).map((x) => x.ncf);
   const bloqueadoNcf = ncfNube && (!ncfServidor || !adminNcf);
   const camposNcf = secuencias.map((s) => ({
     s, sig: h('input', { class: 'campo', type: 'number', min: '0', value: s.sig || '', placeholder: 'Próximo', inputmode: 'numeric', disabled: bloqueadoNcf }),
@@ -353,7 +353,7 @@ async function vistaAjustes(raiz) {
       h('p', { class: 'ayuda' }, 'Encendida: toda venta sale con comprobante fiscal (NCF) y el ITBIS se suma al precio de venta. Al facturar eliges el tipo; si el cliente no tiene RNC se le da una factura de consumo (B02). Apagada: se factura sin comprobante ni ITBIS. Escribe abajo los rangos de NCF que la DGII te autorizó.'),
       h('p', { class: 'ayuda' }, ncfNube ? 'Las secuencias son de este negocio y se guardan en el servidor: todos los equipos del negocio usan la misma y cada factura pide su número al servidor, así no se repite ninguno. Sin internet el equipo no puede facturar (solo consultar).' : 'Sin la nube conectada, las secuencias son de este dispositivo.'),
       ncfAviso ? h('p', { class: 'error', role: 'status' }, ncfAviso) : null,
-      anuladosNcf.length ? h('p', { class: 'ayuda' }, 'Comprobantes anulados porque la factura no se llegó a guardar (úsalos para el formato 608): ' + anuladosNcf.join(' · ')) : null,
+      anuladosNcf.length ? h('p', { class: 'ayuda' }, 'Comprobantes anulados porque la factura no se llegó a guardar (están en Reportes → Impuestos, formato 608): ' + anuladosNcf.join(' · ')) : null,
       ncfNube && ncfServidor && !adminNcf ? h('p', { class: 'ayuda' }, 'Solo el administrador puede cambiar las secuencias.') : null,
       h('label', { class: 'etiqueta fila-check' }, activoFact, ' Facturar con comprobante e ITBIS'),
       h('label', { class: 'etiqueta' }, 'RNC del negocio', rncNegocio),

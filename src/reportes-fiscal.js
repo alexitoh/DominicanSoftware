@@ -4,7 +4,7 @@ import { h, dinero, toast, hoja } from './ui.js';
 import { condicionFecha } from './reportes.js';
 import { selectorRango, rangoInicial, hoyISO } from './fechas.js';
 import {
-  filas607, filas606, textoDGII, nombreArchivoDGII, csv, ENCABEZADOS_607, ENCABEZADOS_606,
+  filas607, filas606, filas608, textoDGII, nombreArchivoDGII, csv, ENCABEZADOS_607, ENCABEZADOS_606, ENCABEZADOS_608,
 } from './itbis.js';
 import { limpiarDocumento, validarDocumento } from './fiscal.js';
 
@@ -21,7 +21,13 @@ export async function datosImpuestos(mes) {
        FROM ventas v LEFT JOIN clientes c ON c.id = v.cliente_id
       WHERE v.estado = 'completada' AND ${cm('v.fecha')} ORDER BY v.fecha, v.id`);
   const anuladas = await consultar(
-    `SELECT numero, ncf FROM ventas v WHERE v.estado = 'anulada' AND v.ncf IS NOT NULL AND ${cm('v.fecha')}`);
+    `SELECT numero, ncf, fecha FROM ventas v WHERE v.estado = 'anulada' AND v.ncf IS NOT NULL AND ${cm('v.fecha')}`);
+  // Comprobantes que el sistema entregó y quedaron anulados porque la factura no se guardó
+  const porFalla = await consultar(`SELECT ncf, fecha, motivo FROM ncf_anulados WHERE ${cm('fecha')} ORDER BY fecha, id`);
+  const anulados608 = [
+    ...porFalla.map((a) => ({ ncf: a.ncf, fecha: a.fecha, tipo_anulacion: '08' })),
+    ...anuladas.map((a) => ({ ncf: a.ncf, fecha: a.fecha, tipo_anulacion: '04' })),
+  ].sort((x, y) => String(x.fecha).localeCompare(String(y.fecha)));
   const compras = await consultar(
     `SELECT c.id, c.numero, c.fecha, c.total, c.itbis, c.ncf, p.documento, p.nombre AS proveedor,
             EXISTS(SELECT 1 FROM cuentas_pagar a WHERE a.compra_id = c.id) AS credito,
@@ -51,14 +57,14 @@ export async function datosImpuestos(mes) {
   if (compSin.length) avisos.push(`${compSin.length} compras sin NCF: no entran en el 606 ni dan ITBIS a favor.`);
   const gSin = gastos.filter((g) => !g.ncf);
   if (gSin.length) avisos.push(`${gSin.length} gastos sin NCF: no entran en el 606.`);
-  if (anuladas.length) avisos.push(`${anuladas.length} ventas anuladas con NCF: se reportan en el formato 608 (no incluido aquí).`);
+  if (porFalla.length) avisos.push(`${porFalla.length} comprobante(s) quedaron anulados porque la factura no se llegó a guardar (${porFalla.map((a) => a.ncf).join(', ')}): ya constan en el 608; avisa a tu contador y verifica que esas facturas se hayan vuelto a realizar.`);
   const sinDoc = docs606.filter((d) => d.ncf && !limpiarDocumento(d.documento));
   if (sinDoc.length) avisos.push(`${sinDoc.length} comprobantes del 606 sin RNC/cédula del suplidor.`);
 
   return {
     mes, ventas, compras, gastos, sinNcf, cobrado, pagado, aPagar: redondear(cobrado - pagado),
     base: redondear(ventas.reduce((s, v) => s + v.total - v.itbis, 0)),
-    filas607: filas607(ventas), filas606: filas606(docs606), avisos,
+    filas607: filas607(ventas), filas606: filas606(docs606), filas608: filas608(anulados608), anulados608, avisos,
   };
 }
 
@@ -68,17 +74,18 @@ export async function vistaImpuestos(raiz) {
   const mes = h('input', { class: 'campo', type: 'month', value: mesActual(), 'aria-label': 'Mes' });
   const cuerpo = h('div');
 
+  const filasDe = (formato, d) => ({ 607: d.filas607, 606: d.filas606, 608: d.filas608 }[formato]);
   async function exportar(formato, d) {
     if (!rnc || !validarDocumento('rnc', rnc).numero) { toast('Escribe el RNC de tu negocio en Ajustes → Datos fiscales', 'error'); return; }
     const periodo = d.mes.replace('-', '');
-    const filas = formato === '607' ? d.filas607 : d.filas606;
+    const filas = filasDe(formato, d);
     if (!filas.length) { toast('No hay registros con NCF en este mes', 'error'); return; }
     await exportarTexto(nombreArchivoDGII(formato, rnc, periodo), textoDGII(formato, rnc, periodo, filas));
   }
   async function exportarCsv(formato, d) {
-    const filas = formato === '607' ? d.filas607 : d.filas606;
+    const filas = filasDe(formato, d);
     if (!filas.length) { toast('No hay registros con NCF en este mes', 'error'); return; }
-    await exportarTexto(`${formato}_${d.mes}.csv`, csv(formato === '607' ? ENCABEZADOS_607 : ENCABEZADOS_606, filas), 'text/csv');
+    await exportarTexto(`${formato}_${d.mes}.csv`, csv({ 607: ENCABEZADOS_607, 606: ENCABEZADOS_606, 608: ENCABEZADOS_608 }[formato], filas), 'text/csv');
   }
 
   function asignar(v, repintar) {
@@ -123,6 +130,12 @@ export async function vistaImpuestos(raiz) {
         h('div', { class: 'acciones' },
           h('button', { class: 'btn', onClick: () => exportarCsv('606', d) }, 'Excel (CSV)'),
           h('button', { class: 'btn primario', onClick: () => exportar('606', d) }, 'Archivo DGII (.TXT)'))),
+      h('section', { class: 'seccion' },
+        h('h2', {}, 'Formato 608 · Comprobantes anulados'),
+        h('p', { class: 'ayuda' }, `${d.filas608.length} comprobantes anulados (ventas anuladas y comprobantes que el sistema anuló porque la factura no se guardó).`),
+        h('div', { class: 'acciones' },
+          h('button', { class: 'btn', onClick: () => exportarCsv('608', d) }, 'Excel (CSV)'),
+          h('button', { class: 'btn primario', onClick: () => exportar('608', d) }, 'Archivo DGII (.TXT)'))),
       h('p', { class: 'ayuda' }, 'Antes de subir el archivo a la Oficina Virtual, pásalo por la herramienta de pre-validación de la DGII y revísalo con tu contador.'),
       d.sinNcf.length ? h('section', { class: 'seccion' }, h('h2', {}, 'Ventas sin NCF'),
         h('div', { class: 'lista' }, d.sinNcf.slice(0, 50).map((v) => h('button', { class: 'fila inventario', onClick: () => asignar(v, pintar) },

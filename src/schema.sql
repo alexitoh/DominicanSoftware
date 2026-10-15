@@ -313,6 +313,17 @@ CREATE TABLE IF NOT EXISTS bitacora (
   detalle TEXT
 );
 
+-- Comprobantes (NCF) que el sistema entregó y quedaron anulados porque la factura no se llegó a guardar (alimenta el formato 608)
+CREATE TABLE IF NOT EXISTS ncf_anulados (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  ncf TEXT NOT NULL UNIQUE,
+  tipo TEXT,
+  motivo TEXT,
+  origen TEXT NOT NULL DEFAULT 'sistema',
+  usuario_id INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_bitacora_fecha ON bitacora(fecha);
 CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(fecha);
 CREATE INDEX IF NOT EXISTS idx_detalle_venta ON venta_detalle(venta_id);
