@@ -87,6 +87,10 @@ export async function initDB() {
     'ALTER TABLE ordenes_compra ADD COLUMN dias_credito INTEGER',
     'ALTER TABLE ordenes_compra ADD COLUMN autorizado_por TEXT',
     'ALTER TABLE ordenes_compra ADD COLUMN autorizada_fecha TEXT',
+    'ALTER TABLE compras ADD COLUMN fecha_factura TEXT',
+    'ALTER TABLE orden_detalle ADD COLUMN recibido INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE orden_detalle ADD COLUMN no_llegara INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE orden_detalle ADD COLUMN nota TEXT',
     'ALTER TABLE gastos ADD COLUMN beneficiario TEXT',
     "ALTER TABLE gastos ADD COLUMN estado TEXT NOT NULL DEFAULT 'vigente'",
     "ALTER TABLE gastos ADD COLUMN origen TEXT NOT NULL DEFAULT 'caja'",
@@ -745,8 +749,9 @@ export async function anularRecibo(reciboId) {
 // En crédito: exige proveedor, admite un pago inicial (inicial, pagado con metodo_inicial) y un plazo en días.
 export async function registrarCompra({
   proveedor_id = null, referencia = null, items, actualizarCosto = true, actualizarPrecio = false,
-  forma_pago = 'efectivo', inicial = 0, metodo_inicial = 'efectivo', plazo_dias = null, ncf = null, itbis = 0,
+  forma_pago = 'efectivo', inicial = 0, metodo_inicial = 'efectivo', plazo_dias = null, ncf = null, itbis = 0, fecha_factura = null,
 }) {
+  if (fecha_factura && !/^\d{4}-\d{2}-\d{2}$/.test(fecha_factura)) throw new Error('La fecha de la factura no es válida.');
   if (!items?.length) throw new Error('Agrega al menos un producto.');
   for (const it of items) {
     if (!Number.isInteger(it.cantidad) || it.cantidad <= 0) throw new Error('Las cantidades deben ser números enteros mayores que cero.');
@@ -760,6 +765,11 @@ export async function registrarCompra({
   const credito = forma_pago === 'credito';
   if (credito) {
     if (!proveedor_id) throw new Error('Para comprar a crédito elige un proveedor.');
+    // El crédito lo define la política del proveedor (su perfil), no la compra
+    const [pv] = await consultar('SELECT nombre, condicion, dias_credito FROM proveedores WHERE id = ?', [proveedor_id]);
+    if (!pv) throw new Error('El proveedor no existe.');
+    if (pv.condicion !== 'credito') throw new Error(`${pv.nombre} no tiene crédito autorizado. Define su condición de pago en el perfil del suplidor.`);
+    plazo_dias = pv.dias_credito ?? 30;
     if (!(inicial >= 0) || redondear(inicial) > total) throw new Error('El pago inicial no puede ser mayor que el total.');
     if (plazo_dias != null && !(plazo_dias >= 0)) throw new Error('El plazo debe ser un número de días válido.');
   }
@@ -768,8 +778,8 @@ export async function registrarCompra({
   const numero = await numeroDocumento('C', 'siguiente_numero_compra');
 
   const set = [{
-    statement: 'INSERT INTO compras (numero, proveedor_id, referencia, total, usuario_id, itbis, ncf) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    values: [numero, proveedor_id, referencia, total, usuarioActualId, redondear(itbis), ncf ? String(ncf).trim().toUpperCase() : null],
+    statement: 'INSERT INTO compras (numero, proveedor_id, referencia, total, usuario_id, itbis, ncf, fecha_factura) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    values: [numero, proveedor_id, referencia, total, usuarioActualId, redondear(itbis), ncf ? String(ncf).trim().toUpperCase() : null, fecha_factura || null],
   }];
   for (const it of items) {
     set.push({

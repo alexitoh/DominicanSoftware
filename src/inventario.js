@@ -2,6 +2,8 @@
 import { consultar, transaccion, precioDesde, margenProducto, anotar } from './database.js';
 import { botonEscaner } from './escaner.js';
 import { h, hoja, toast, dinero, medidor } from './ui.js';
+import { abrirEntradaFactura } from './entrada-factura.js';
+import { formularioCompra } from './compras.js';
 
 const REPONER = '(p.stock_actual <= 0 OR (p.stock_minimo > 0 AND p.stock_actual <= p.stock_minimo))';
 
@@ -176,7 +178,8 @@ export async function vistaInventario(raiz) {
   }
 
   raiz.replaceChildren(
-    h('header', { class: 'barra' }, h('h1', {}, 'Inventario')),
+    h('header', { class: 'barra' }, h('h1', {}, 'Inventario'),
+      h('button', { class: 'btn claro', onClick: () => abrirEntradaFactura(recargar, { sinOrden: () => formularioCompra(recargar) }) }, 'Dar entrada a factura')),
     resumen,
     h('div', { class: 'filtros' }, h('div', { class: 'buscador' }, buscador, botonEscaner({
       titulo: 'Buscar por código', ayuda: 'Escanea el código del producto',

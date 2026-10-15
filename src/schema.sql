@@ -214,7 +214,8 @@ CREATE TABLE IF NOT EXISTS compras (
   estado TEXT NOT NULL DEFAULT 'completada',
   notas TEXT,
   itbis REAL NOT NULL DEFAULT 0,
-  ncf TEXT
+  ncf TEXT,
+  fecha_factura TEXT                        -- fecha que trae la factura del suplidor
 );
 
 CREATE TABLE IF NOT EXISTS compra_detalle (
@@ -412,7 +413,7 @@ CREATE TABLE IF NOT EXISTS ordenes_compra (
   numero TEXT UNIQUE,
   fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
-  estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | autorizada | recibida | anulada
+  estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | autorizada | parcial (back order) | recibida | anulada
   entrega TEXT,                             -- fecha esperada de entrega
   condicion TEXT NOT NULL DEFAULT 'contado', -- contado | credito: cómo se autoriza el despacho
   dias_credito INTEGER,                     -- plazo si es a crédito
@@ -428,7 +429,10 @@ CREATE TABLE IF NOT EXISTS orden_detalle (
   orden_id INTEGER NOT NULL REFERENCES ordenes_compra(id),
   producto_id INTEGER NOT NULL REFERENCES productos(id),
   cantidad INTEGER NOT NULL,
-  costo_unitario REAL NOT NULL DEFAULT 0
+  costo_unitario REAL NOT NULL DEFAULT 0,
+  recibido INTEGER NOT NULL DEFAULT 0,      -- unidades ya llegadas (facturas recibidas)
+  no_llegara INTEGER NOT NULL DEFAULT 0,    -- 1 = lo pendiente no llegará: el comprador lo gestiona en otro lado
+  nota TEXT
 );
 
 -- Finanzas: monedas, tasas de cambio y partidas en moneda extranjera (para la diferencia cambiaria)

@@ -61,7 +61,7 @@ export const TABLAS = [
   { t: 'garantia_reclamos', cols: ['fecha', 'problema', 'resolucion', 'estado'], refs: [{ col: 'garantia_id', tabla: 'garantias' }] },
   {
     t: 'compras',
-    cols: ['numero', 'fecha', 'referencia', 'total', 'estado', 'notas', 'itbis', 'ncf'],
+    cols: ['numero', 'fecha', 'referencia', 'total', 'estado', 'notas', 'itbis', 'ncf', 'fecha_factura'],
     refs: [{ col: 'proveedor_id', tabla: 'proveedores' }, { col: 'usuario_id', tabla: 'usuarios' }],
     unicos: ['numero'],
   },
@@ -82,7 +82,7 @@ export const TABLAS = [
   { t: 'requisicion_detalle', cols: ['cantidad'], refs: [{ col: 'requisicion_id', tabla: 'requisiciones' }, { col: 'producto_id', tabla: 'productos' }] },
   { t: 'requisicion_cot', cols: ['costo_unitario'], refs: [{ col: 'requisicion_id', tabla: 'requisiciones' }, { col: 'proveedor_id', tabla: 'proveedores' }, { col: 'detalle_id', tabla: 'requisicion_detalle' }] },
   { t: 'ordenes_compra', cols: ['numero', 'fecha', 'estado', 'entrega', 'condicion', 'dias_credito', 'autorizado_por', 'autorizada_fecha', 'notas'], refs: [{ col: 'proveedor_id', tabla: 'proveedores' }, { col: 'requisicion_id', tabla: 'requisiciones' }, { col: 'compra_id', tabla: 'compras' }, { col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },
-  { t: 'orden_detalle', cols: ['cantidad', 'costo_unitario'], refs: [{ col: 'orden_id', tabla: 'ordenes_compra' }, { col: 'producto_id', tabla: 'productos' }] },
+  { t: 'orden_detalle', cols: ['cantidad', 'costo_unitario', 'recibido', 'no_llegara', 'nota'], refs: [{ col: 'orden_id', tabla: 'ordenes_compra' }, { col: 'producto_id', tabla: 'productos' }] },
   { t: 'caja', cols: ['fecha_apertura', 'efectivo_inicial', 'estado', 'fecha_cierre', 'efectivo_esperado', 'efectivo_contado', 'diferencia', 'notas', 'conteo_cajero', 'conteo_fecha', 'conteo_nota', 'conteo_por'] },
   { t: 'tipos_pago', cols: ['nombre', 'metodo', 'requiere_ref', 'activo'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'cuenta_id', tabla: 'cuentas_contables' }], unicos: ['nombre'] },
   {

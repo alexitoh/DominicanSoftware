@@ -442,7 +442,7 @@ export async function adjudicarRequisicion({ requisicion_id, proveedor_id, entre
 }
 
 // ---------- Orden de compras ----------
-export const ESTADOS_ORDEN = { pendiente: 'Pendiente de autorizar', autorizada: 'Autorizada', recibida: 'Recibida', anulada: 'Anulada' };
+export const ESTADOS_ORDEN = { pendiente: 'Pendiente de autorizar', autorizada: 'Autorizada', parcial: 'Back order', recibida: 'Recibida', anulada: 'Anulada' };
 // condicion: 'contado' o 'credito' (si no se indica, la del suplidor). dias_credito: plazo si es a crédito (si no se indica, el del suplidor o 30)
 export async function crearOrden({ proveedor_id, items, entrega = '', notas = '', requisicion_id = null, fecha = hoy(), condicion = null, dias_credito = null }) {
   if (!fechaValida(fecha)) throw new Error('La fecha no es válida.');
@@ -468,13 +468,15 @@ export async function crearOrden({ proveedor_id, items, entrega = '', notas = ''
 }
 export const listarOrdenes = () => consultar(
   `SELECT o.*, p.nombre AS proveedor, c.numero AS factura,
-          (SELECT COALESCE(SUM(d.cantidad * d.costo_unitario), 0) FROM orden_detalle d WHERE d.orden_id = o.id) AS total
+          (SELECT COALESCE(SUM(d.cantidad * d.costo_unitario), 0) FROM orden_detalle d WHERE d.orden_id = o.id) AS total,
+          (SELECT COALESCE(SUM(CASE WHEN d.no_llegara = 0 THEN d.cantidad - d.recibido ELSE 0 END), 0) FROM orden_detalle d WHERE d.orden_id = o.id) AS unidades_pendientes
      FROM ordenes_compra o JOIN proveedores p ON p.id = o.proveedor_id LEFT JOIN compras c ON c.id = o.compra_id ORDER BY o.id DESC LIMIT 500`);
 export async function detalleOrden(id) {
   const [o] = await consultar('SELECT o.*, p.nombre AS proveedor, p.telefono AS proveedor_tel, p.direccion AS proveedor_dir, p.documento AS proveedor_doc, c.numero AS factura FROM ordenes_compra o JOIN proveedores p ON p.id = o.proveedor_id LEFT JOIN compras c ON c.id = o.compra_id WHERE o.id = ?', [id]);
   if (!o) throw new Error('La orden no existe.');
   const items = await consultar('SELECT d.*, p.nombre FROM orden_detalle d JOIN productos p ON p.id = d.producto_id WHERE d.orden_id = ? ORDER BY d.id', [id]);
-  return { ...o, items, total: r2(items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0)) };
+  const lineas = items.map((i) => ({ ...i, pendiente: i.no_llegara ? 0 : Math.max(i.cantidad - i.recibido, 0) }));
+  return { ...o, items: lineas, total: r2(items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0)) };
 }
 // Autorizar el despacho: el suplidor puede entregar la mercancía en la forma de pago de la orden (contado o crédito con sus días)
 export async function autorizarOrden(id) {
@@ -490,14 +492,52 @@ export async function anularOrden(id) {
   if (!['pendiente', 'autorizada'].includes(o.estado)) throw new Error('Solo se puede anular una orden que aún no se ha recibido.');
   await ejecutar("UPDATE ordenes_compra SET estado = 'anulada' WHERE id = ?", [id]);
 }
-// Se llama cuando la factura del suplidor ya se registró (la orden queda recibida y enlazada a esa factura). Solo las órdenes autorizadas se reciben.
-export async function marcarOrdenRecibida(id, numeroCompra) {
+// Se llama cuando la factura del suplidor ya se registró. Cuenta lo que llegó en esa factura contra lo pedido:
+// lo que falta queda en back order (la orden pasa a 'parcial') y se puede marcar "no llegará" con una nota. Si todo llegó (o lo que falta no llegará), queda 'recibida'.
+// faltantes: { [detalle_id]: { accion: 'backorder' | 'no_llegara', nota } } (opcional; lo que falte sin indicar queda en back order)
+export async function marcarOrdenRecibida(id, numeroCompra, faltantes = {}) {
   const [o] = await consultar('SELECT estado FROM ordenes_compra WHERE id = ?', [id]);
   if (!o) throw new Error('La orden no existe.');
-  if (o.estado !== 'autorizada') throw new Error('La orden debe estar autorizada para recibirla.');
+  if (!['autorizada', 'parcial'].includes(o.estado)) throw new Error('La orden debe estar autorizada para recibirla.');
   const [c] = await consultar('SELECT id FROM compras WHERE numero = ?', [numeroCompra]);
   if (!c) throw new Error('No se encontró la factura del suplidor.');
-  await ejecutar("UPDATE ordenes_compra SET estado = 'recibida', compra_id = ? WHERE id = ?", [c.id, id]);
+  const llegado = new Map((await consultar('SELECT producto_id, SUM(cantidad) AS n FROM compra_detalle WHERE compra_id = ? GROUP BY producto_id', [c.id])).map((r) => [r.producto_id, r.n]));
+  const lineas = await consultar('SELECT * FROM orden_detalle WHERE orden_id = ? ORDER BY id', [id]);
+  const ops = [];
+  for (const l of lineas) {
+    if (l.no_llegara) continue;
+    const pend = l.cantidad - l.recibido;
+    const quedan = llegado.get(l.producto_id) || 0;
+    const toma = Math.min(pend, quedan);
+    llegado.set(l.producto_id, quedan - toma);
+    ops.push({ statement: 'UPDATE orden_detalle SET recibido = recibido + ? WHERE id = ?', values: [toma, l.id] });
+    const falta = pend - toma;
+    const f = faltantes[l.id];
+    if (falta > 0 && f?.accion === 'no_llegara') {
+      if (!limpio(f.nota)) throw new Error('Escribe una nota en cada producto que no va a llegar, para que el comprador lo gestione en otro lado.');
+      ops.push({ statement: 'UPDATE orden_detalle SET no_llegara = 1, nota = ? WHERE id = ?', values: [limpio(f.nota), l.id] });
+    } else if (falta > 0 && f?.nota) ops.push({ statement: 'UPDATE orden_detalle SET nota = ? WHERE id = ?', values: [limpio(f.nota), l.id] });
+  }
+  await transaccion(ops);
+  await ejecutar('UPDATE ordenes_compra SET compra_id = ? WHERE id = ?', [c.id, id]);
+  await recalcularEstadoOrden(id);
+}
+async function recalcularEstadoOrden(id) {
+  const [r] = await consultar('SELECT COALESCE(SUM(CASE WHEN no_llegara = 0 AND recibido < cantidad THEN 1 ELSE 0 END), 0) AS faltan FROM orden_detalle WHERE orden_id = ?', [id]);
+  await ejecutar('UPDATE ordenes_compra SET estado = ? WHERE id = ?', [r.faltan ? 'parcial' : 'recibida', id]);
+}
+// Al revisar una orden en back order: marcar un producto como "no llegará" (con nota) o devolverlo a back order
+export async function actualizarFaltante(detalleId, { accion, nota = '' }) {
+  const [l] = await consultar('SELECT d.*, o.estado FROM orden_detalle d JOIN ordenes_compra o ON o.id = d.orden_id WHERE d.id = ?', [detalleId]);
+  if (!l) throw new Error('El producto de la orden no existe.');
+  if (l.estado !== 'parcial') throw new Error('Solo se pueden gestionar faltantes de una orden en back order.');
+  if (accion === 'no_llegara') {
+    if (!limpio(nota)) throw new Error('Escribe una nota explicando por qué no llegará y qué se hará.');
+    await ejecutar('UPDATE orden_detalle SET no_llegara = 1, nota = ? WHERE id = ?', [limpio(nota), detalleId]);
+  } else if (accion === 'backorder') {
+    await ejecutar('UPDATE orden_detalle SET no_llegara = 0, nota = ? WHERE id = ?', [limpio(nota) || null, detalleId]);
+  } else throw new Error('Acción no válida.');
+  await recalcularEstadoOrden(l.orden_id);
 }
 
 // Condición de pago de un suplidor: contado o crédito con sus días (lo que se propone en sus órdenes de compra y facturas)

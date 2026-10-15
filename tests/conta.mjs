@@ -33,7 +33,7 @@ ok('el catálogo estándar se carga completo, con roles y uid fijo para sincroni
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo', 'incluido')");
 await bd.ejecutar("INSERT INTO productos (codigo, nombre, costo, precio, stock_actual) VALUES ('B-1', 'Bocina', 100, 118, 0)");
 const pid = (await uno("SELECT id FROM productos WHERE codigo = 'B-1'")).id;
-await bd.ejecutar("INSERT INTO proveedores (nombre) VALUES ('Distribuidora SA')");
+await bd.ejecutar("INSERT INTO proveedores (nombre, condicion, dias_credito) VALUES ('Distribuidora SA', 'credito', 15)");
 const prov = (await uno('SELECT id FROM proveedores')).id;
 await bd.registrarCompra({ proveedor_id: prov, ncf: 'B0100000001', itbis: 180, items: [{ producto_id: pid, cantidad: 10, costo_unitario: 118 }], actualizarCosto: false });
 // compra de 10 × 118 = 1180 (ITBIS 180): inventario 1000 al costo de 100
@@ -758,6 +758,9 @@ doc = await xp.detalleOrden(oc.id); assert.equal(doc.estado, 'recibida'); assert
 assert.equal((await uno('SELECT stock_actual FROM productos WHERE id = ?', [pid])).stock_actual, stock0 + 12);
 await assert.rejects(() => xp.anularOrden(oc.id), /recibido/);
 await xp.guardarCondicionProveedor(sid, { condicion: 'credito', dias: 45 });
+await bd.ejecutar("INSERT INTO proveedores (nombre, condicion) VALUES ('Solo Contado SRL', 'contado')");
+const scId = (await uno("SELECT id FROM proveedores WHERE nombre = 'Solo Contado SRL'")).id;
+await assert.rejects(() => bd.registrarCompra({ proveedor_id: scId, forma_pago: 'credito', items: [{ producto_id: pid, cantidad: 1, costo_unitario: 10 }], actualizarCosto: false }), /no tiene crédito autorizado/);
 const oc3 = await xp.crearOrden({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 1, costo_unitario: 50 }] });
 let d3 = await xp.detalleOrden(oc3.id); assert.equal(d3.condicion, 'credito'); assert.equal(d3.dias_credito, 45);
 const oc4 = await xp.crearOrden({ proveedor_id: sid, condicion: 'contado', items: [{ producto_id: pid, cantidad: 1, costo_unitario: 50 }] });

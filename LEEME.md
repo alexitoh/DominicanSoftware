@@ -306,3 +306,10 @@ Notas de crédito/débito y anticipos aún no salen en el 606; un anticipo en ef
 - Cada suplidor tiene condición **Contado** o **Crédito + días** (Contabilidad → CxP → Suplidor, o su ficha en Proveedores). Se propone sola en sus órdenes y facturas.
 - **Órdenes de compra** se generan desde Compras (botón "Órdenes de compra") o desde CxP → Orden de Compras. Cada una lleva su forma de pago (contado o crédito N días).
 - Flujo: Pendiente → **Autorizar despacho** (permiso "Autorizar órdenes de compra": administrador y gerente) → **Imprimir orden** (documento para llevar al suplidor) → **Recibir** (abre la factura ya llena con esa forma de pago) → Recibida.
+- **Crédito por suplidor:** el crédito (contado o N días) lo define el perfil del suplidor; la compra ya no lo decide. Un suplidor sin crédito autorizado no admite compras a crédito.
+- **Compras → Dar entrada a factura:** eliges la orden autorizada, pones Nº de factura, NCF y fecha, y confirmas lo que llegó. Lo que falta queda en **Back order** o se marca **No llegará** con una nota para que el comprador lo gestione en otro lado (Órdenes → Gestionar).
+
+### Entrada de facturas (Inventario)
+- **Inventario → Dar entrada a factura**: se elige la orden autorizada, se escribe Nº de factura, NCF y fecha, y lo que llegó. Lo que falta queda en **back order** (la orden pasa a "parcial") o se marca **No llegará** con una nota obligatoria por producto, que el comprador ve al abrir la orden (Compras → Órdenes de compra → Gestionar).
+- "Factura sin orden de compra" sigue disponible en esa misma ventana.
+- El crédito lo define solo el perfil del suplidor (contado, o crédito con sus días); ni la orden ni la compra lo cambian.

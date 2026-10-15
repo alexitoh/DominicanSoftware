@@ -3,11 +3,10 @@ import { h, hoja, toast, dinero } from './ui.js';
 import {
   listarSolicitudes, detalleSolicitud, crearSolicitud, cambiarEstadoSolicitud, ESTADOS_SOLICITUD,
   listarRequisiciones, detalleRequisicion, crearRequisicion, guardarCotizacion, quitarCotizacion, anularRequisicion, adjudicarRequisicion, ESTADOS_REQUISICION,
-  listarOrdenes, detalleOrden, crearOrden, anularOrden, autorizarOrden, marcarOrdenRecibida, ESTADOS_ORDEN,
+  listarOrdenes, detalleOrden, crearOrden, anularOrden, autorizarOrden, actualizarFaltante, ESTADOS_ORDEN,
 } from './cxp-db.js';
 import { consultar } from './database.js';
 import { fechaHoy } from './conta-db.js';
-import { formularioCompra } from './compras.js';
 import { tienePermiso } from './auth.js';
 import { imprimirOrdenCompra, textoPagoOrden } from './orden-compra-imp.js';
 import { selectDe } from './cxp-docs.js';
@@ -166,53 +165,74 @@ export async function seccionRequisiciones(raiz, recargar) {
 
 // ---------- Orden de compras ----------
 export async function seccionOrdenes(raiz, recargar) {
-  const lista = await listarOrdenes();
+  const todas = await listarOrdenes();
+  const buscar = h('input', { class: 'campo', type: 'search', placeholder: 'Buscar por suplidor o número', 'aria-label': 'Buscar orden' });
+  const segmento = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Filtro de órdenes' });
+  const resumen = h('div', { class: 'totales' }); const lista = h('div');
+  const FILTROS = [['abiertas', 'Abiertas'], ['pendiente', 'Por autorizar'], ['autorizada', 'Autorizadas'], ['parcial', 'Back order'], ['recibida', 'Recibidas'], ['todas', 'Todas']];
+  let filtro = 'abiertas';
+  const abierta = (o) => ['pendiente', 'autorizada', 'parcial'].includes(o.estado);
+  function pintar() {
+    segmento.replaceChildren(...FILTROS.map(([id, t]) => h('button', { 'aria-pressed': String(filtro === id), onClick: () => { filtro = id; pintar(); } }, t)));
+    const q = buscar.value.trim().toLowerCase();
+    const vis = todas.filter((o) => (filtro === 'todas' || (filtro === 'abiertas' ? abierta(o) : o.estado === filtro)) && (!q || `${o.proveedor} ${o.numero}`.toLowerCase().includes(q)));
+    const abiertas = todas.filter(abierta);
+    resumen.replaceChildren(renglon('En órdenes abiertas', dinero(abiertas.reduce((t, o) => t + o.total, 0)), 'gran'),
+      renglon('Por autorizar', String(todas.filter((o) => o.estado === 'pendiente').length)), renglon('En back order', String(todas.filter((o) => o.estado === 'parcial').length)));
+    lista.replaceChildren(vis.length ? h('div', { class: 'lista' }, vis.map((o) => h('button', { class: `fila inventario ${o.estado === 'anulada' ? 'apagada' : ''}`, onClick: () => detalle(o) },
+      h('span', { class: 'datos' }, h('strong', {}, o.proveedor), h('small', {}, `${o.numero} · ${fechaCorta(o.fecha)}${o.entrega ? ` · entrega ${fechaCorta(o.entrega)}` : ''}`), h('small', {}, `${badge(o.estado, ESTADOS_ORDEN)} · ${textoPagoOrden(o)}${o.estado === 'parcial' ? ` · faltan ${o.unidades_pendientes}` : ''}`)),
+      h('span', { class: 'precio' }, dinero(o.total))))) : vacio('No hay órdenes con ese filtro.'));
+  }
+  buscar.addEventListener('input', pintar);
+
   async function nueva() {
-    const provs = await consultar('SELECT id, nombre FROM proveedores ORDER BY nombre COLLATE NOCASE');
+    const provs = await consultar('SELECT id, nombre, condicion, dias_credito FROM proveedores ORDER BY nombre COLLATE NOCASE');
     if (!provs.length) { toast('Primero crea un suplidor'); return; }
     const ed = await editorLineas({ conCosto: true });
     const prov = selectDe(provs.map((p) => [p.id, p.nombre]), { etiqueta: 'Suplidor' });
-    const cond = selectDe([['contado', 'Contado'], ['credito', 'Crédito']], { etiqueta: 'Forma de pago' });
-    const dias = numero('30', '30'); dias.setAttribute('step', '1'); dias.setAttribute('aria-label', 'Días de crédito');
-    const filaDias = campo('Días de crédito', dias);
-    const verDias = () => { filaDias.style.display = cond.value === 'credito' ? '' : 'none'; };
-    const deSuplidor = async () => {
-      const [p] = await consultar('SELECT condicion, dias_credito FROM proveedores WHERE id = ?', [Number(prov.value)]);
-      cond.value = p?.condicion === 'credito' ? 'credito' : 'contado'; dias.value = String(p?.dias_credito ?? 30); verDias();
-    };
-    prov.addEventListener('change', deSuplidor); cond.addEventListener('change', verDias);
-    prov.value = String(provs[0].id); await deSuplidor();
+    const pago = h('p', { class: 'ayuda' }, '');
+    const verPago = () => { const p = provs.find((x) => String(x.id) === prov.value); pago.textContent = `Forma de pago: ${p?.condicion === 'credito' ? `crédito a ${p.dias_credito ?? 30} días` : 'contado'} (según el perfil del suplidor).`; };
+    prov.addEventListener('change', verPago); verPago();
     const entrega = fechaInput(''); const notas = texto('', 'Opcional'); const fecha = fechaInput(fechaHoy()); const error = h('p', { class: 'error', role: 'alert' });
     const cerrar = hoja('Nueva orden de compra', h('div', { class: 'cuerpo' },
-      h('p', { class: 'ayuda' }, 'Lo que le pides a un suplidor, con la forma de pago (contado o crédito) con que se autoriza el despacho. Se imprime para llevárselo. No mueve inventario ni contabilidad: cuando llegue la mercancía, usa "Recibir" para registrar su factura.'),
-      campo('Suplidor', prov), h('div', { class: 'rejilla' }, campo('Forma de pago', cond), filaDias), h('div', { class: 'rejilla' }, campo('Fecha', fecha), campo('Entrega esperada', entrega)), campo('Notas', notas), ed.el, error,
+      h('p', { class: 'ayuda' }, 'Lo que le pides a un suplidor. Se autoriza, se imprime para llevárselo y, cuando llega su factura, se le da entrada desde Compras. No mueve inventario hasta entonces.'),
+      campo('Suplidor', prov), pago, h('div', { class: 'rejilla' }, campo('Fecha', fecha), campo('Entrega esperada', entrega)), campo('Notas', notas), ed.el, error,
       h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: async () => {
         error.textContent = '';
-        try { const r = await crearOrden({ proveedor_id: Number(prov.value), items: ed.items(), entrega: entrega.value, notas: notas.value, fecha: fecha.value, condicion: cond.value, dias_credito: dias.value }); cerrar(); toast(`Orden ${r.numero} guardada`); await recargar(); }
+        try { const r = await crearOrden({ proveedor_id: Number(prov.value), items: ed.items(), entrega: entrega.value, notas: notas.value, fecha: fecha.value }); cerrar(); toast(`Orden ${r.numero} guardada`); await recargar(); }
         catch (e) { error.textContent = limpiar(e); }
       } }, 'Guardar orden'))));
+  }
+
+  // Un producto que no llegó: el comprador lo ve con su nota y decide (otro suplidor) o lo devuelve a back order
+  function gestionar(l, cerrarDetalle) {
+    const nota = texto(l.nota || '', 'Qué pasó y qué se hará'); nota.setAttribute('aria-label', 'Nota del faltante');
+    const error = h('p', { class: 'error', role: 'alert' });
+    const accion = async (a) => { try { await actualizarFaltante(l.id, { accion: a, nota: nota.value }); cerrar(); cerrarDetalle(); toast('Orden actualizada'); await recargar(); } catch (e) { error.textContent = limpiar(e); } };
+    const cerrar = hoja(l.nombre, h('div', { class: 'cuerpo' }, h('p', { class: 'ayuda' }, `Faltan ${l.cantidad - l.recibido} de ${l.cantidad}.`), campo('Nota', nota), error,
+      h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: () => accion('no_llegara') }, 'No llegará'), l.no_llegara ? h('button', { class: 'btn', onClick: () => accion('backorder') }, 'Volver a back order') : h('button', { class: 'btn', onClick: () => accion('backorder') }, 'Guardar nota (sigue en back order)'))));
   }
   async function detalle(o) {
     const d = await detalleOrden(o.id);
     const error = h('p', { class: 'error', role: 'alert' });
     const cerrar = hoja(`Orden ${d.numero}`, h('div', { class: 'cuerpo' },
+      h('p', { class: 'ayuda' }, [d.proveedor, fechaCorta(d.fecha), d.entrega && `Entrega ${fechaCorta(d.entrega)}`, d.factura && `Última factura ${d.factura}`, d.notas].filter(Boolean).join(' · ')),
+      h('ul', { class: 'historial detalle' }, d.items.map((i) => h('li', {},
+        h('strong', {}, `${i.cantidad}×`), h('span', {}, `${i.nombre}, ${dinero(i.costo_unitario)} c/u${i.recibido ? ` · recibido ${i.recibido}` : ''}${i.no_llegara ? ' · NO LLEGARÁ' : i.pendiente > 0 && d.estado === 'parcial' ? ` · back order ${i.pendiente}` : ''}${i.nota ? ` · Nota: ${i.nota}` : ''}`),
+        h('small', {}, dinero(i.cantidad * i.costo_unitario)),
+        d.estado === 'parcial' && (i.pendiente > 0 || i.no_llegara) ? h('button', { class: 'btn', 'aria-label': `Gestionar ${i.nombre}`, onClick: () => gestionar(i, cerrar) }, 'Gestionar') : null))),
       h('div', { class: 'totales' }, renglon('Total estimado', dinero(d.total), 'gran'), renglon('Estado', badge(d.estado, ESTADOS_ORDEN)), renglon('Forma de pago', textoPagoOrden(d)), d.autorizado_por ? renglon('Autorizada por', `${d.autorizado_por} · ${fechaCorta(d.autorizada_fecha)}`) : null),
-      h('p', { class: 'ayuda' }, [fechaCorta(d.fecha), d.proveedor, d.entrega && `Entrega ${fechaCorta(d.entrega)}`, d.factura && `Factura ${d.factura}`, d.notas].filter(Boolean).join(' · ')),
-      tabla(['Producto', 'Cant.', 'Costo', 'Importe'], d.items.map((i) => [i.nombre, String(i.cantidad), dinero(i.costo_unitario), dinero(i.cantidad * i.costo_unitario)]), { num: [1, 2, 3] }), error,
+      error,
       h('div', { class: 'acciones' },
-        d.estado !== 'anulada' ? h('button', { class: 'btn claro', onClick: async () => { try { await imprimirOrdenCompra(d.id); } catch (e) { error.textContent = limpiar(e); } } }, 'Imprimir orden') : null,
+        d.estado !== 'anulada' ? h('button', { class: 'btn', onClick: async () => { try { await imprimirOrdenCompra(d.id); } catch (e) { error.textContent = limpiar(e); } } }, 'Imprimir orden') : null,
         d.estado === 'pendiente' && tienePermiso('autorizar_compras') ? h('button', { class: 'btn primario', onClick: async () => { try { await autorizarOrden(d.id); cerrar(); toast('Despacho autorizado'); await recargar(); } catch (e) { error.textContent = limpiar(e); } } }, `Autorizar despacho (${textoPagoOrden(d)})`) : null,
-        d.estado === 'autorizada' ? h('button', { class: 'btn primario', onClick: () => {
-          cerrar();
-          formularioCompra(async (numeroCompra) => { try { await marcarOrdenRecibida(d.id, numeroCompra); } catch (e) { toast(limpiar(e), 'error'); } await recargar(); },
-            { proveedorId: d.proveedor_id, formaPago: d.condicion === 'credito' ? 'credito' : 'efectivo', plazo: d.dias_credito, items: d.items.map((i) => ({ producto_id: i.producto_id, cantidad: i.cantidad, costo_unitario: i.costo_unitario })) });
-        } }, 'Recibir (registrar factura)') : null,
+        ['autorizada', 'parcial'].includes(d.estado) ? h('p', { class: 'ayuda' }, 'Cuando llegue su factura, dale entrada en Inventario → Dar entrada a factura.') : null,
         ['pendiente', 'autorizada'].includes(d.estado) ? h('button', { class: 'btn peligro', onClick: async () => { try { await anularOrden(d.id); cerrar(); toast('Orden anulada'); await recargar(); } catch (e) { error.textContent = limpiar(e); } } }, 'Anular orden') : null)));
   }
+
   raiz.replaceChildren(
-    h('p', { class: 'ayuda' }, 'Pedidos a suplidores. Al llegar la mercancía, "Recibir" abre la factura del suplidor ya llena para que solo confirmes: ahí entra al inventario.'),
+    h('p', { class: 'ayuda' }, 'Pedidos a suplidores. Pendiente → autorizada (contado o crédito según el perfil del suplidor) → se imprime y se le lleva → al llegar su factura, en Inventario → "Dar entrada a factura".'),
     h('div', { class: 'filtros' }, h('button', { class: 'btn primario', onClick: nueva }, 'Nueva orden de compra')),
-    lista.length ? h('div', { class: 'lista' }, lista.map((o) => h('button', { class: `fila inventario ${o.estado === 'anulada' ? 'apagada' : ''}`, onClick: () => detalle(o) },
-      h('span', { class: 'datos' }, h('strong', {}, `${o.numero} · ${o.proveedor}`), h('small', {}, [fechaCorta(o.fecha), o.entrega && `entrega ${fechaCorta(o.entrega)}`, badge(o.estado, ESTADOS_ORDEN)].filter(Boolean).join(' · '))),
-      h('span', { class: 'precio' }, dinero(o.total))))) : vacio('Aún no hay órdenes de compra.'));
+    buscar, segmento, resumen, lista);
+  pintar();
 }

@@ -22,6 +22,9 @@ const fmt = (n) => String(redondear(n));
 
 export async function vistaCompras(raiz) {
   const ordenesRaiz = h('div', {});
+  const cuerpoFacturas = h('div', {});
+  const modo = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Sección de compras' });
+  let vista = 'facturas';
   const cargarOrdenes = async () => { const { seccionOrdenes } = await import('./cxp-compras.js'); await seccionOrdenes(ordenesRaiz, cargarOrdenes); };
   const estado = { periodo: 'hoy', rango: rangoInicial() };
   const resumen = h('dl', { class: 'resumen' });
@@ -59,7 +62,7 @@ export async function vistaCompras(raiz) {
     lista.replaceChildren(...(filas.length
       ? filas.map(fila)
       : [h('p', { class: 'vacio' }, estado.periodo === 'todas'
-          ? 'Aún no hay compras. Toca "Nueva compra" para registrar la primera.'
+          ? 'Aún no hay compras. Toca "Dar entrada a factura" para registrar la primera.'
           : 'No hay compras en este período.')]));
   }
 
@@ -119,14 +122,21 @@ export async function vistaCompras(raiz) {
   raiz.replaceChildren(
     h('header', { class: 'barra' },
       h('h1', {}, 'Compras'),
-      h('div', { class: 'acciones' },
-        h('button', { class: 'btn claro', onClick: () => hoja('Órdenes de compra', h('div', { class: 'cuerpo' }, ordenesRaiz)) && cargarOrdenes() }, 'Órdenes de compra'),
-        h('button', { class: 'btn claro', onClick: () => formularioCompra(pintar) }, 'Nueva compra'))),
-    resumen,
-    h('div', { class: 'filtros' }, segmento, filaRango.el),
-    lista);
+      h('button', { class: 'btn claro', onClick: () => { vista = 'ordenes'; pintarModo(); } }, 'Órdenes de compra')),
+    modo,
+    cuerpoFacturas,
+    ordenesRaiz);
+  const pintarModo = async () => {
+    modo.replaceChildren(...[['facturas', 'Facturas recibidas'], ['ordenes', 'Órdenes de compra']].map(([id, t]) =>
+      h('button', { 'aria-pressed': String(vista === id), onClick: () => { vista = id; pintarModo(); } }, t)));
+    cuerpoFacturas.style.display = vista === 'facturas' ? '' : 'none';
+    ordenesRaiz.style.display = vista === 'ordenes' ? '' : 'none';
+    if (vista === 'ordenes') await cargarOrdenes();
+  };
+  cuerpoFacturas.replaceChildren(resumen, h('div', { class: 'filtros' }, segmento, filaRango.el), lista);
   pintarSegmento();
   await pintar();
+  await pintarModo();
 }
 
 // ---------- Nueva compra ----------
@@ -162,6 +172,7 @@ export async function formularioCompra(alGuardar = () => {}, opciones = {}) {
   const formaPago = h('select', { class: 'campo', 'aria-label': 'Forma de pago', onChange: () => mostrarCredito() },
     [['efectivo', 'Contado, efectivo'], ['tarjeta', 'Contado, tarjeta'], ['transferencia', 'Contado, transferencia'], ['cheque', 'Contado, cheque'], ['credito', 'Crédito (por pagar)']]
       .map(([k, t]) => h('option', { value: k }, t)));
+  const avisoCondicion = h('small', { class: 'ayuda' }, '');
   const plazo = h('input', { class: 'campo', type: 'number', inputmode: 'numeric', min: '0', step: '1', value: '30', 'aria-label': 'Plazo en días' });
   const inicial = h('input', { class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: '0.00', 'aria-label': 'Pago inicial' });
   const metodoInicial = h('select', { class: 'campo', 'aria-label': 'Método del pago inicial' },
@@ -182,16 +193,21 @@ export async function formularioCompra(alGuardar = () => {}, opciones = {}) {
       h('option', { value: '' }, 'Sin proveedor'),
       ...ps.map((p) => h('option', { value: p.id }, textoCondicion(p) ? `${p.nombre} (${textoCondicion(p)})` : p.nombre)));
   }
-  // Aplica la condición de pago del proveedor elegido
+  // La condición de pago la manda el perfil del proveedor: a crédito (con sus días) o contado; la compra no la decide
   function aplicarCondicion() {
     const p = provInfo.get(proveedor.value);
-    if (!p) return;
-    if (p.condicion === 'credito') {
+    const credito = p?.condicion === 'credito';
+    const opCredito = [...formaPago.children].find((o) => o.value === 'credito');
+    if (opCredito) opCredito.disabled = !credito;
+    if (credito) {
       formaPago.value = 'credito';
       plazo.value = String(p.dias_credito ?? DIAS_POR_DEFECTO);
-    } else if (p.condicion === 'contado' && formaPago.value === 'credito') {
+    } else if (formaPago.value === 'credito') {
       formaPago.value = 'efectivo';
     }
+    formaPago.disabled = credito;
+    plazo.disabled = true;
+    avisoCondicion.textContent = !p ? 'Sin proveedor: la compra es de contado.' : credito ? `${p.nombre}: crédito a ${p.dias_credito ?? DIAS_POR_DEFECTO} días (según su perfil).` : `${p.nombre}: contado (según su perfil). Para darle crédito, defínelo en el perfil del suplidor.`;
     mostrarCredito();
   }
 
@@ -378,7 +394,7 @@ export async function formularioCompra(alGuardar = () => {}, opciones = {}) {
         }, 'Nuevo')),
       h('label', { class: 'etiqueta' }, 'Factura del proveedor', referencia),
       h('div', { class: 'rejilla' }, h('label', { class: 'etiqueta' }, 'NCF de la factura', ncfC), h('label', { class: 'etiqueta' }, 'ITBIS incluido', itbisC)),
-      h('label', { class: 'etiqueta' }, 'Forma de pago', formaPago),
+      h('label', { class: 'etiqueta' }, 'Forma de pago', formaPago), avisoCondicion,
       bloqueCredito,
       h('label', { class: 'etiqueta' }, 'Margen de ganancia para todos los productos (%)', margenGlobal,
         h('small', { class: 'ayuda' }, 'Se calcula sobre el costo. Al escribirlo, el precio de venta de cada producto se calcula solo; luego puedes ajustar el margen o el precio de cada uno.')),
@@ -397,9 +413,8 @@ export async function formularioCompra(alGuardar = () => {}, opciones = {}) {
       h('div', { class: 'acciones' }, botonRegistrar)));
 
   await cargarProveedores();
-  if (opciones.proveedorId) { proveedor.value = String(opciones.proveedorId); aplicarCondicion(); }
-  if (opciones.formaPago) { formaPago.value = opciones.formaPago; mostrarCredito(); }
-  if (opciones.plazo != null && formaPago.value === 'credito') plazo.value = String(opciones.plazo);
+  if (opciones.proveedorId) proveedor.value = String(opciones.proveedorId);
+  aplicarCondicion();
   for (const it of opciones.items || []) {
     const [p] = await consultar('SELECT * FROM productos WHERE id = ?', [it.producto_id]);
     if (!p) continue;
