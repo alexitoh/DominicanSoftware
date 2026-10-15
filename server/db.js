@@ -9,7 +9,7 @@ export const TABLAS_SYNC = [
   'ventas_pendientes', 'ventas_pendientes_detalle', 'ventas_pendientes_servicios',
   'cuentas_cobrar', 'garantias', 'garantia_reclamos', 'compras', 'compra_detalle', 'cuentas_pagar', 'pagos_compra',
   'centros_costo', 'cuentas_contables', 'asientos', 'asiento_lineas', 'cuentas_bancarias', 'banco_movs', 'cajas_chicas', 'caja_chica_movs', 'conciliaciones_banco', 'conciliaciones', 'dep_tipos', 'activos_tipos', 'tasas_inflacion', 'activos_fijos', 'activos_reval', 'empleados', 'nomina_corridas', 'nomina_detalle', 'presupuestos', 'periodos_cerrados',
-  'caja', 'gastos', 'cotizaciones', 'cotizacion_detalle', 'movimientos_inventario', 'ncf_anulados', 'bitacora', 'config',
+  'caja', 'tipos_pago', 'conceptos_conta', 'declaraciones', 'gastos', 'cotizaciones', 'cotizacion_detalle', 'movimientos_inventario', 'ncf_anulados', 'bitacora', 'config',
 ];
 
 // Los usuarios y correos son únicos dentro de cada negocio (no en todo el servidor): dos negocios pueden tener un usuario "admin"

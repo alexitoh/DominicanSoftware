@@ -251,3 +251,13 @@ Cuatro secciones: **Caja Chica**, **Desembolso**, **Reporte Caja Chica** y **Rep
 - **Reposición:** repone lo desembolsado (todos los pendientes o los que marques) para volver al fondo completo; el dinero sale de la Caja general o de un banco. Anular una reposición deja sus desembolsos pendientes otra vez.
 - **Reporte Caja Chica:** por período: fondo, desembolsado, ITBIS, repuesto, disponible, total por categoría y todos los movimientos (con CSV).
 Contabilidad: cuenta nueva **1102 Caja chica**. El fondo y la reposición mueven dinero entre Caja chica y la Caja general o el banco; cada desembolso se registra como gasto contra Caja chica (y suma a los reportes de gastos).
+
+## Gastos, períodos y diarios (Contabilidad)
+- **Gastos** (pestaña nueva), tres secciones:
+  - **Gastos:** registra gastos sin abrir caja (alquiler, luz…), con concepto guardado, categoría, beneficiario, RNC, NCF, ITBIS y tipo de pago. Se contabilizan solos y, con NCF, entran al 606. También lista los gastos hechos desde Caja. Se anulan con motivo (no se borran).
+  - **Reportes de Gasto:** por período, agrupados por categoría, beneficiario, tipo de pago, mes u origen (incluye caja chica), con CSV.
+  - **Tipo de Pago:** formas de pago (efectivo, tarjeta, transferencia, cheque…). Cada una puede salir de la Caja, de un banco o de otra cuenta contable, y pedir número de referencia.
+- **Asientos** ahora tiene tres secciones: **Diario** (anular pide el motivo), **Diarios Cancelados** (quién, cuándo y por qué) y **Concepto** (plantillas con cuentas sugeridas para asientos y gastos).
+- **Períodos** (pestaña nueva): **Período Contable** (cierra/reabre mes a mes, cierra hasta un mes y cierra el ejercicio) y **Período Fiscal** (control de 606, 607, 608 e IT-1 por mes, con estado presentada / por presentar / vencida y mes de inicio del año fiscal). Los vencimientos (día 15 y día 20 del mes siguiente) son de referencia: confírmalos con la DGII o tu contador. El sistema no envía nada a la DGII.
+- **Cuentas:** buscador y filtro por tipo. **Estado de resultados:** % sobre ingresos y comparación con el período anterior de igual duración.
+

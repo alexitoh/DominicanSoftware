@@ -2,7 +2,7 @@
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { consultar } from './database.js';
 import {
-  libroContable, crearAsiento, anularAsiento, listarCuentas, listarCentros, crearCuenta, editarCuenta, eliminarCuenta, fechaHoy,
+  libroContable, crearAsiento, anularAsiento, listarConceptos, listarCuentas, listarCentros, crearCuenta, editarCuenta, eliminarCuenta, fechaHoy,
 } from './conta-db.js';
 import { diario, saldoNatural, r2, validarAsiento } from './conta-motor.js';
 import { ROLES, TIPOS_CUENTA, nivelDe } from './conta-plan.js';
@@ -46,17 +46,30 @@ export async function vistaAsientos(raiz) {
       tabla(['Cuenta', 'Débito', 'Crédito'], a.lineas.map((l) => [
         h('span', {}, `${cuentas.get(l.cuenta_id)?.codigo} · ${cuentas.get(l.cuenta_id)?.nombre}`, l.detalle ? h('small', { class: 'ayuda' }, ` ${l.detalle}`) : null),
         l.debe ? dinero(l.debe) : '', l.haber ? dinero(l.haber) : '']), { num: [1, 2] }),
-      manual ? h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: async () => {
-        if (!(await confirmar('Anular asiento', `Se anulará el asiento ${a.numero}. No se borra: queda en el historial como anulado.`, 'Anular'))) return;
-        try {
-          const [{ id }] = await consultar('SELECT id FROM asientos WHERE numero = ?', [a.numero]);
-          await anularAsiento(id); cerrar(); toast('Asiento anulado'); await vistaAsientos(raiz);
-        } catch (e) { toast(limpiar(e), 'error'); }
+      manual ? h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: () => {
+        cerrar(); pedirMotivo(a);
       } }, 'Anular asiento')) : h('p', { class: 'ayuda' }, 'Este asiento se genera solo desde el documento original. Para cambiarlo, modifica o anula el documento.')));
     return cerrar;
   }
 
+  // La anulación pide el motivo: queda en Diarios Cancelados
+  function pedirMotivo(a) {
+    const motivo = texto('', 'Ej. Se registró con la cuenta equivocada');
+    const error = h('p', { class: 'error', role: 'alert' });
+    const cerrar = hoja(`Anular asiento ${a.numero}`, h('div', { class: 'cuerpo' },
+      h('p', { class: 'ayuda' }, 'No se borra: pasa a Diarios Cancelados con su motivo, quién lo anuló y cuándo.'),
+      campo('Motivo de la anulación', motivo), error,
+      h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: async () => {
+        if (!motivo.value.trim()) { error.textContent = 'Escribe el motivo de la anulación.'; return; }
+        try {
+          const [{ id }] = await consultar('SELECT id FROM asientos WHERE numero = ?', [a.numero]);
+          await anularAsiento(id, motivo.value); cerrar(); toast('Asiento anulado'); await vistaAsientos(raiz);
+        } catch (e) { error.textContent = limpiar(e); }
+      } }, 'Anular asiento'))));
+  }
+
   async function nuevo(tipo = 'manual') {
+    const conceptos = tipo === 'manual' ? (await listarConceptos()).filter((c) => c.activo && c.tipo === 'asiento') : [];
     const cuentasAct = (await listarCuentas(true));
     const centros = (await listarCentros()).filter((c) => c.activo);
     const fecha = fechaInput(fechaHoy());
@@ -89,6 +102,14 @@ export async function vistaAsientos(raiz) {
         renglon(Math.abs(d - hb) < 0.005 ? 'Cuadrado' : 'Diferencia', dinero(Math.abs(d - hb)), Math.abs(d - hb) < 0.005 ? '' : 'deuda'));
     }
     linea(); linea(); sumar();
+    const selConcepto = h('select', { class: 'campo', 'aria-label': 'Concepto guardado' }, h('option', { value: '' }, '— Escribir libre —'), conceptos.map((c) => h('option', { value: String(c.id) }, c.nombre)));
+    selConcepto.addEventListener('change', () => {
+      const c = conceptos.find((x) => String(x.id) === selConcepto.value);
+      if (!c) return;
+      concepto.value = c.nombre;
+      if (c.cuenta_debe_id) filas[0].c.value = String(c.cuenta_debe_id);
+      if (c.cuenta_haber_id) filas[1].c.value = String(c.cuenta_haber_id);
+    });
     const guardar = h('button', { class: 'btn primario', onClick: async () => {
       error.textContent = '';
       try {
@@ -100,6 +121,7 @@ export async function vistaAsientos(raiz) {
     } }, 'Guardar asiento');
     const cerrar = hoja(tipo === 'apertura' ? 'Saldos de apertura' : 'Nuevo asiento', h('div', { class: 'cuerpo' },
       tipo === 'apertura' ? h('p', { class: 'ayuda' }, 'Registra aquí lo que tenías al empezar (caja, bancos, deudas, capital…). Si lo haces, define la fecha de inicio contable en la pestaña Ajustes para que los documentos anteriores no se cuenten dos veces.') : null,
+      conceptos.length ? campo('Concepto guardado', selConcepto, 'Rellena el concepto y las cuentas; puedes cambiarlos.') : null,
       h('div', { class: 'rejilla' }, campo('Fecha', fecha), campo('Concepto', concepto)),
       cuerpoFilas,
       h('button', { class: 'btn', onClick: linea }, '+ Agregar línea'), resumen, error, h('div', { class: 'acciones' }, guardar)));
@@ -156,12 +178,24 @@ export async function vistaCuentas(raiz) {
         } }, 'Guardar'))));
   }
 
-  raiz.replaceChildren(
-    h('div', { class: 'filtros' }, h('button', { class: 'btn primario', onClick: () => formulario() }, 'Nueva cuenta')),
-    h('div', { class: 'lista' }, lib.cuentas.map((c) => h('button', { class: `fila inventario ${c.activo ? '' : 'apagada'}`, onClick: () => formulario(c) },
-      h('span', { class: 'datos', style: `padding-left:${nivelDe(c.codigo) * 14}px` },
+  let q = '', tipoF = '';
+  const lista = h('div');
+  const buscar = h('input', { class: 'campo', type: 'search', placeholder: 'Buscar por código o nombre', 'aria-label': 'Buscar cuenta' });
+  const filtroTipo = h('select', { class: 'campo', 'aria-label': 'Filtrar por tipo' }, h('option', { value: '' }, 'Todos los tipos'), Object.entries(TIPOS_CUENTA).map(([k, t]) => h('option', { value: k }, t.nombre)));
+  function pintar() {
+    const ql = q.trim().toLowerCase();
+    const vis = lib.cuentas.filter((c) => (!tipoF || c.tipo === tipoF) && (!ql || `${c.codigo} ${c.nombre}`.toLowerCase().includes(ql)));
+    lista.replaceChildren(vis.length ? h('div', { class: 'lista' }, vis.map((c) => h('button', { class: `fila inventario ${c.activo ? '' : 'apagada'}`, onClick: () => formulario(c) },
+      h('span', { class: 'datos', style: `padding-left:${(ql || tipoF ? 0 : nivelDe(c.codigo)) * 14}px` },
         h('strong', {}, `${c.codigo} · ${c.nombre}`),
         h('small', {}, `${TIPOS_CUENTA[c.tipo].nombre}${c.grupo ? ' · título' : ''}${c.rol ? ` · ${ROLES[c.rol]}` : ''}${c.categoria_gasto ? ` · gastos "${c.categoria_gasto}"` : ''}${c.activo ? '' : ' · desactivada'}`)),
-      h('span', { class: 'precio' }, dinero(c.grupo ? sumaTitulo(c) : saldoDe(c)))))),
+      h('span', { class: 'precio' }, dinero(c.grupo ? sumaTitulo(c) : saldoDe(c)))))) : vacio('Ninguna cuenta coincide.'));
+  }
+  buscar.addEventListener('input', () => { q = buscar.value; pintar(); });
+  filtroTipo.addEventListener('change', () => { tipoF = filtroTipo.value; pintar(); });
+  raiz.replaceChildren(
+    h('div', { class: 'filtros' }, h('button', { class: 'btn primario', onClick: () => formulario() }, 'Nueva cuenta')),
+    buscar, filtroTipo, lista,
     h('p', { class: 'ayuda', style: 'padding:.75rem 1rem' }, 'Saldo según su naturaleza (activos y gastos suben con débitos; pasivos, patrimonio e ingresos con créditos).'));
+  pintar();
 }

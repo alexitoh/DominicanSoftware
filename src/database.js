@@ -74,6 +74,13 @@ export async function initDB() {
     'ALTER TABLE activos_fijos ADD COLUMN baja_precio REAL',
     'ALTER TABLE activos_fijos ADD COLUMN baja_cuenta_id INTEGER REFERENCES cuentas_contables(id)',
     'ALTER TABLE activos_fijos ADD COLUMN baja_nota TEXT',
+    'ALTER TABLE asientos ADD COLUMN anulado_fecha TEXT',
+    'ALTER TABLE asientos ADD COLUMN anulado_por TEXT',
+    'ALTER TABLE asientos ADD COLUMN anulado_motivo TEXT',
+    'ALTER TABLE gastos ADD COLUMN tipo_pago_id INTEGER REFERENCES tipos_pago(id)',
+    'ALTER TABLE gastos ADD COLUMN beneficiario TEXT',
+    "ALTER TABLE gastos ADD COLUMN estado TEXT NOT NULL DEFAULT 'vigente'",
+    "ALTER TABLE gastos ADD COLUMN origen TEXT NOT NULL DEFAULT 'caja'",
     'ALTER TABLE activos_fijos ADD COLUMN tipo_id INTEGER REFERENCES activos_tipos(id)',
     'ALTER TABLE activos_fijos ADD COLUMN dep_tipo_id INTEGER REFERENCES dep_tipos(id)',
     "ALTER TABLE activos_fijos ADD COLUMN metodo_dep TEXT NOT NULL DEFAULT 'lineal'",
@@ -104,6 +111,7 @@ export async function initDB() {
   if (!syncListo) console.warn(`Sincronización no disponible: solo ${n} triggers creados`);
   await sembrarCategorias();
   await sembrarTiposActivo();
+  await sembrarTiposPago();
   await guardarWeb();
   return db;
 }
@@ -138,6 +146,19 @@ async function sembrarTiposActivo() {
     }
   }
   await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('tipos_activo_sembrados', '1')");
+}
+
+// Tipos de pago de ejemplo: se siembran una sola vez; después el negocio los edita
+async function sembrarTiposPago() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'tipos_pago_sembrados'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM tipos_pago');
+  if (n === 0) {
+    for (const [nombre, metodo, ref] of [['Efectivo', 'efectivo', 0], ['Transferencia', 'transferencia', 0], ['Tarjeta', 'tarjeta', 0], ['Cheque', 'cheque', 1]]) {
+      await ejecutar('INSERT OR IGNORE INTO tipos_pago (nombre, metodo, requiere_ref) VALUES (?,?,?)', [nombre, metodo, ref]);
+    }
+  }
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('tipos_pago_sembrados', '1')");
 }
 
 export async function listarCategorias() {

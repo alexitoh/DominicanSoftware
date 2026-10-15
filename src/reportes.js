@@ -36,7 +36,7 @@ export async function datosReporte(periodo, rango) {
        FROM venta_servicios s JOIN ventas v ON v.id = s.venta_id
       WHERE v.estado = 'completada' AND ${cv}`);
   g.ganancia += sv.total; // los servicios no tienen costo de inventario
-  const [gs] = await consultar(`SELECT COALESCE(SUM(monto), 0) AS total FROM gastos WHERE ${condicionFecha(periodo, 'fecha', rango)}`);
+  const [gs] = await consultar(`SELECT COALESCE(SUM(monto), 0) AS total FROM gastos WHERE estado = 'vigente' AND ${condicionFecha(periodo, 'fecha', rango)}`);
   const [cp] = await consultar(
     `SELECT COALESCE(SUM(total), 0) AS total FROM compras c WHERE c.estado = 'completada' AND ${condicionFecha(periodo, 'c.fecha', rango)}`);
   const metodos = await consultar(
@@ -54,7 +54,7 @@ export async function datosReporte(periodo, rango) {
       GROUP BY d.producto_id ORDER BY cantidad DESC, ingreso DESC LIMIT 10`);
   const gastosCat = await consultar(
     `SELECT COALESCE(categoria, 'Sin categoría') AS categoria, SUM(monto) AS total FROM (
-       SELECT categoria, monto, fecha FROM gastos
+       SELECT categoria, monto, fecha FROM gastos WHERE estado = 'vigente'
        UNION ALL SELECT categoria, monto, fecha FROM caja_chica_movs WHERE tipo = 'desembolso' AND estado = 'vigente')
       WHERE ${condicionFecha(periodo, 'fecha', rango)} GROUP BY categoria ORDER BY total DESC`);
   const [porCobrar] = await consultar(

@@ -36,7 +36,7 @@ export async function datosImpuestos(mes) {
        FROM compras c LEFT JOIN proveedores p ON p.id = c.proveedor_id
       WHERE c.estado = 'completada' AND ${cm('c.fecha')} ORDER BY c.fecha, c.id`);
   const gastos = await consultar(
-    `SELECT id, fecha, concepto, monto AS total, itbis, ncf, documento, metodo FROM gastos WHERE ${cm('fecha')}
+    `SELECT id, fecha, concepto, monto AS total, itbis, ncf, documento, metodo FROM gastos WHERE estado = 'vigente' AND ${cm('fecha')}
      UNION ALL
      SELECT id, fecha, COALESCE(concepto, 'Caja chica') AS concepto, monto AS total, itbis, ncf, documento, 'efectivo' AS metodo FROM caja_chica_movs
       WHERE tipo = 'desembolso' AND estado = 'vigente' AND ${cm('fecha')}
@@ -182,7 +182,7 @@ export async function datosNegocio(periodo, rango) {
        FROM venta_detalle d JOIN ventas v ON v.id = d.venta_id WHERE v.estado = 'completada' AND ${cv}`);
   const gastosCat = await consultar(
     `SELECT COALESCE(categoria, 'Sin categoría') AS categoria, SUM(monto - itbis) AS total FROM (
-       SELECT categoria, monto, itbis, fecha FROM gastos
+       SELECT categoria, monto, itbis, fecha FROM gastos WHERE estado = 'vigente'
        UNION ALL SELECT categoria, monto, itbis, fecha FROM caja_chica_movs WHERE tipo = 'desembolso' AND estado = 'vigente')
       WHERE ${condicionFecha(periodo, 'fecha', rango)} GROUP BY categoria ORDER BY total DESC`);
   const ingresos = redondear(t.total - t.itbis);

@@ -42,12 +42,27 @@ export async function vistaReportes(raiz) {
         exp(`balance-${hs}`, ['Sección', 'Cuenta', 'Saldo'], [...b.activos.map((x) => ['Activo', nombre(x.cuenta), x.monto]), ...b.pasivos.map((x) => ['Pasivo', nombre(x.cuenta), x.monto]), ...b.patrimonio.map((x) => ['Patrimonio', nombre(x.cuenta), x.monto]), ['Patrimonio', 'Resultado del ejercicio', b.resultado]])];
     } else if (est.tipo === 'resultados') {
       const e = estadoResultados(cuentas, lineas, d, hs);
-      const sec = (t, xs, tot) => [h('h3', { class: 'seccion' }, t), tabla(['Cuenta', 'Monto'], [...xs.map((x) => [nombre(x.cuenta), dinero(x.monto)]), ['Total', dinero(tot)]], { num: [1], clases: { [xs.length]: 'total' } })];
-      nodos = [h('p', { class: 'ayuda' }, `Del ${fechaCorta(d)} al ${fechaCorta(hs)}`), ...sec('Ingresos', e.ingresos, e.totalIngresos), ...sec('Costos', e.costos, e.totalCostos),
-        h('div', { class: 'totales' }, h('div', {}, h('span', {}, 'Utilidad bruta'), h('span', {}, dinero(e.utilidadBruta)))),
-        ...sec('Gastos', e.gastos, e.totalGastos),
-        h('div', { class: 'totales' }, h('div', {}, h('span', {}, 'Utilidad neta'), h('span', { class: e.utilidadNeta < 0 ? 'deuda' : '' }, dinero(e.utilidadNeta)))),
-        exp(`estado-resultados-${d}-${hs}`, ['Sección', 'Cuenta', 'Monto'], [...e.ingresos.map((x) => ['Ingreso', nombre(x.cuenta), x.monto]), ...e.costos.map((x) => ['Costo', nombre(x.cuenta), x.monto]), ...e.gastos.map((x) => ['Gasto', nombre(x.cuenta), x.monto]), ['Utilidad neta', '', e.utilidadNeta]])];
+      // Período anterior de la misma duración, para comparar
+      const dia = 86400000, t0 = Date.parse(`${d}T00:00:00Z`), t1 = Date.parse(`${hs}T00:00:00Z`);
+      const iso = (t) => new Date(t).toISOString().slice(0, 10);
+      const dias = Math.round((t1 - t0) / dia) + 1;
+      const pHasta = iso(t0 - dia), pDesde = iso(t0 - dias * dia);
+      const ant = estadoResultados(cuentas, lineas, pDesde, pHasta);
+      const ing = e.totalIngresos;
+      const pct = (m) => (ing ? `${Math.round((m / ing) * 1000) / 10}%` : '');
+      const antDe = (lista, c) => lista.find((y) => y.cuenta.id === c.id)?.monto || 0;
+      const variacion = (a, b) => (b ? `${a >= b ? '+' : ''}${Math.round(((a - b) / Math.abs(b)) * 1000) / 10}%` : (a ? 'nuevo' : ''));
+      const sec = (t, xs, tot, xsAnt, totAnt) => [h('h3', { class: 'seccion' }, t),
+        tabla(['Cuenta', 'Monto', '% ingresos', 'Anterior', 'Var.'], [...xs.map((x) => [nombre(x.cuenta), dinero(x.monto), pct(x.monto), dinero(antDe(xsAnt, x.cuenta)), variacion(x.monto, antDe(xsAnt, x.cuenta))]),
+          ['Total', dinero(tot), pct(tot), dinero(totAnt), variacion(tot, totAnt)]], { num: [1, 2, 3, 4], clases: { [xs.length]: 'total' } })];
+      const util = (t, v, vAnt) => h('div', { class: 'totales' }, h('div', {}, h('span', {}, t), h('span', { class: v < 0 ? 'deuda' : '' }, `${dinero(v)} · ${pct(v) || '—'} de ingresos`)),
+        h('div', {}, h('span', {}, 'Período anterior'), h('span', {}, `${dinero(vAnt)} (${variacion(v, vAnt) || '—'})`)));
+      nodos = [h('p', { class: 'ayuda' }, `Del ${fechaCorta(d)} al ${fechaCorta(hs)}, comparado con ${fechaCorta(pDesde)} al ${fechaCorta(pHasta)}`),
+        ...sec('Ingresos', e.ingresos, e.totalIngresos, ant.ingresos, ant.totalIngresos), ...sec('Costos', e.costos, e.totalCostos, ant.costos, ant.totalCostos),
+        util('Utilidad bruta', e.utilidadBruta, ant.utilidadBruta),
+        ...sec('Gastos', e.gastos, e.totalGastos, ant.gastos, ant.totalGastos),
+        util('Utilidad neta', e.utilidadNeta, ant.utilidadNeta),
+        exp(`estado-resultados-${d}-${hs}`, ['Sección', 'Cuenta', 'Monto', 'Período anterior'], [...e.ingresos.map((x) => ['Ingreso', nombre(x.cuenta), x.monto, antDe(ant.ingresos, x.cuenta)]), ...e.costos.map((x) => ['Costo', nombre(x.cuenta), x.monto, antDe(ant.costos, x.cuenta)]), ...e.gastos.map((x) => ['Gasto', nombre(x.cuenta), x.monto, antDe(ant.gastos, x.cuenta)]), ['Utilidad neta', '', e.utilidadNeta, ant.utilidadNeta]])];
     } else if (est.tipo === 'balanza') {
       const b = balanza(cuentas, lineas, d, hs);
       const t = b.totales;

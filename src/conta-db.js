@@ -123,12 +123,20 @@ export async function crearAsiento({ fecha, concepto, tipo = 'manual', lineas, r
   return numero;
 }
 
-export async function anularAsiento(id) {
+export async function anularAsiento(id, motivo = '') {
   const [a] = await consultar('SELECT * FROM asientos WHERE id = ?', [id]);
   if (!a) throw new Error('El asiento no existe.');
   if (a.estado === 'anulado') throw new Error('El asiento ya está anulado.');
   await exigirPeriodoAbierto(a.fecha);
-  await ejecutar("UPDATE asientos SET estado = 'anulado' WHERE id = ?", [id]);
+  const uid = usuarioId();
+  const [u] = uid ? await consultar('SELECT nombre FROM usuarios WHERE id = ?', [uid]) : [];
+  await ejecutar("UPDATE asientos SET estado = 'anulado', anulado_fecha = datetime('now','localtime'), anulado_por = ?, anulado_motivo = ? WHERE id = ?",
+    [u?.nombre || null, String(motivo || '').trim() || null, id]);
+}
+
+// Diarios cancelados: asientos manuales anulados, con quién, cuándo y por qué
+export async function diariosCancelados() {
+  return (await asientosManuales({ incluirAnulados: true })).filter((a) => a.estado === 'anulado').reverse();
 }
 
 export async function asientosManuales({ incluirAnulados = false } = {}) {
@@ -149,7 +157,6 @@ export async function cargarFuentes() {
   const pagos = await q(`SELECT COALESCE(p.uid, p.id) AS id, v.numero AS venta_numero, p.fecha, p.monto, p.metodo FROM pagos p JOIN ventas v ON v.id = p.venta_id`);
   const compras = await q(`SELECT c.numero, c.fecha, c.total, c.itbis, c.estado, p.nombre AS proveedor FROM compras c LEFT JOIN proveedores p ON p.id = c.proveedor_id`);
   const pagosCompra = await q(`SELECT COALESCE(p.uid, p.id) AS id, c.numero AS compra_numero, p.fecha, p.monto, p.metodo FROM pagos_compra p JOIN compras c ON c.id = p.compra_id`);
-  const gastos = await q('SELECT COALESCE(uid, id) AS id, fecha, concepto, categoria, monto, itbis, metodo FROM gastos');
   const revs = await q('SELECT * FROM activos_reval ORDER BY fecha, id');
   const activos = (await q('SELECT * FROM activos_fijos')).map((a) => ({ ...a, revals: revs.filter((r) => r.activo_id === a.id) }));
   const corridas = await q('SELECT * FROM nomina_corridas');
@@ -164,6 +171,11 @@ export async function cargarFuentes() {
   const cuentaDe = new Map(bancos.map((b) => [b.id, b.cuenta_id ?? rolBanco]));
   const movs = await q('SELECT * FROM banco_movs');
   const bancoMovs = movs.map((m) => ({ ...m, cuenta_banco_id: cuentaDe.get(m.banco_id), cuenta_destino_id: cuentaDe.get(m.banco_destino_id) }));
+  const tpagos = new Map((await q('SELECT * FROM tipos_pago')).map((t) => [t.id, t]));
+  const gastos = (await q("SELECT COALESCE(uid, id) AS id, fecha, concepto, categoria, monto, itbis, metodo, tipo_pago_id FROM gastos WHERE estado = 'vigente'")).map((g) => {
+    const t = tpagos.get(g.tipo_pago_id);
+    return { ...g, cuenta_pago_id: t ? (t.banco_id ? cuentaDe.get(t.banco_id) : t.cuenta_id) || null : null };
+  });
   const cajasCh = new Map((await q('SELECT id, nombre FROM cajas_chicas')).map((c) => [c.id, c.nombre]));
   const cajaChicaMovs = (await q('SELECT * FROM caja_chica_movs')).map((m) => ({ ...m, caja_nombre: cajasCh.get(m.caja_chica_id) || '', cuenta_banco_id: m.banco_id ? cuentaDe.get(m.banco_id) : null }));
   return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, hoy: hoy() };
@@ -191,6 +203,180 @@ export async function cerrarEjercicio(anio) {
   const numero = await crearAsiento({ fecha: a.fecha, concepto: a.concepto, tipo: 'cierre', lineas: a.lineas });
   return { numero, resultado: a.resultado };
 }
+
+// ---------- Tipos de pago ----------
+export const METODOS_PAGO = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque' };
+export const listarTiposPago = () => consultar(
+  `SELECT t.*, b.nombre AS banco_nombre, c.codigo AS cuenta_codigo, c.nombre AS cuenta_nombre, (SELECT COUNT(*) FROM gastos g WHERE g.tipo_pago_id = t.id) AS n_gastos
+     FROM tipos_pago t LEFT JOIN cuentas_bancarias b ON b.id = t.banco_id LEFT JOIN cuentas_contables c ON c.id = t.cuenta_id
+    ORDER BY t.activo DESC, t.nombre COLLATE NOCASE`);
+export async function guardarTipoPago({ id = null, nombre, metodo = 'efectivo', banco_id = null, cuenta_id = null, requiere_ref = 0, activo = 1 }) {
+  nombre = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!nombre) throw new Error('Escribe el nombre del tipo de pago.');
+  if (!METODOS_PAGO[metodo]) throw new Error('Elige el método base.');
+  if (banco_id && cuenta_id) throw new Error('Elige un banco o una cuenta contable, no los dos.');
+  const [dup] = await consultar('SELECT id FROM tipos_pago WHERE lower(nombre) = lower(?) AND id <> ?', [nombre, id || 0]);
+  if (dup) throw new Error('Ya existe un tipo de pago con ese nombre.');
+  const v = [nombre, metodo, banco_id || null, cuenta_id || null, requiere_ref ? 1 : 0, activo ? 1 : 0];
+  if (id) await ejecutar('UPDATE tipos_pago SET nombre = ?, metodo = ?, banco_id = ?, cuenta_id = ?, requiere_ref = ?, activo = ? WHERE id = ?', [...v, id]);
+  else await ejecutar('INSERT INTO tipos_pago (nombre, metodo, banco_id, cuenta_id, requiere_ref, activo) VALUES (?,?,?,?,?,?)', v);
+}
+export async function eliminarTipoPago(id) {
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM gastos WHERE tipo_pago_id = ?', [id]);
+  if (n) throw new Error('Hay gastos con este tipo de pago. Desactívalo en lugar de eliminarlo.');
+  await ejecutar('DELETE FROM tipos_pago WHERE id = ?', [id]);
+}
+
+// ---------- Conceptos ----------
+export const TIPOS_CONCEPTO = { asiento: 'Asiento', gasto: 'Gasto' };
+export const listarConceptos = () => consultar(
+  `SELECT k.*, d.codigo AS debe_codigo, d.nombre AS debe_nombre, h.codigo AS haber_codigo, h.nombre AS haber_nombre
+     FROM conceptos_conta k LEFT JOIN cuentas_contables d ON d.id = k.cuenta_debe_id LEFT JOIN cuentas_contables h ON h.id = k.cuenta_haber_id
+    ORDER BY k.activo DESC, k.tipo, k.nombre COLLATE NOCASE`);
+export async function guardarConcepto({ id = null, nombre, tipo = 'asiento', cuenta_debe_id = null, cuenta_haber_id = null, categoria_gasto = '', notas = '', activo = 1 }) {
+  nombre = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!nombre) throw new Error('Escribe el nombre del concepto.');
+  if (!TIPOS_CONCEPTO[tipo]) throw new Error('Elige si el concepto es de asiento o de gasto.');
+  if (cuenta_debe_id && cuenta_haber_id && cuenta_debe_id === cuenta_haber_id) throw new Error('La cuenta de débito y la de crédito no pueden ser la misma.');
+  const [dup] = await consultar('SELECT id FROM conceptos_conta WHERE lower(nombre) = lower(?) AND id <> ?', [nombre, id || 0]);
+  if (dup) throw new Error('Ya existe un concepto con ese nombre.');
+  const v = [nombre, tipo, cuenta_debe_id || null, cuenta_haber_id || null, String(categoria_gasto || '').trim() || null, String(notas || '').trim() || null, activo ? 1 : 0];
+  if (id) await ejecutar('UPDATE conceptos_conta SET nombre = ?, tipo = ?, cuenta_debe_id = ?, cuenta_haber_id = ?, categoria_gasto = ?, notas = ?, activo = ? WHERE id = ?', [...v, id]);
+  else await ejecutar('INSERT INTO conceptos_conta (nombre, tipo, cuenta_debe_id, cuenta_haber_id, categoria_gasto, notas, activo) VALUES (?,?,?,?,?,?,?)', v);
+}
+export const eliminarConcepto = (id) => ejecutar('DELETE FROM conceptos_conta WHERE id = ?', [id]);
+
+// ---------- Gastos (desde Contabilidad, sin necesidad de caja abierta) ----------
+export async function registrarGastoConta({ fecha, concepto, categoria = '', beneficiario = '', documento = '', ncf = '', itbis = 0, monto, tipo_pago_id, referencia = '', nota = '' }) {
+  if (!fecha || !fechaValida(fecha)) throw new Error('Elige la fecha del gasto.');
+  if (!String(concepto || '').trim()) throw new Error('Escribe el concepto del gasto.');
+  monto = redondear(monto || 0); itbis = redondear(itbis || 0);
+  if (!(monto > 0)) throw new Error('El monto debe ser mayor que cero.');
+  if (itbis < 0 || itbis > monto) throw new Error('El ITBIS no puede ser mayor que el monto.');
+  const [t] = await consultar('SELECT * FROM tipos_pago WHERE id = ?', [tipo_pago_id]);
+  if (!t) throw new Error('Elige el tipo de pago.');
+  if (t.requiere_ref && !String(referencia).trim()) throw new Error(`Escribe la referencia (${t.nombre}).`);
+  await exigirPeriodoAbierto(fecha);
+  const notaFinal = [String(referencia).trim() && `Ref. ${String(referencia).trim()}`, String(nota).trim()].filter(Boolean).join(' · ') || null;
+  await ejecutar(
+    `INSERT INTO gastos (caja_id, fecha, concepto, categoria, monto, metodo, nota, itbis, ncf, documento, tipo_pago_id, beneficiario, origen)
+     VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?, 'conta')`,
+    [fecha, concepto.trim(), String(categoria).trim() || 'Otros', monto, t.metodo, notaFinal, itbis, String(ncf || '').trim().toUpperCase() || null,
+      String(documento || '').replace(/\D/g, '') || null, t.id, String(beneficiario).trim() || null]);
+}
+export async function anularGastoConta(id, motivo = '') {
+  const [g] = await consultar('SELECT * FROM gastos WHERE id = ?', [id]);
+  if (!g) throw new Error('El gasto no existe.');
+  if (g.origen !== 'conta') throw new Error('Este gasto se registró en Caja: elimínalo desde Caja con la caja abierta.');
+  if (g.estado === 'anulado') throw new Error('El gasto ya está anulado.');
+  if (!String(motivo).trim()) throw new Error('Escribe el motivo de la anulación.');
+  await exigirPeriodoAbierto(String(g.fecha).slice(0, 10));
+  await ejecutar("UPDATE gastos SET estado = 'anulado', nota = ? WHERE id = ?", [[g.nota, `Anulado: ${String(motivo).trim()}`].filter(Boolean).join(' · '), id]);
+}
+export const listarGastos = ({ desde = '0000-00-00', hasta = '9999-12-31' } = {}) => consultar(
+  `SELECT g.*, t.nombre AS tipo_pago FROM gastos g LEFT JOIN tipos_pago t ON t.id = g.tipo_pago_id
+    WHERE substr(g.fecha, 1, 10) BETWEEN ? AND ? ORDER BY g.fecha DESC, g.id DESC`, [desde, hasta]);
+
+// Reporte de gastos: gastos de Caja y de Contabilidad más desembolsos de caja chica (sin anulados), agrupados
+export const AGRUPACIONES_GASTO = { categoria: 'Categoría', beneficiario: 'Beneficiario / proveedor', tipo_pago: 'Tipo de pago', mes: 'Mes', origen: 'Origen' };
+export async function reporteGastos({ desde = '0000-00-00', hasta = '9999-12-31', agrupar = 'categoria' } = {}) {
+  if (!AGRUPACIONES_GASTO[agrupar]) throw new Error('Agrupación no válida.');
+  const filas = await consultar(
+    `SELECT substr(g.fecha, 1, 10) AS fecha, COALESCE(g.categoria, 'Sin categoría') AS categoria, COALESCE(g.beneficiario, '(sin beneficiario)') AS beneficiario,
+            COALESCE(t.nombre, CASE g.metodo WHEN 'efectivo' THEN 'Efectivo' WHEN 'tarjeta' THEN 'Tarjeta' WHEN 'transferencia' THEN 'Transferencia' WHEN 'cheque' THEN 'Cheque' ELSE g.metodo END) AS tipo_pago,
+            CASE WHEN g.origen = 'conta' THEN 'Contabilidad' ELSE 'Caja' END AS origen, g.concepto, g.ncf, g.monto, g.itbis
+       FROM gastos g LEFT JOIN tipos_pago t ON t.id = g.tipo_pago_id WHERE g.estado = 'vigente' AND substr(g.fecha, 1, 10) BETWEEN ? AND ?
+     UNION ALL
+     SELECT m.fecha, COALESCE(m.categoria, 'Otros'), COALESCE(m.beneficiario, '(sin beneficiario)'), 'Caja chica', 'Caja chica', COALESCE(m.concepto, 'Desembolso'), m.ncf, m.monto, m.itbis
+       FROM caja_chica_movs m WHERE m.tipo = 'desembolso' AND m.estado = 'vigente' AND m.fecha BETWEEN ? AND ?
+     ORDER BY 1`, [desde, hasta, desde, hasta]);
+  const grupos = new Map();
+  for (const f of filas) {
+    const k = agrupar === 'mes' ? f.fecha.slice(0, 7) : f[agrupar];
+    const g = grupos.get(k) || { clave: k, n: 0, base: 0, itbis: 0, total: 0 };
+    g.n++; g.itbis = r2(g.itbis + f.itbis); g.total = r2(g.total + f.monto); g.base = r2(g.total - g.itbis);
+    grupos.set(k, g);
+  }
+  const lista = [...grupos.values()].sort((a, b) => (agrupar === 'mes' ? a.clave.localeCompare(b.clave) : b.total - a.total));
+  const total = r2(lista.reduce((s, g) => s + g.total, 0));
+  return { filas, grupos: lista, total, itbis: r2(lista.reduce((s, g) => s + g.itbis, 0)), n: filas.length };
+}
+
+// ---------- Períodos contables y fiscales ----------
+// Período contable: cada mes puede estar abierto o cerrado (cerrado = no se registran movimientos en esas fechas).
+export async function resumenPeriodos(anio) {
+  const cerrados = new Set(await periodosCerrados());
+  const lib = await libroContable({ hasta: `${anio}-12-31` });
+  const meses = Array.from({ length: 12 }, (_, i) => ({ mes: `${anio}-${String(i + 1).padStart(2, '0')}`, cerrado: false, asientos: 0, debitos: 0 }));
+  const vistos = new Set();
+  for (const l of lib.lineas) {
+    if (String(l.fecha).slice(0, 4) !== String(anio) || l.tipoAsiento === 'cierre') continue;
+    const m = meses[parseInt(String(l.fecha).slice(5, 7), 10) - 1];
+    if (!vistos.has(l.ref)) { vistos.add(l.ref); m.asientos++; }
+    m.debitos = r2(m.debitos + l.debe);
+  }
+  for (const m of meses) m.cerrado = cerrados.has(m.mes);
+  const [cierre] = await consultar("SELECT numero FROM asientos WHERE tipo = 'cierre' AND estado = 'vigente' AND fecha = ?", [`${anio}-12-31`]);
+  return { meses, ejercicioCerrado: cierre?.numero || null };
+}
+// Cerrar o reabrir varios meses de una vez (los que se piden)
+export async function cerrarPeriodosHasta(mes) {
+  if (!/^\d{4}-\d{2}$/.test(mes)) throw new Error('Período no válido (AAAA-MM).');
+  const anio = mes.slice(0, 4);
+  const ya = new Set(await periodosCerrados());
+  let n = 0;
+  for (let i = 1; i <= parseInt(mes.slice(5, 7), 10); i++) {
+    const p = `${anio}-${String(i).padStart(2, '0')}`;
+    if (!ya.has(p)) { await cerrarPeriodo(p); n++; }
+  }
+  return n;
+}
+
+// Período fiscal: declaraciones a la DGII por mes. Vencimientos (día del mes siguiente): confírmalos con la DGII, pueden cambiar.
+export const FORMULARIOS_FISCALES = [['606', '606 Compras', 15], ['607', '607 Ventas', 15], ['608', '608 Anulados', 15], ['IT1', 'IT-1 ITBIS', 20]];
+export const fechaLimite = (periodo, formulario) => {
+  const dia = FORMULARIOS_FISCALES.find((f) => f[0] === formulario)?.[2] ?? 15;
+  let [a, m] = periodo.split('-').map(Number);
+  m++; if (m > 12) { m = 1; a++; }
+  return `${a}-${String(m).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+};
+// pendiente (el mes aún no termina) | porpresentar | vencida | presentada
+export function estadoDeclaracion(periodo, formulario, presentada, hoyISO = hoy()) {
+  if (presentada) return 'presentada';
+  const [a, m] = periodo.split('-').map(Number);
+  const inicioSig = `${m === 12 ? a + 1 : a}-${String(m === 12 ? 1 : m + 1).padStart(2, '0')}-01`;
+  if (hoyISO < inicioSig) return 'pendiente';
+  return hoyISO > fechaLimite(periodo, formulario) ? 'vencida' : 'porpresentar';
+}
+export async function configFiscalPeriodo() {
+  const [r] = await consultar("SELECT valor FROM config WHERE clave = 'fiscal_mes_inicio'");
+  const mes = parseInt(r?.valor, 10);
+  return { mesInicio: mes >= 1 && mes <= 12 ? mes : 1 };
+}
+export async function guardarMesInicioFiscal(mes) {
+  mes = parseInt(mes, 10);
+  if (!(mes >= 1 && mes <= 12)) throw new Error('Elige un mes entre 1 y 12.');
+  await guardarConfigConta('fiscal_mes_inicio', mes);
+}
+// Los 12 meses del año fiscal que empieza en mesInicio del año dado
+export function mesesFiscales(anio, mesInicio) {
+  return Array.from({ length: 12 }, (_, i) => {
+    const m0 = mesInicio - 1 + i;
+    return `${anio + Math.floor(m0 / 12)}-${String((m0 % 12) + 1).padStart(2, '0')}`;
+  });
+}
+export const listarDeclaraciones = (periodos) => consultar(
+  `SELECT * FROM declaraciones WHERE periodo IN (${periodos.map(() => '?').join(',')})`, periodos);
+export async function marcarDeclaracion({ periodo, formulario, fecha, referencia = '', notas = '' }) {
+  if (!/^\d{4}-\d{2}$/.test(periodo)) throw new Error('Período no válido.');
+  if (!FORMULARIOS_FISCALES.some((f) => f[0] === formulario)) throw new Error('Formulario no válido.');
+  if (!fecha || !fechaValida(fecha)) throw new Error('Elige la fecha en que se presentó.');
+  const clave = `${periodo}:${formulario}`;
+  const [ya] = await consultar('SELECT id FROM declaraciones WHERE clave = ?', [clave]);
+  if (ya) await ejecutar('UPDATE declaraciones SET fecha_presentada = ?, referencia = ?, notas = ? WHERE id = ?', [fecha, referencia.trim() || null, notas.trim() || null, ya.id]);
+  else await ejecutar('INSERT INTO declaraciones (clave, periodo, formulario, fecha_presentada, referencia, notas) VALUES (?,?,?,?,?,?)', [clave, periodo, formulario, fecha, referencia.trim() || null, notas.trim() || null]);
+}
+export const quitarDeclaracion = (periodo, formulario) => ejecutar('DELETE FROM declaraciones WHERE clave = ?', [`${periodo}:${formulario}`]);
 
 // ---------- Bancos ----------
 export const listarBancos = () => consultar(`SELECT b.*, c.codigo AS cuenta_codigo, c.nombre AS cuenta_nombre FROM cuentas_bancarias b LEFT JOIN cuentas_contables c ON c.id = b.cuenta_id ORDER BY b.activo DESC, b.nombre`);

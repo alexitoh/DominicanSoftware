@@ -131,7 +131,7 @@ export function asientosAutomaticos(f, { inicio = '', hasta = '9999-12-31' } = {
   for (const g of f.gastos || []) {
     add('gasto', `G${g.id}`, g.fecha, `Gasto: ${g.concepto}`, [
       { categoria: g.categoria || 'Otros', debe: r2(g.monto - (g.itbis || 0)) }, { rol: 'itbis_adelantado', debe: g.itbis || 0 },
-      { rol: rolMetodo(g.metodo), haber: g.monto },
+      g.cuenta_pago_id ? { cuenta_id: g.cuenta_pago_id, haber: g.monto } : { rol: rolMetodo(g.metodo), haber: g.monto },
     ]);
   }
 

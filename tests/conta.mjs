@@ -430,5 +430,88 @@ const libB2 = await cd.libroContable({ hasta: '2029-12-31' });
 assert.equal(cm.balanceGeneral(libB2.cuentas, libB2.lineas, '2029-12-31').cuadra, true);
 ok('caja chica: fondo, desembolsos con ITBIS y NCF, reposición (caja o banco), anulaciones y balance cuadrando');
 
+// ---- tipos de pago, conceptos, gastos de Contabilidad, diarios cancelados y períodos ----
+assert.equal((await cd.listarTiposPago()).length, 4, 'se siembran Efectivo, Transferencia, Tarjeta y Cheque');
+await assert.rejects(() => cd.guardarTipoPago({ nombre: 'efectivo', metodo: 'efectivo' }), /Ya existe/);
+await assert.rejects(() => cd.guardarTipoPago({ nombre: 'X', metodo: 'otro' }), /método base/);
+await cd.guardarTipoPago({ nombre: 'Transferencia BHD', metodo: 'transferencia', banco_id: bh.id });
+const tEfe = (await cd.listarTiposPago()).find((t) => t.nombre === 'Efectivo');
+const tBhd = (await cd.listarTiposPago()).find((t) => t.nombre === 'Transferencia BHD');
+const tChe = (await cd.listarTiposPago()).find((t) => t.nombre === 'Cheque');
+assert.equal(tChe.requiere_ref, 1);
+// conceptos
+await cd.guardarConcepto({ nombre: 'Pago de alquiler', tipo: 'gasto', categoria_gasto: 'Alquiler' });
+await assert.rejects(() => cd.guardarConcepto({ nombre: 'pago de alquiler', tipo: 'gasto' }), /Ya existe/);
+await assert.rejects(() => cd.guardarConcepto({ nombre: 'Mal', tipo: 'asiento', cuenta_debe_id: C['1101'].id, cuenta_haber_id: C['1101'].id }), /no pueden ser la misma/);
+await cd.guardarConcepto({ nombre: 'Aporte de capital', tipo: 'asiento', cuenta_debe_id: C['1101'].id, cuenta_haber_id: C['3101'].id });
+assert.equal((await cd.listarConceptos()).length, 2);
+// gasto desde Contabilidad (sin caja abierta)
+await assert.rejects(() => cd.registrarGastoConta({ fecha: '2030-01-10', concepto: 'Alquiler', monto: 100, tipo_pago_id: tChe.id }), /referencia/);
+await assert.rejects(() => cd.registrarGastoConta({ fecha: '2030-01-10', concepto: 'Alquiler', monto: 100, itbis: 500, tipo_pago_id: tEfe.id }), /ITBIS/);
+await cd.registrarGastoConta({ fecha: '2030-01-10', concepto: 'Alquiler enero', categoria: 'Alquiler', beneficiario: 'Inmobiliaria Sol', documento: '1-30-12345-6', ncf: 'b0100000050', itbis: 0, monto: 20000, tipo_pago_id: tBhd.id });
+await cd.registrarGastoConta({ fecha: '2030-01-12', concepto: 'Papelería', categoria: 'Otros', beneficiario: 'Librería Z', itbis: 18, monto: 118, tipo_pago_id: tEfe.id });
+await cd.registrarGastoConta({ fecha: '2030-02-03', concepto: 'Luz', categoria: 'Luz y agua', beneficiario: 'Edesur', monto: 3000, tipo_pago_id: tChe.id, referencia: 'CH-77' });
+const gl = await cd.listarGastos({ desde: '2030-01-01', hasta: '2030-12-31' });
+assert.equal(gl.length, 3); assert.equal(gl.find((g) => g.concepto === 'Alquiler enero').ncf, 'B0100000050'); assert.equal(gl.find((g) => g.concepto === 'Alquiler enero').documento, '1301234 56'.replace(' ', ''));
+const libG = await cd.libroContable({ hasta: '2030-12-31' });
+const bancoBhd = (await cd.listarBancos()).find((b) => b.id === bh.id);
+assert.equal(r2(libG.lineas.filter((l) => l.origen === 'gasto' && l.cuenta_id === bancoBhd.cuenta_id).reduce((s, l) => s + l.haber, 0)), 20000, 'el gasto pagado con la transferencia BHD sale de la cuenta de ese banco');
+assert.equal(cm.balanceGeneral(libG.cuentas, libG.lineas, '2030-12-31').cuadra, true);
+// reporte de gastos
+let rg = await cd.reporteGastos({ desde: '2030-01-01', hasta: '2030-12-31', agrupar: 'categoria' });
+assert.equal(rg.n, 3); assert.equal(rg.total, 23118); assert.equal(rg.itbis, 18);
+assert.equal(rg.grupos[0].clave, 'Alquiler'); assert.equal(rg.grupos[0].total, 20000);
+rg = await cd.reporteGastos({ desde: '2030-01-01', hasta: '2030-12-31', agrupar: 'mes' });
+assert.deepEqual(rg.grupos.map((g) => [g.clave, g.total]), [['2030-01', 20118], ['2030-02', 3000]]);
+rg = await cd.reporteGastos({ desde: '2030-01-01', hasta: '2030-12-31', agrupar: 'tipo_pago' });
+assert.ok(rg.grupos.some((g) => g.clave === 'Transferencia BHD' && g.total === 20000));
+await assert.rejects(() => cd.reporteGastos({ agrupar: 'x' }), /Agrupación/);
+// anular gasto
+const gPap = gl.find((g) => g.concepto === 'Papelería');
+await assert.rejects(() => cd.anularGastoConta(gPap.id, ''), /motivo/);
+await cd.anularGastoConta(gPap.id, 'duplicado');
+assert.equal((await cd.reporteGastos({ desde: '2030-01-01', hasta: '2030-12-31' })).n, 2, 'un gasto anulado sale de los reportes');
+await assert.rejects(() => cd.anularGastoConta(gPap.id, 'otra vez'), /ya está anulado/);
+const libG2 = await cd.libroContable({ hasta: '2030-12-31' });
+assert.equal(libG2.lineas.filter((l) => l.origen === 'gasto' && /Papelería/.test(l.concepto)).length, 0, 'tampoco se contabiliza');
+// diarios cancelados
+const numA = await cd.crearAsiento({ fecha: '2030-03-01', concepto: 'Prueba a anular', tipo: 'manual', lineas: [{ cuenta_id: C['1101'].id, debe: 10, haber: 0 }, { cuenta_id: C['3101'].id, debe: 0, haber: 10 }] });
+const [asA] = await bd.consultar('SELECT id FROM asientos WHERE numero = ?', [numA]);
+await cd.anularAsiento(asA.id, 'Error de digitación');
+const canc = await cd.diariosCancelados();
+assert.equal(canc.length >= 1, true);
+const cA = canc.find((a) => a.numero === numA);
+assert.equal(cA.anulado_motivo, 'Error de digitación'); assert.ok(cA.anulado_fecha); assert.equal(cA.lineas.length, 2);
+// períodos contables
+const rp = await cd.resumenPeriodos(2030);
+assert.equal(rp.meses.length, 12);
+assert.ok(rp.meses[0].asientos >= 1 && rp.meses[0].debitos >= 20000, 'enero 2030 tiene los gastos');
+assert.equal(rp.meses[0].cerrado, false);
+assert.equal(await cd.cerrarPeriodosHasta('2030-02'), 2);
+assert.deepEqual((await cd.resumenPeriodos(2030)).meses.slice(0, 3).map((m) => m.cerrado), [true, true, false]);
+await assert.rejects(() => cd.registrarGastoConta({ fecha: '2030-01-20', concepto: 'x', monto: 5, tipo_pago_id: tEfe.id }), /cerrado/);
+await cd.reabrirPeriodo('2030-01'); await cd.reabrirPeriodo('2030-02');
+// período fiscal
+assert.equal(cd.fechaLimite('2030-12', '606'), '2031-01-15'); assert.equal(cd.fechaLimite('2030-03', 'IT1'), '2030-04-20');
+assert.equal(cd.estadoDeclaracion('2030-03', '606', null, '2030-03-31'), 'pendiente');
+assert.equal(cd.estadoDeclaracion('2030-03', '606', null, '2030-04-10'), 'porpresentar');
+assert.equal(cd.estadoDeclaracion('2030-03', '606', null, '2030-04-16'), 'vencida');
+assert.equal(cd.estadoDeclaracion('2030-03', 'IT1', null, '2030-04-16'), 'porpresentar');
+assert.equal(cd.estadoDeclaracion('2030-03', '606', { id: 1 }, '2031-01-01'), 'presentada');
+assert.deepEqual(cd.mesesFiscales(2030, 7).slice(0, 2).concat(cd.mesesFiscales(2030, 7).slice(-1)), ['2030-07', '2030-08', '2031-06']);
+await cd.marcarDeclaracion({ periodo: '2030-03', formulario: '607', fecha: '2030-04-12', referencia: 'ACUSE-1' });
+await cd.marcarDeclaracion({ periodo: '2030-03', formulario: '607', fecha: '2030-04-13', referencia: 'ACUSE-2' });
+const decl = await cd.listarDeclaraciones(cd.mesesFiscales(2030, 1));
+assert.equal(decl.length, 1); assert.equal(decl[0].referencia, 'ACUSE-2'); assert.equal(decl[0].clave, '2030-03:607');
+await assert.rejects(() => cd.marcarDeclaracion({ periodo: '2030-03', formulario: 'XX', fecha: '2030-04-12' }), /Formulario/);
+await cd.quitarDeclaracion('2030-03', '607');
+assert.equal((await cd.listarDeclaraciones(['2030-03'])).length, 0);
+assert.deepEqual(await cd.configFiscalPeriodo(), { mesInicio: 1 });
+await cd.guardarMesInicioFiscal(7);
+assert.deepEqual(await cd.configFiscalPeriodo(), { mesInicio: 7 });
+await assert.rejects(() => cd.guardarMesInicioFiscal(13), /entre 1 y 12/);
+await cd.guardarMesInicioFiscal(1);
+ok('tipos de pago, conceptos, gastos desde Contabilidad (con anulación y reportes), diarios cancelados, períodos contables y fiscales');
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

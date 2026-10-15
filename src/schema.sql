@@ -257,6 +257,40 @@ CREATE TABLE IF NOT EXISTS caja (
   conteo_por TEXT
 );
 
+-- Tipos de pago: nombres de formas de pago que se asocian a un método base y, si se quiere, a un banco o a una cuenta contable
+CREATE TABLE IF NOT EXISTS tipos_pago (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  metodo TEXT NOT NULL DEFAULT 'efectivo', -- efectivo | tarjeta | transferencia | cheque
+  banco_id INTEGER REFERENCES cuentas_bancarias(id),
+  cuenta_id INTEGER REFERENCES cuentas_contables(id),
+  requiere_ref INTEGER NOT NULL DEFAULT 0,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+-- Conceptos reutilizables para asientos y gastos
+CREATE TABLE IF NOT EXISTS conceptos_conta (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  tipo TEXT NOT NULL DEFAULT 'asiento',   -- asiento | gasto
+  cuenta_debe_id INTEGER REFERENCES cuentas_contables(id),
+  cuenta_haber_id INTEGER REFERENCES cuentas_contables(id),
+  categoria_gasto TEXT,
+  notas TEXT,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+-- Declaraciones presentadas a la DGII (una por período y formulario)
+CREATE TABLE IF NOT EXISTS declaraciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  clave TEXT NOT NULL UNIQUE,            -- AAAA-MM:formulario
+  periodo TEXT NOT NULL,
+  formulario TEXT NOT NULL,
+  fecha_presentada TEXT NOT NULL,
+  referencia TEXT,
+  notas TEXT
+);
+
 CREATE TABLE IF NOT EXISTS gastos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   caja_id INTEGER REFERENCES caja(id),
@@ -268,7 +302,11 @@ CREATE TABLE IF NOT EXISTS gastos (
   nota TEXT,
   itbis REAL NOT NULL DEFAULT 0,
   ncf TEXT,
-  documento TEXT
+  documento TEXT,
+  tipo_pago_id INTEGER REFERENCES tipos_pago(id),
+  beneficiario TEXT,
+  estado TEXT NOT NULL DEFAULT 'vigente',   -- vigente | anulado
+  origen TEXT NOT NULL DEFAULT 'caja'       -- caja | conta (registrado desde Contabilidad, sin caja abierta)
 );
 
 -- Garantías de los productos vendidos (una por línea de venta que la lleve)
@@ -410,7 +448,10 @@ CREATE TABLE IF NOT EXISTS asientos (
   estado TEXT NOT NULL DEFAULT 'vigente', -- vigente | anulado
   referencia TEXT,
   usuario_id INTEGER REFERENCES usuarios(id),
-  creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  creado TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  anulado_fecha TEXT,
+  anulado_por TEXT,
+  anulado_motivo TEXT
 );
 
 CREATE TABLE IF NOT EXISTS asiento_lineas (
@@ -671,6 +712,7 @@ INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('siguiente_numero_asiento', '1'),
   ('siguiente_numero_bancomov', '1'),
   ('siguiente_numero_cajachica', '1'),
+  ('fiscal_mes_inicio', '1'),
   ('siguiente_numero_nomina', '1'),
   ('conta_inicio', ''),
   ('nom_afp_emp', '2.87'), ('nom_sfs_emp', '3.04'),

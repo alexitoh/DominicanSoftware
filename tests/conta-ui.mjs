@@ -68,14 +68,14 @@ await cd.guardarPresupuesto(2026, C['6201'].id, Array(12).fill(1000));
 const raiz = new Nodo('div');
 await vistaContabilidad(raiz); await pausa();
 const tabs = raiz.todos((x) => x.tag === 'button' && x.attrs.role === 'tab');
-assert.equal(tabs.length, 13);
+assert.equal(tabs.length, 15);
 for (const t of tabs) {
   await pulsar(t);
   const cuerpo = textoDe(raiz);
   assert.ok(!cuerpo.includes('No se pudo cargar'), `${t.texto}: ${cuerpo.slice(0, 200)}`);
   assert.ok(cuerpo.length > 20, `${t.texto} está vacía`);
 }
-ok('las 9 pestañas se pintan sin errores');
+ok('las 15 pestañas se pintan sin errores');
 
 // Reportes: recorre todos los tipos
 const rr = new Nodo('div');
@@ -156,6 +156,52 @@ await pulsar(boton(rn, 'Nueva nómina')); await pulsar(boton(rn, 'Parámetros'))
 await pulsar(rn.todos((x) => x.className.includes('fila'))[0]);
 assert.ok(!textoDe(document.body).includes('undefined'));
 ok('formularios y detalles de catálogo, bancos, activos y nómina abren sin errores');
+
+// Gastos, tipos de pago, diarios cancelados, conceptos y períodos: abren y funcionan desde la interfaz
+limpiarHojas();
+const { vistaGastos } = await import('../src/conta-ui-gastos.js');
+const { vistaDiarios } = await import('../src/conta-ui-diarios.js');
+const { vistaPeriodos } = await import('../src/conta-ui-periodos.js');
+const secc = async (r, nombre) => { const t = r.todos((x) => x.tag === 'button' && x.attrs.role === 'tab' && x.texto.includes(nombre))[0]; assert.ok(t, 'falta ' + nombre); await pulsar(t); await pausa(); };
+const rg = new Nodo('div'); await vistaGastos(rg); await pausa();
+await secc(rg, 'Tipo de Pago');
+assert.ok(textoDe(rg).includes('Efectivo'), 'los tipos de pago sembrados aparecen');
+await pulsar(boton(rg, 'Nuevo tipo de pago'));
+assert.ok(textoDe(document.body).includes('Método base'));
+limpiarHojas();
+await secc(rg, 'Gastos');
+await pulsar(boton(rg, 'Nuevo gasto'));
+const fg = document.body.hijos.at(-1);
+fg.todos((x) => x.tag === 'input' && x.attrs.placeholder?.startsWith('Ej. Pago de alquiler'))[0].value = 'Pago de luz';
+const mt = fg.todos((x) => x.tag === 'input' && x.attrs.type === 'number'); mt[0].value = '1200';
+await pulsar(boton(fg, 'Guardar gasto'));
+assert.ok(textoDe(rg).includes('Pago de luz'), 'el gasto aparece en la lista: ' + textoDe(fg).slice(-300));
+await secc(rg, 'Reportes de Gasto');
+assert.ok(textoDe(rg).includes('Total de gastos') && !textoDe(rg).includes('NaN'), textoDe(rg).slice(0, 500));
+limpiarHojas();
+await secc(rg, 'Gastos');
+await pulsar(rg.todos((x) => x.className.includes('fila'))[0]);
+const dg = document.body.hijos.at(-1);
+dg.todos((x) => x.tag === 'input' && x.attrs.placeholder === 'Motivo de la anulación')[0].value = 'Duplicado';
+await pulsar(boton(dg, 'Anular gasto'));
+assert.ok(textoDe(rg).includes('anulado'), 'el gasto anulado se marca');
+limpiarHojas();
+const rd = new Nodo('div'); await vistaDiarios(rd); await pausa();
+await secc(rd, 'Concepto');
+await pulsar(boton(rd, 'Nuevo concepto'));
+assert.ok(textoDe(document.body).includes('Se usa en'));
+limpiarHojas();
+await secc(rd, 'Diarios Cancelados');
+assert.ok(textoDe(rd).includes('Diarios Cancelados') || textoDe(rd).includes('No hay diarios cancelados') || textoDe(rd).includes('Asientos manuales anulados'));
+await secc(rd, 'Diario');
+const rp = new Nodo('div'); await vistaPeriodos(rp); await pausa();
+assert.ok(textoDe(rp).includes('Enero') && textoDe(rp).includes('Cerrar'));
+await secc(rp, 'Período Fiscal');
+assert.ok(textoDe(rp).includes('606') && textoDe(rp).includes('IT1') && textoDe(rp).includes('confírmalos con la DGII'));
+await pulsar(boton(rp, '606'));
+assert.ok(textoDe(document.body).includes('Marcar presentada'));
+limpiarHojas();
+ok('Gastos (crear/anular), Tipo de Pago, Reportes de Gasto, Concepto, Diarios Cancelados y Períodos abren y funcionan');
 
 // Facturación: tipo de comprobante y consulta del RNC
 limpiarHojas();

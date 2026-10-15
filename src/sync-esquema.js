@@ -65,7 +65,16 @@ export const TABLAS = [
   { t: 'cuentas_pagar', cols: ['vence'], refs: [{ col: 'compra_id', tabla: 'compras' }] },
   { t: 'pagos_compra', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'compra_id', tabla: 'compras' }] },
   { t: 'caja', cols: ['fecha_apertura', 'efectivo_inicial', 'estado', 'fecha_cierre', 'efectivo_esperado', 'efectivo_contado', 'diferencia', 'notas', 'conteo_cajero', 'conteo_fecha', 'conteo_nota', 'conteo_por'] },
-  { t: 'gastos', cols: ['fecha', 'concepto', 'categoria', 'monto', 'metodo', 'nota', 'itbis', 'ncf', 'documento'], refs: [{ col: 'caja_id', tabla: 'caja' }] },
+  { t: 'tipos_pago', cols: ['nombre', 'metodo', 'requiere_ref', 'activo'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'cuenta_id', tabla: 'cuentas_contables' }], unicos: ['nombre'] },
+  {
+    t: 'conceptos_conta', cols: ['nombre', 'tipo', 'categoria_gasto', 'notas', 'activo'],
+    refs: [{ col: 'cuenta_debe_id', tabla: 'cuentas_contables' }, { col: 'cuenta_haber_id', tabla: 'cuentas_contables' }], unicos: ['nombre'],
+  },
+  { t: 'declaraciones', cols: ['clave', 'periodo', 'formulario', 'fecha_presentada', 'referencia', 'notas'], unicos: ['clave'] },
+  {
+    t: 'gastos', cols: ['fecha', 'concepto', 'categoria', 'monto', 'metodo', 'nota', 'itbis', 'ncf', 'documento', 'beneficiario', 'estado', 'origen'],
+    refs: [{ col: 'caja_id', tabla: 'caja' }, { col: 'tipo_pago_id', tabla: 'tipos_pago' }],
+  },
   {
     t: 'cotizaciones',
     cols: ['numero', 'fecha', 'cliente_nombre', 'subtotal', 'descuento', 'total', 'validez_dias', 'estado', 'notas'],
@@ -91,7 +100,7 @@ export const TABLAS = [
   // ---- Contabilidad ----
   { t: 'centros_costo', cols: ['codigo', 'nombre', 'activo'] },
   { t: 'cuentas_contables', cols: ['codigo', 'nombre', 'tipo', 'grupo', 'rol', 'categoria_gasto', 'sistema', 'activo'], unicos: ['codigo'] },
-  { t: 'asientos', cols: ['numero', 'fecha', 'concepto', 'tipo', 'estado', 'referencia', 'creado'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },
+  { t: 'asientos', cols: ['numero', 'fecha', 'concepto', 'tipo', 'estado', 'referencia', 'creado', 'anulado_fecha', 'anulado_por', 'anulado_motivo'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },
   {
     t: 'asiento_lineas', cols: ['debe', 'haber', 'detalle'],
     refs: [{ col: 'asiento_id', tabla: 'asientos' }, { col: 'cuenta_id', tabla: 'cuentas_contables' }, { col: 'centro_id', tabla: 'centros_costo' }],

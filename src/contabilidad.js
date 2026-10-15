@@ -6,7 +6,10 @@ import {
 } from './conta-db.js';
 import { balanceGeneral, estadoResultados, presupuestoVsReal, r2 } from './conta-motor.js';
 import { ROLES } from './conta-plan.js';
-import { vistaAsientos, vistaCuentas } from './conta-ui-asientos.js';
+import { vistaCuentas } from './conta-ui-asientos.js';
+import { vistaDiarios } from './conta-ui-diarios.js';
+import { vistaGastos } from './conta-ui-gastos.js';
+import { vistaPeriodos } from './conta-ui-periodos.js';
 import { vistaBancos } from './conta-ui-bancos.js';
 import { vistaActivos, vistaNomina } from './conta-ui-activos.js';
 import { vistaReportes } from './conta-ui-reportes.js';
@@ -118,8 +121,8 @@ async function vistaAjustes(raiz) {
 }
 
 const TABS = [
-  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaAsientos], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cxc', 'CXC', vistaCxc], ['cxp', 'CXP', vistaCxp], ['cuadre', 'Cuadre de caja', vistaCuadreCaja], ['cajachica', 'Caja chica', vistaCajaChica],
-  ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['presupuesto', 'Presupuesto', vistaPresupuesto], ['ajustes', 'Ajustes', vistaAjustes],
+  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaDiarios], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cxc', 'CXC', vistaCxc], ['cxp', 'CXP', vistaCxp], ['cuadre', 'Cuadre de caja', vistaCuadreCaja], ['cajachica', 'Caja chica', vistaCajaChica], ['gastos', 'Gastos', vistaGastos],
+  ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['periodos', 'Períodos', vistaPeriodos], ['presupuesto', 'Presupuesto', vistaPresupuesto], ['ajustes', 'Ajustes', vistaAjustes],
 ];
 let tabActual = 'resumen';
 // Abre Contabilidad directamente en una pestaña (por ejemplo, desde un aviso del inicio)
