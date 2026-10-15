@@ -844,7 +844,7 @@ export async function registrarNcfAnulado({ ncf, motivo = 'La factura no se pudo
   if (ya) return false;
   await ejecutar('INSERT INTO ncf_anulados (ncf, tipo, motivo, origen, usuario_id) VALUES (?, ?, ?, ?, ?)', [ncf, String(ncf).slice(0, 3), motivo, origen, usuarioActualId]);
   await ejecutar("INSERT INTO bitacora (usuario_id, usuario, accion, detalle) VALUES (?, (SELECT usuario FROM usuarios WHERE id = ?), 'Comprobante anulado por el sistema', ?)",
-    [usuarioActualId, usuarioActualId, `${ncf}: ${motivo}. Revisa el formato 608 en Reportes → Impuestos.`]);
+    [usuarioActualId, usuarioActualId, `${ncf}: ${motivo}. Revisa el formato 608 en Contabilidad → Reportes → Impuestos.`]);
   return true;
 }
 

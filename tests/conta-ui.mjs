@@ -84,7 +84,9 @@ for (const opt of select.todos((x) => x.tag === 'option')) {
   select.value = opt.attrs.value; await select.disparar('change'); await pausa();
   assert.ok(!textoDe(rr).includes('NaN') && !textoDe(rr).includes('undefined'), `Reporte ${opt.attrs.value}: ${textoDe(rr).slice(0, 300)}`);
 }
-ok('los 9 reportes se pintan sin NaN ni undefined');
+select.value = 'impuestos'; await select.disparar('change'); await pausa();
+assert.ok(textoDe(rr).includes('Formato 608') && textoDe(rr).includes('Formato 607'), 'Impuestos vive dentro de los reportes de contabilidad');
+ok('los 10 reportes (incluido Impuestos) se pintan sin NaN ni undefined');
 
 // Asientos: nuevo asiento por la interfaz
 limpiarHojas();

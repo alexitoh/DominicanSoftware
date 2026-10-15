@@ -3,11 +3,13 @@ import { h, dinero } from './ui.js';
 import { libroContable, saldosPorCobrar, saldosPorPagar, listarCentros, fechaHoy } from './conta-db.js';
 import { balanza, estadoResultados, balanceGeneral, mayor, diario, flujoEfectivo, antiguedad, TRAMOS_ANTIGUEDAD, porCentroCosto, mapaRoles, r2 } from './conta-motor.js';
 import { rangoInicial } from './fechas.js';
+import { vistaImpuestos } from './reportes-fiscal.js';
 import { campo, tabla, botonCSV, vacio, monto, fechaCorta, selectCuentas } from './conta-ui-comun.js';
 
 const REPORTES = [
   ['balance', 'Balance general'], ['resultados', 'Estado de resultados'], ['balanza', 'Balanza de comprobación'], ['diario', 'Libro diario'],
   ['mayor', 'Libro mayor'], ['flujo', 'Flujo de efectivo'], ['cxc', 'Antigüedad de cuentas por cobrar'], ['cxp', 'Antigüedad de cuentas por pagar'], ['centros', 'Por centro de costo'],
+  ['impuestos', 'Impuestos (ITBIS, 607, 606 y 608)'],
 ];
 
 export async function vistaReportes(raiz) {
@@ -21,6 +23,7 @@ export async function vistaReportes(raiz) {
 
   async function pintar() {
     const { desde: d, hasta: hs } = est.rango;
+    if (est.tipo === 'impuestos') { rango.hidden = true; await vistaImpuestos(cuerpo); return; } // tiene su propio selector de mes
     rango.hidden = false;
     desde.parentElement.hidden = ['balance', 'cxc', 'cxp'].includes(est.tipo);
     const lib = await libroContable({ hasta: hs });

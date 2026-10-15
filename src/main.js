@@ -353,7 +353,7 @@ async function vistaAjustes(raiz) {
       h('p', { class: 'ayuda' }, 'Encendida: toda venta sale con comprobante fiscal (NCF) y el ITBIS se suma al precio de venta. Al facturar eliges el tipo; si el cliente no tiene RNC se le da una factura de consumo (B02). Apagada: se factura sin comprobante ni ITBIS. Escribe abajo los rangos de NCF que la DGII te autorizó.'),
       h('p', { class: 'ayuda' }, ncfNube ? 'Las secuencias son de este negocio y se guardan en el servidor: todos los equipos del negocio usan la misma y cada factura pide su número al servidor, así no se repite ninguno. Sin internet el equipo no puede facturar (solo consultar).' : 'Sin la nube conectada, las secuencias son de este dispositivo.'),
       ncfAviso ? h('p', { class: 'error', role: 'status' }, ncfAviso) : null,
-      anuladosNcf.length ? h('p', { class: 'ayuda' }, 'Comprobantes anulados porque la factura no se llegó a guardar (están en Reportes → Impuestos, formato 608): ' + anuladosNcf.join(' · ')) : null,
+      anuladosNcf.length ? h('p', { class: 'ayuda' }, 'Comprobantes anulados porque la factura no se llegó a guardar (están en Contabilidad → Reportes → Impuestos, formato 608): ' + anuladosNcf.join(' · ')) : null,
       ncfNube && ncfServidor && !adminNcf ? h('p', { class: 'ayuda' }, 'Solo el administrador puede cambiar las secuencias.') : null,
       h('label', { class: 'etiqueta fila-check' }, activoFact, ' Facturar con comprobante e ITBIS'),
       h('label', { class: 'etiqueta' }, 'RNC del negocio', rncNegocio),
