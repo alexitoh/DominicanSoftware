@@ -250,7 +250,11 @@ CREATE TABLE IF NOT EXISTS caja (
   efectivo_esperado REAL,
   efectivo_contado REAL,
   diferencia REAL,
-  notas TEXT
+  notas TEXT,
+  conteo_cajero REAL,
+  conteo_fecha TEXT,
+  conteo_nota TEXT,
+  conteo_por TEXT
 );
 
 CREATE TABLE IF NOT EXISTS gastos (

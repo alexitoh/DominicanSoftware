@@ -1,18 +1,20 @@
 // caja.js - apertura de caja, gastos y cierre con cuadre de efectivo
 import {
-  consultar, cajaAbierta, abrirCaja, resumenCaja, registrarGasto, eliminarGasto, cerrarCaja,
+  consultar, cajaAbierta, abrirCaja, resumenCaja, registrarGasto, eliminarGasto, cerrarCaja, entregarConteo, redondear,
   listarPendientes, detallePendiente, cobrarPendiente, cancelarPendiente,
 } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { panelCobro } from './caja-cobro.js';
 import { imprimirContado, abrirImpresoras } from './impresion.js';
 import { sincronizarAhora } from './nube-app.js';
+import { usuarioActual } from './auth.js';
 
 const CATEGORIAS = [
   'Alquiler', 'Luz y agua', 'Internet y teléfono', 'Transporte', 'Sueldos', 'Pago a proveedor', 'Mantenimiento', 'Otros',
 ];
 const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque' };
 
+const difTexto = (d) => (d === 0 ? 'La caja cuadra' : d > 0 ? `Sobran ${dinero(d)}` : `Faltan ${dinero(-d)}`);
 const renglon = (a, b, clase = '') => h('div', { class: clase }, h('span', {}, a), h('span', {}, b));
 const campo = (etiqueta, input) => h('label', { class: 'etiqueta' }, etiqueta, input);
 const numero = (placeholder = '0.00') => h('input', {
@@ -128,6 +130,7 @@ export async function vistaCaja(raiz) {
         h('h2', {}, 'Caja abierta'),
         h('p', { class: 'ayuda' }, `Desde ${caja.fecha_apertura.slice(0, 16)}. El cuadre y el cierre de caja los hace Contabilidad.`),
         h('div', { class: 'acciones' }, h('button', { class: 'btn', onClick: () => formularioGasto() }, 'Registrar gasto'))),
+      seccionConteo(caja),
       h('section', { class: 'seccion' },
         h('h2', {}, 'Gastos de este turno'),
         gastos.length
@@ -137,6 +140,35 @@ export async function vistaCaja(raiz) {
                 h('small', {}, [g.categoria, METODOS[g.metodo] || g.metodo, g.fecha.slice(11, 16)].filter(Boolean).join(', '))),
               h('span', { class: 'precio' }, dinero(g.monto)))))
           : h('p', { class: 'ayuda' }, 'Todavía no hay gastos en este turno.')));
+  }
+
+  // El cajero cuenta el efectivo del cajón y lo entrega; no ve el cuadre ni la diferencia
+  function seccionConteo(caja) {
+    const monto = numero();
+    monto.setAttribute('aria-label', 'Efectivo contado en el cajón');
+    if (caja.conteo_cajero != null) monto.value = String(caja.conteo_cajero);
+    const nota = h('input', { class: 'campo', placeholder: 'Opcional', autocomplete: 'off', value: caja.conteo_nota || '' });
+    const error = h('p', { class: 'error', role: 'alert' });
+    async function enviar() {
+      error.textContent = '';
+      const v = parseFloat(monto.value);
+      if (!(v >= 0)) { error.textContent = 'Cuenta el efectivo del cajón y escríbelo aquí (puede ser 0).'; monto.focus(); return; }
+      try {
+        await entregarConteo({ cajaId: caja.id, contado: v, nota: nota.value.trim(), por: usuarioActual()?.nombre || '' });
+        toast('Conteo enviado a Contabilidad');
+        await sincronizarAhora();
+        await pintar();
+      } catch (e) { error.textContent = e.message || String(e); }
+    }
+    return h('section', { class: 'seccion' },
+      h('h2', {}, 'Conteo de caja'),
+      caja.conteo_cajero != null
+        ? h('p', { class: 'ayuda', role: 'status' }, `Entregaste ${dinero(caja.conteo_cajero)} a las ${(caja.conteo_fecha || '').slice(11, 16)}. Contabilidad lo revisará y cerrará la caja. Si te equivocaste, corrígelo aquí.`)
+        : h('p', { class: 'ayuda' }, 'Al terminar tu turno, cuenta el efectivo del cajón y escríbelo. Contabilidad lo revisa y cierra la caja.'),
+      campo('Efectivo contado en el cajón', monto),
+      campo('Nota', nota),
+      error,
+      h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: enviar }, caja.conteo_cajero != null ? 'Corregir conteo' : 'Enviar conteo')));
   }
 
   function formularioGasto() {
@@ -248,7 +280,10 @@ export async function vistaCuadreCaja(raiz) {
           renglon('Cobros de crédito en efectivo', dinero(r.cobros_efectivo)),
           renglon('Gastos en efectivo', `- ${dinero(r.gastos_efectivo)}`),
           renglon('Pagos a proveedores en efectivo', `- ${dinero(r.proveedores_efectivo)}`),
-          renglon('Efectivo esperado en caja', dinero(r.esperado), 'gran')),
+          renglon('Efectivo esperado en caja', dinero(r.esperado), 'gran'),
+          caja.conteo_cajero != null ? renglon(`Conteo del cajero${caja.conteo_por ? ` (${caja.conteo_por})` : ''}`, dinero(caja.conteo_cajero)) : null,
+          caja.conteo_cajero != null ? renglon('Diferencia', difTexto(redondear(caja.conteo_cajero - r.esperado)), 'gran') : null),
+        caja.conteo_cajero == null ? h('p', { class: 'ayuda' }, 'El cajero todavía no ha entregado su conteo.') : h('p', { class: 'ayuda' }, `Entregado a las ${(caja.conteo_fecha || '').slice(11, 16)}${caja.conteo_nota ? `. Nota: ${caja.conteo_nota}` : ''}`),
         h('p', { class: 'ayuda' }, fueraDeCaja),
         pendientes.length ? h('p', { class: 'error' }, `Hay ${pendientes.length} ${pendientes.length === 1 ? 'venta' : 'ventas'} por cobrar en caja que no están incluidas en este cuadre.`) : null,
         h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: () => formularioCierre(caja, r, pendientes.length) }, 'Cerrar caja'))),
@@ -265,6 +300,7 @@ export async function vistaCuadreCaja(raiz) {
     let cerrar = () => {};
     const contado = numero();
     contado.setAttribute('aria-label', 'Efectivo contado');
+    if (caja.conteo_cajero != null) contado.value = String(caja.conteo_cajero); // se parte del conteo del cajero; se puede ajustar
     const nota = h('input', { class: 'campo', placeholder: 'Opcional', autocomplete: 'off' });
     const diferencia = h('p', { class: 'ayuda', role: 'status' });
     const error = h('p', { class: 'error', role: 'alert' });
@@ -316,6 +352,7 @@ export async function vistaCuadreCaja(raiz) {
               h('span', { class: 'datos' },
                 h('strong', {}, c.fecha_apertura.slice(0, 10)),
                 h('small', {}, `${c.fecha_apertura.slice(11, 16)} a ${(c.fecha_cierre || '').slice(11, 16)}, esperado ${dinero(c.efectivo_esperado)}`),
+                c.conteo_cajero != null && c.conteo_cajero !== c.efectivo_contado ? h('small', {}, `El cajero contó ${dinero(c.conteo_cajero)}`) : null,
                 c.notas ? h('small', {}, c.notas) : null),
               h('span', { class: 'precio' }, dinero(c.efectivo_contado),
                 h('small', { class: `bloque ${d < 0 ? 'deuda' : d > 0 ? '' : 'pagada'}` },

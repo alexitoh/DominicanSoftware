@@ -64,7 +64,7 @@ export const TABLAS = [
   },
   { t: 'cuentas_pagar', cols: ['vence'], refs: [{ col: 'compra_id', tabla: 'compras' }] },
   { t: 'pagos_compra', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'compra_id', tabla: 'compras' }] },
-  { t: 'caja', cols: ['fecha_apertura', 'efectivo_inicial', 'estado', 'fecha_cierre', 'efectivo_esperado', 'efectivo_contado', 'diferencia', 'notas'] },
+  { t: 'caja', cols: ['fecha_apertura', 'efectivo_inicial', 'estado', 'fecha_cierre', 'efectivo_esperado', 'efectivo_contado', 'diferencia', 'notas', 'conteo_cajero', 'conteo_fecha', 'conteo_nota', 'conteo_por'] },
   { t: 'gastos', cols: ['fecha', 'concepto', 'categoria', 'monto', 'metodo', 'nota', 'itbis', 'ncf', 'documento'], refs: [{ col: 'caja_id', tabla: 'caja' }] },
   {
     t: 'cotizaciones',

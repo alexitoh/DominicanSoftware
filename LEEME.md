@@ -51,7 +51,7 @@ La restauración del respaldo conviene probarla también en el celular con la AP
 
 10. Proveedores: crea un proveedor. En Compras, registra una compra con margen de ganancia y revisa que cambien el costo y el precio del producto.
 11. Caja: el cajero abre la caja con el efectivo inicial, cobra y registra gastos, pero NO ve el cuadre ni cierra la caja. En Contabilidad → "Cuadre de caja" (solo con permiso de Contabilidad) se ve el "efectivo esperado" = inicial + ventas en efectivo - gastos.
-12. En Contabilidad → "Cuadre de caja" → Cerrar caja: cuenta el efectivo, muestra si sobra o falta dinero y guarda el cierre en el historial de cierres. Avisa si quedan ventas por cobrar en caja.
+12. Al terminar el turno, el cajero cuenta el cajón y lo escribe en Caja → "Conteo de caja" → Enviar conteo (puede corregirlo mientras la caja siga abierta; no ve el esperado ni la diferencia). En Contabilidad → "Cuadre de caja" se ve el conteo del cajero contra el esperado y la diferencia; "Cerrar caja" parte de ese conteo (se puede ajustar), muestra si sobra o falta dinero y guarda el cierre en el historial de cierres. Avisa si quedan ventas por cobrar en caja.
 
 ## Reportes
 

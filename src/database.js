@@ -67,6 +67,10 @@ export async function initDB() {
     'ALTER TABLE ventas ADD COLUMN ncf TEXT',
     'ALTER TABLE ventas ADD COLUMN cliente_nombre TEXT',
     'ALTER TABLE ventas ADD COLUMN cajero_id INTEGER',
+    'ALTER TABLE caja ADD COLUMN conteo_cajero REAL',
+    'ALTER TABLE caja ADD COLUMN conteo_fecha TEXT',
+    'ALTER TABLE caja ADD COLUMN conteo_nota TEXT',
+    'ALTER TABLE caja ADD COLUMN conteo_por TEXT',
     'ALTER TABLE compras ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
     'ALTER TABLE compras ADD COLUMN ncf TEXT',
     'ALTER TABLE gastos ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
@@ -837,6 +841,16 @@ export async function eliminarGasto(id) {
   const [gd] = await consultar('SELECT concepto, monto FROM gastos WHERE id = ?', [id]);
   await ejecutar('DELETE FROM gastos WHERE id = ?', [id]);
   await anotar('Gasto eliminado', `${gd?.concepto || ''} ${gd?.monto ?? ''}`.trim());
+}
+
+// El cajero cuenta el cajón y entrega el monto; Contabilidad lo compara con el cuadre y cierra. Puede corregirlo mientras la caja siga abierta.
+export async function entregarConteo({ cajaId, contado, nota = '', por = '' }) {
+  const [c] = await consultar("SELECT id FROM caja WHERE id = ? AND estado = 'abierta'", [cajaId]);
+  if (!c) throw new Error('La caja ya está cerrada.');
+  if (!(contado >= 0)) throw new Error('Escribe el efectivo que contaste (puede ser 0).');
+  await ejecutar("UPDATE caja SET conteo_cajero = ?, conteo_fecha = datetime('now','localtime'), conteo_nota = ?, conteo_por = ? WHERE id = ?",
+    [redondear(contado), nota || null, por || null, cajaId]);
+  await anotar('Conteo de caja entregado', `${por || 'Cajero'} contó ${redondear(contado)}`);
 }
 
 export async function cerrarCaja({ cajaId, contado, notas = '' }) {

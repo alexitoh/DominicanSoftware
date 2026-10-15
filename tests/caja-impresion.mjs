@@ -143,7 +143,21 @@ await vistaCuadreCaja(rq); await pausa();
 assert.ok(rq.texto.includes('Efectivo esperado en caja') && rq.texto.includes('Cerrar caja'));
 const cerrar = rq.todos((x) => x.tag === 'button' && x.texto.includes('Cerrar caja'))[0];
 assert.ok(cerrar);
-ok('el cajero no ve el cuadre ni el cierre; la vista de Contabilidad muestra el cuadre y el botón de cerrar caja');
+assert.ok(rq.texto.includes('todavía no ha entregado'), 'sin conteo, Contabilidad lo ve');
+// el cajero entrega su conteo (sin ver el cuadre) y Contabilidad lo revisa
+assert.ok(rc.texto.includes('Conteo de caja') && rc.texto.includes('Enviar conteo'));
+const campoConteo = rc.todos((x) => x.tag === 'input' && x.attrs['aria-label'] === 'Efectivo contado en el cajón')[0];
+assert.ok(campoConteo);
+await rc.todos((x) => x.tag === 'button' && x.texto.includes('Enviar conteo'))[0].click(); await pausa();
+assert.equal((await bd.cajaAbierta()).conteo_cajero, null, 'sin monto no se envía');
+campoConteo.value = '1234.5'; await rc.todos((x) => x.tag === 'button' && x.texto.includes('Enviar conteo'))[0].click(); await pausa(100);
+assert.equal((await bd.cajaAbierta()).conteo_cajero, 1234.5);
+assert.ok(rc.texto.includes('Entregaste') && rc.texto.includes('Corregir conteo'));
+for (const t of ['esperado', 'Diferencia', 'Sobran', 'Faltan']) assert.ok(!rc.texto.includes(t), 'el cajero sigue sin ver: ' + t);
+const rq2 = new Nodo('div'); document.body.append(rq2);
+await vistaCuadreCaja(rq2); await pausa();
+assert.ok(rq2.texto.includes('Conteo del cajero') && rq2.texto.includes('Diferencia'));
+ok('el cajero entrega su conteo sin ver el cuadre; Contabilidad ve conteo, esperado y diferencia');
 
 // 7. Categorías del negocio: crear, renombrar y eliminar (sembradas una sola vez)
 const cats0 = await bd.listarCategorias();
