@@ -313,3 +313,6 @@ Notas de crédito/débito y anticipos aún no salen en el 606; un anticipo en ef
 - **Inventario → Dar entrada a factura**: se elige la orden autorizada, se escribe Nº de factura, NCF y fecha, y lo que llegó. Lo que falta queda en **back order** (la orden pasa a "parcial") o se marca **No llegará** con una nota obligatoria por producto, que el comprador ve al abrir la orden (Compras → Órdenes de compra → Gestionar).
 - "Factura sin orden de compra" sigue disponible en esa misma ventana.
 - El crédito lo define solo el perfil del suplidor (contado, o crédito con sus días); ni la orden ni la compra lo cambian.
+
+### Contabilidad de las compras y entradas de factura
+Cada factura que se da entrada genera su asiento solo: Inventario (1301) + ITBIS adelantado contra Cuentas por pagar (2101); si es de contado, el pago sale de Caja (1101) o Banco según el método; si es a crédito queda en 2101 hasta pagarla. Las órdenes de compra, el back order y los "no llegará" no generan asientos hasta que llega mercancía con factura.

@@ -773,6 +773,28 @@ const oc2 = await xp.crearOrden({ proveedor_id: sid, items: [{ producto_id: pid,
 await xp.anularOrden(oc2.id); assert.equal((await xp.detalleOrden(oc2.id)).estado, 'anulada');
 await assert.rejects(() => xp.crearOrden({ proveedor_id: sid, items: [] }), /al menos un producto/);
 await assert.rejects(() => xp.crearOrden({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 1.5, costo_unitario: 1 }] }), /enteros/);
+{
+  // Entrada de factura desde una orden: contado, crédito y parcial amarrados al catálogo de cuentas
+  const lib0 = await cd.libroContable();
+  const sal = (lib, codigo) => r2(lib.lineas.filter((l) => l.cuenta_id === C[codigo].id).reduce((a, l) => a + l.debe - l.haber, 0));
+  const antes = { inv: sal(lib0, '1301'), cxp: sal(lib0, '2101'), caja: sal(lib0, '1101') };
+  await xp.guardarCondicionProveedor(sid, { condicion: 'contado' });
+  const oa = await xp.crearOrden({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 10, costo_unitario: 100 }] });
+  await xp.autorizarOrden(oa.id);
+  const fa = await bd.registrarCompra({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 6, costo_unitario: 100 }], forma_pago: 'efectivo', actualizarCosto: false });
+  await xp.marcarOrdenRecibida(oa.id, fa, {});
+  assert.equal((await xp.detalleOrden(oa.id)).estado, 'parcial');
+  await xp.guardarCondicionProveedor(sid, { condicion: 'credito', dias: 30 });
+  const fb = await bd.registrarCompra({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 4, costo_unitario: 100 }], forma_pago: 'credito', actualizarCosto: false });
+  await xp.marcarOrdenRecibida(oa.id, fb, {});
+  assert.equal((await xp.detalleOrden(oa.id)).estado, 'recibida');
+  const lib1 = await cd.libroContable();
+  assert.deepEqual(lib1.faltantes, []);
+  assert.equal(r2(lib1.lineas.reduce((a, l) => a + l.debe, 0)), r2(lib1.lineas.reduce((a, l) => a + l.haber, 0)));
+  assert.equal(r2(sal(lib1, '1301') - antes.inv), 1000, 'el inventario recibido entra a 1301');
+  assert.equal(r2(sal(lib1, '2101') - antes.cxp), -400, 'solo lo comprado a crédito queda en cuentas por pagar (2101)');
+  assert.equal(r2(sal(lib1, '1101') - antes.caja), -600, 'lo de contado sale de caja (1101)');
+}
 ok('CxP: tipos de suplidor, notas de crédito y débito, anticipos, pagos repartidos, reportes, contabilidad cuadrando y circuito solicitud → requisición → orden → factura');
 }
 
