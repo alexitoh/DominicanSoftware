@@ -157,7 +157,6 @@ export async function vistaCuentas(raiz) {
   }
 
   raiz.replaceChildren(
-    h('header', { class: 'barra' }, h('h1', {}, 'Por pagar')),
     resumen,
     h('div', { class: 'filtros' }, buscar, segmento),
     lista);

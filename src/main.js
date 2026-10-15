@@ -25,7 +25,6 @@ import { abrirImpresoras } from './impresion.js';
 import { vistaReportes } from './reportes.js';
 import { vistaContabilidad } from './contabilidad.js';
 import { vistaGarantias } from './garantias.js';
-import { vistaCuentas } from './cuentas.js';
 import { crearVistaInicio, MODULOS, INICIO, icono, buscadorModulos } from './inicio.js';
 
 instalarTraductor(); // las asignaciones a textContent también se traducen
@@ -48,7 +47,6 @@ const vistas = {
   inventario: vistaInventario,
   compras: vistaCompras,
   caja: vistaCaja,
-  cuentas: vistaCuentas,
   garantias: vistaGarantias,
   reportes: vistaReportes,
   contabilidad: vistaContabilidad,

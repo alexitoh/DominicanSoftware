@@ -15,7 +15,7 @@ import {
 // Cada permiso es un módulo, más "anular" (anular ventas y compras). "usuarios" es solo del Administrador.
 export const PERMISOS = [
   ['ventas', 'Ventas y cotizaciones'], ['productos', 'Productos'], ['inventario', 'Inventario'], ['compras', 'Compras'],
-  ['caja', 'Caja'], ['cuentas', 'Cuentas por pagar'], ['clientes', 'Clientes'], ['proveedores', 'Proveedores'],
+  ['caja', 'Caja'], ['clientes', 'Clientes'], ['proveedores', 'Proveedores'],
   ['garantias', 'Garantías'], ['reportes', 'Reportes'], ['contabilidad', 'Contabilidad'], ['ajustes', 'Ajustes y respaldo'],
   ['anular', 'Anular ventas y compras'],
 ];

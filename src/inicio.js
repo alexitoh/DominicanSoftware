@@ -2,6 +2,7 @@
 import { consultar } from './database.js';
 import { h, dinero } from './ui.js';
 import { traducir } from './i18n.js';
+import { abrirPestana } from './contabilidad.js';
 
 const svg = (cuerpo) => `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${cuerpo}</svg>`;
 
@@ -17,8 +18,6 @@ export const MODULOS = [
     icono: svg('<path d="M2 6h11v10H2z"/><path d="M13 9h4l4 4v3h-8"/><circle cx="6.5" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/>') },
   { id: 'caja', titulo: 'Caja', color: '#2F9E5B',
     icono: svg('<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/>') },
-  { id: 'cuentas', titulo: 'Por pagar', color: '#C8402F',
-    icono: svg('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/>') },
   { id: 'clientes', titulo: 'Clientes', color: '#8A5BB8',
     icono: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.5-3.6 3.2-5.5 6.5-5.5s6 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14.5c2.6 0 4.2 1.5 4.5 4"/>') },
   { id: 'proveedores', titulo: 'Proveedores', color: '#7A6A4F',
@@ -45,8 +44,8 @@ export const INICIO = {
 const PALABRAS = {
   ventas: 'vender factura facturar cotizacion cotizaciones pos cobrar', productos: 'articulos catalogo precio precios codigo',
   inventario: 'stock existencia existencias almacen ajuste', compras: 'comprar suplidor mercancia', caja: 'efectivo cierre apertura gastos turno',
-  cuentas: 'deudas pagar proveedores credito', clientes: 'cobrar credito abonos', proveedores: 'suplidores', garantias: 'garantia',
-  reportes: 'informes estadisticas ganancias', contabilidad: 'contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
+  clientes: 'cobrar credito abonos', proveedores: 'suplidores', garantias: 'garantia',
+  reportes: 'informes estadisticas ganancias', contabilidad: 'cxc cxp cuentas por cobrar pagar deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
 };
 const plano = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 
@@ -94,14 +93,15 @@ export function crearVistaInicio(ir, puede = () => true, nombreUsuario = () => '
           WHERE c.estado = 'completada') WHERE saldo > 0.005 AND vence IS NOT NULL AND date(vence) < date('now','localtime')`);
 
     const dato = (et, val, clase = '') => h('div', {}, h('dt', {}, et), h('dd', { class: clase }, val));
-    const aviso = (texto, destino, clase = '') =>
-      h('button', { class: `aviso ${clase}`, onClick: () => ir(destino) }, h('span', {}, texto), h('span', { class: 'flecha', 'aria-hidden': 'true' }, '›'));
+    const aviso = (texto, destino, clase = '', pestana = null) =>
+      h('button', { class: `aviso ${clase}`, onClick: () => { if (pestana) abrirPestana(pestana); ir(destino); } }, h('span', {}, texto), h('span', { class: 'flecha', 'aria-hidden': 'true' }, '›'));
     const avisos = [
       !caja && puede('caja') ? aviso('La caja está cerrada', 'caja') : null,
       reponer.n && puede('inventario') ? aviso(`${reponer.n} ${reponer.n === 1 ? 'producto por reponer' : 'productos por reponer'}`, 'inventario', 'alerta') : null,
-      vencidas.n && puede('cuentas') ? aviso(`${vencidas.n} ${vencidas.n === 1 ? 'cuenta vencida' : 'cuentas vencidas'} con proveedores (${dinero(vencidas.total)})`, 'cuentas', 'alerta') : null,
+      vencidas.n && puede('contabilidad') ? aviso(`${vencidas.n} ${vencidas.n === 1 ? 'cuenta vencida' : 'cuentas vencidas'} con proveedores (${dinero(vencidas.total)})`, 'contabilidad', 'alerta', 'cxp') : null,
       garantias.n && puede('garantias') ? aviso(`${garantias.n} ${garantias.n === 1 ? 'garantía vence' : 'garantías vencen'} en 30 días`, 'garantias') : null,
-      porCobrar.total > 0.005 && puede('clientes') ? aviso(`Por cobrar a clientes: ${dinero(porCobrar.total)}`, 'clientes') : null,
+      porCobrar.total > 0.005 && puede('contabilidad') ? aviso(`Por cobrar a clientes: ${dinero(porCobrar.total)}`, 'contabilidad', '', 'cxc')
+        : porCobrar.total > 0.005 && puede('clientes') ? aviso(`Por cobrar a clientes: ${dinero(porCobrar.total)}`, 'clientes') : null,
     ].filter(Boolean);
 
     raiz.replaceChildren(

@@ -66,7 +66,8 @@ La restauración del respaldo conviene probarla también en el celular con la AP
 ## Cuentas por pagar y escáner
 
 17. Compras > Nueva compra: elige la forma de pago. Con "Crédito (por pagar)" (exige proveedor) puedes poner plazo en días y un pago inicial. Las compras al contado en efectivo descuentan del efectivo esperado de la caja.
-18. Por pagar: lista lo que debes a proveedores (Pendientes, Vencidas, Pagadas). Toca una cuenta para registrar pagos. Los pagos en efectivo con la caja abierta bajan el efectivo esperado.
+18. Contabilidad → CXP (cuentas por pagar, antes módulo "Por pagar"): lista lo que debes a proveedores (Pendientes, Vencidas, Pagadas). Toca una cuenta para registrar pagos. Los pagos en efectivo con la caja abierta bajan el efectivo esperado.
+18b. Contabilidad → CXC (cuentas por cobrar): facturas a crédito de clientes (Pendientes, Vencidas, Pagadas), con búsqueda; toca una factura para registrar el abono, o usa "Registrar cobro" para cobrar varias facturas de un cliente.
 19. Escáner: el botón "Escanear" aparece en Nueva venta (agrega el producto por su código de barras), Nueva compra, Productos (código del producto), Inventario, la serie de cada producto vendido y Garantías (buscar por serie). Si no hay cámara disponible, puedes escribir el código en el mismo escáner.
 
 Para que funcione la cámara en la APK, `npm run android:abrir` agrega solo el permiso de cámara al proyecto de Android. Después de actualizar la carpeta `src` y el `package.json` ejecuta una vez `npm install` (se agregan @zxing/browser y @zxing/library).

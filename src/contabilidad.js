@@ -11,6 +11,8 @@ import { vistaBancos } from './conta-ui-bancos.js';
 import { vistaActivos, vistaNomina } from './conta-ui-activos.js';
 import { vistaReportes } from './conta-ui-reportes.js';
 import { vistaCuadreCaja } from './caja.js';
+import { vistaCuentas as vistaCxp } from './cuentas.js';
+import { vistaCxc } from './cxc.js';
 import { campo, numero, fechaInput, texto, selectCuentas, tabla, vacio, limpiar } from './conta-ui-comun.js';
 
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -115,10 +117,12 @@ async function vistaAjustes(raiz) {
 }
 
 const TABS = [
-  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaAsientos], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cuadre', 'Cuadre de caja', vistaCuadreCaja],
+  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaAsientos], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cxc', 'CXC', vistaCxc], ['cxp', 'CXP', vistaCxp], ['cuadre', 'Cuadre de caja', vistaCuadreCaja],
   ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['presupuesto', 'Presupuesto', vistaPresupuesto], ['ajustes', 'Ajustes', vistaAjustes],
 ];
 let tabActual = 'resumen';
+// Abre Contabilidad directamente en una pestaña (por ejemplo, desde un aviso del inicio)
+export const abrirPestana = (id) => { if (TABS.some((t) => t[0] === id)) tabActual = id; };
 
 export async function vistaContabilidad(raiz) {
   const cuerpo = h('div', { class: 'conta-cuerpo' });
