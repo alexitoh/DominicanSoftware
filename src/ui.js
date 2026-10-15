@@ -8,6 +8,15 @@ export const setMoneda = (m) => { moneda = m || 'RD$'; };
 export const dinero = (n) =>
   `${moneda} ${Number(n || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// replaceChildren/append con null o false pintaban la palabra "null": se ignoran
+if (typeof Element !== 'undefined' && !Element.prototype.__sinNulos) {
+  for (const m of ['replaceChildren', 'append']) {
+    const original = Element.prototype[m];
+    Element.prototype[m] = function (...c) { return original.apply(this, c.filter((x) => x != null && x !== false)); };
+  }
+  Element.prototype.__sinNulos = true;
+}
+
 const ATRIBUTOS_TEXTO = new Set(['placeholder', 'aria-label', 'title', 'alt']);
 
 // Crea un elemento: h('button', { class: 'btn', onClick: fn }, 'Texto')

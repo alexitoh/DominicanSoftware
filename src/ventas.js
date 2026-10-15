@@ -12,9 +12,8 @@ import { compartirFactura } from './factura.js';
 import { botonEscaner } from './escaner.js';
 import { tienePermiso, registrarBitacora, usuarioActual } from './auth.js';
 import { vistaCotizaciones, formularioCotizacion } from './cotizaciones.js';
-import { panelCobro } from './caja-cobro.js';
 import { sincronizarAhora } from './nube-app.js';
-import { imprimirCredito, imprimirContado, imprimirVenta } from './impresion.js';
+import { imprimirCredito, imprimirVenta } from './impresion.js';
 
 const PERIODOS = {
   hoy: "date(v.fecha) = date('now','localtime')",
@@ -378,9 +377,8 @@ export async function vistaVentas(raiz) {
       placeholder: '0.00', 'aria-label': 'Pago inicial', onInput: () => pintarTotales(),
     });
     const campoInicial = h('label', { class: 'etiqueta' }, 'Pago inicial (opcional)', inicial);
-    const botonCobrar = h('button', { class: 'btn primario', onClick: () => accion('principal') }, 'Enviar a caja');
-    // Quien tiene permiso de Caja también puede cobrar directamente (por ejemplo el cajero que atiende en el mostrador)
-    const botonDirecto = h('button', { class: 'btn', onClick: () => accion('directo') }, 'Cobrar ahora');
+    const botonCobrar = h('button', { class: 'btn primario', onClick: () => accion() }, 'Enviar a caja');
+
 
     async function cargarClientes() {
       const cs = await consultar('SELECT id, nombre, telefono, direccion, tipo_doc, condicion, dias_credito, documento, tipo_comprobante, regimen_dgii FROM clientes ORDER BY nombre');
@@ -562,7 +560,6 @@ export async function vistaVentas(raiz) {
       const ini = Math.min(Math.max(parseFloat(inicial.value) || 0, 0), total);
       campoInicial.style.display = esCredito ? '' : 'none';
       botonCobrar.textContent = esCredito ? 'Facturar a crédito' : 'Enviar a caja';
-      botonDirecto.style.display = !esCredito && tienePermiso('caja') ? '' : 'none';
       totales.replaceChildren(
         renglon('Subtotal', dinero(sub)),
         dto > 0 ? renglon('Descuento', `- ${dinero(dto)}`) : null,
@@ -627,12 +624,12 @@ export async function vistaVentas(raiz) {
       }
     }
 
-    // modo: 'principal' (crédito = factura directa; contado = envía a caja) | 'directo' (cobra aquí mismo quien tiene permiso de Caja)
-    async function accion(modo) {
+    // Crédito = factura directa desde el vendedor; contado = SIEMPRE se envía a caja (el vendedor nunca cobra al contado)
+    async function accion() {
       const d = await validar();
       if (!d) return;
-      botonCobrar.disabled = true; botonDirecto.disabled = true;
-      const libre = () => { botonCobrar.disabled = false; botonDirecto.disabled = false; };
+      botonCobrar.disabled = true;
+      const libre = () => { botonCobrar.disabled = false; };
       try {
         if (d.esCredito) {
           const numero = await registrarVenta({ ...datosComunes(d.dto), metodo_pago: 'credito', inicial: d.ini, dias_credito: diasCredito() });
@@ -642,21 +639,6 @@ export async function vistaVentas(raiz) {
           await pintar();
           exito(v, numero, redondear(v.total - d.ini));
           imprimirCredito(v.id).catch(() => {}); // la factura a crédito sale del equipo del vendedor, en impresora normal
-        } else if (modo === 'directo') {
-          libre();
-          let cerrarCobro = () => {};
-          cerrarCobro = hoja('Cobrar ahora', h('div', { class: 'cuerpo' }, panelCobro({
-            total: d.total,
-            alCobrar: async ({ metodo: forma, recibido }) => {
-              const numero = await registrarVenta({ ...datosComunes(d.dto), metodo_pago: forma });
-              const [v] = await consultar('SELECT id, total FROM ventas WHERE numero = ?', [numero]);
-              await despues(v.id);
-              cerrarCobro(); cerrar();
-              await pintar();
-              toast(`Cobrado. Factura ${numero}`);
-              await imprimirContado(v.id, { recibido: recibido ?? null });
-            },
-          })));
         } else {
           const numero = await enviarACaja(datosComunes(d.dto));
           sincronizarAhora().catch(() => {}); // llega al cajero sin esperar al reloj
@@ -704,7 +686,7 @@ export async function vistaVentas(raiz) {
         campoInicial,
         totales,
         error,
-        h('div', { class: 'acciones' }, botonDirecto, botonCobrar)));
+        h('div', { class: 'acciones' }, botonCobrar)));
 
     await cargarClientes();
     if (precarga) await aplicarPrecarga();

@@ -185,5 +185,12 @@ formularioCliente(null); await pausa();
 assert.ok(camposCredito().every((x) => !x.disabled), 'con permiso de Contabilidad sí se edita');
 ok('el crédito del cliente solo lo configura quien tiene el permiso de Contabilidad');
 
+// 11. El vendedor nunca cobra al contado: ni siquiera quien tiene permiso de Caja ve "Cobrar" en Nueva venta
+await raiz.todos((x) => x.tag === 'button' && x.texto.includes('Nueva venta'))[0].click(); await pausa();
+const botones = hoja().todos((x) => x.tag === 'button').map((x) => x.texto);
+assert.ok(botones.some((x) => x.includes('Enviar a caja')));
+assert.ok(!botones.some((x) => /Cobrar/.test(x)), 'no hay botón de cobrar al contado');
+ok('en Nueva venta el contado solo se puede enviar a caja');
+
 console.log(`\n${n} comprobaciones correctas`);
 process.exit(0);

@@ -168,13 +168,13 @@ Límites a tener presentes:
 - **Vendedor:** en Nueva venta, si es **Contado** el botón es **Enviar a caja**: se crea una venta pendiente (ticket `T-1234`) que llega por sincronización a la pantalla **Caja → Por cobrar**. Todavía NO hay factura, ni NCF, ni descuento de inventario. El vendedor la ve en Ventas ("Esperando pago en caja") y puede cancelarla.
 - **Cajero** (permiso Caja): abre el ticket, elige la **forma de pago** (efectivo con cálculo de cambio, tarjeta, transferencia o cheque) y toca **Cobrar e imprimir**: ahí nace la factura (con su NCF, el inventario baja y el vendedor original queda como "Atendió"; el cajero como "Cobró en caja"). La caja debe estar abierta.
 - Dos cajeros no pueden cobrar la misma venta: el servidor da el derecho a uno solo (un reclamo sin terminar vence a los 2 minutos).
-- Quien tenga permiso de Caja también ve **Cobrar ahora** en Nueva venta (para atender en el mostrador sin pasar por la cola).
+- Nadie cobra al contado desde Nueva venta: el contado SIEMPRE se envía a caja (ni siquiera el administrador ve un botón de cobrar ahí).
 - **Crédito:** se factura directo desde el vendedor y sale en impresora normal.
 - Pantalla de Caja revisa nuevas ventas cada 6 segundos (y avisa con un mensaje).
 
 ## Impresoras (por computadora)
 - Ajustes → **Impresoras de esta computadora** (y botón **Impresoras** en Caja): agrega impresoras **normales** (hoja carta/A4) y de **punto de venta 80 mm**; una por tipo es la predeterminada. La de 80 mm solo la configura quien tenga permiso de Caja (cajero, gerente, administrador).
-- Facturas **al contado**: ticket de 80 mm que sale **automáticamente** al cobrar (se puede desactivar). Facturas **a crédito**: hoja normal; antes de imprimir se elige la impresora y sale primera la predeterminada. También hay botón **Imprimir** en el detalle de cada venta.
+- Los formatos imprimen con el mismo diseño de la factura en PDF (logo, datos del negocio, tipo de comprobante, NCF, garantías, totales). Facturas **al contado**: ticket de 80 mm que sale **automáticamente** al cobrar (se puede desactivar). Facturas **a crédito**: hoja normal; antes de imprimir se elige la impresora y sale primera la predeterminada. También hay botón **Imprimir** en el detalle de cada venta.
 - **Límite del navegador:** Chrome/Edge no pueden elegir una impresora de Windows por su cuenta, así que el nombre guardado es una guía y el documento sale por la impresora que Windows tenga predeterminada. Para que el ticket salga **sin ninguna ventana** en la computadora del cajero: deja la impresora de 80 mm como predeterminada de Windows y abre el sistema con un acceso directo de Chrome así: `"C:\Program Files\Google\Chrome\Application\chrome.exe" --kiosk-printing --app=https://caraudio-production.up.railway.app`. Sin ese modo, Chrome muestra su ventana de impresión (hay que confirmar). Si el ticket sale con márgenes o cortado, en las preferencias de la impresora elige el papel de 80 mm.
 - En la app Android no hay impresión directa: el botón comparte la factura en PDF como antes.
 

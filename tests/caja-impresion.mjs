@@ -68,6 +68,8 @@ ok('las impresoras se guardan por computadora; la de 80 mm solo la agrega caja/g
 // 2. Datos de prueba: producto, secuencia de NCF, caja abierta y una venta enviada a caja
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo','adicional')");
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('negocio_nombre','Audio <Pro>')");
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('negocio_logo','data:image/png;base64,iVBORw0KGgo=')");
+await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('negocio_telefono','809-555-1234')");
 await bd.guardarSecuenciaNCF('B02', 1, 50);
 await bd.ejecutar("INSERT INTO productos (nombre, precio, costo, stock_actual, activo) VALUES ('Bocina 6x9', 1000, 600, 5, 1)");
 const [prod] = await bd.consultar("SELECT id FROM productos WHERE nombre = 'Bocina 6x9'");
@@ -102,7 +104,8 @@ assert.equal((await bd.consultar('SELECT stock_actual FROM productos WHERE id = 
 assert.equal(impresiones.length, 1, 'el ticket salió una sola vez y sin preguntar la impresora');
 const t = impresiones[0];
 assert.match(t, /size: 80mm auto/); assert.match(t, /Audio &lt;Pro&gt;/, 'el nombre se escapa'); assert.match(t, /Instalación &lt;b&gt;/);
-assert.match(t, new RegExp(venta.ncf)); assert.match(t, /Recibido/); assert.match(t, /Cambio/); assert.match(t, /Garantía/);
+assert.match(t, new RegExp(venta.ncf)); assert.match(t, /Recibido/); assert.match(t, /Cambio/); assert.match(t, /Garantía 6 meses, hasta/);
+assert.match(t, /<img class="logo" src="data:image\/png/, 'el ticket lleva el logo'); assert.match(t, /Tel\. 809-555-1234/); assert.match(t, /FACTURA DE CONSUMO/i); assert.match(t, /Gracias por su compra\./);
 assert.match(raiz.texto, /Por cobrar\s*$|Por cobrar(?!\s*\()/, 'ya no hay ventas por cobrar');
 ok('el cajero elige la forma de pago, cobra, nace la factura con NCF y el ticket de 80 mm sale solo con recibido y cambio');
 
@@ -118,7 +121,7 @@ assert.equal(selImp.value, imp.predeterminada('normal').id, 'la impresora predet
 assert.match(selImp.todos((x) => x.tag === 'option')[0].texto, /Brother Oficina \(predeterminada\)/);
 await boton('Imprimir').click(); await pend; await pausa(400);
 assert.equal(impresiones.length, 2);
-assert.match(impresiones[1], /size: A4/); assert.match(impresiones[1], /Taller Ruiz/); assert.match(impresiones[1], /Saldo pendiente/);
+assert.match(impresiones[1], /<img class="logo"/); assert.match(impresiones[1], /Garantía|Comprobante/); assert.doesNotMatch(impresiones[1], /size: 80mm/); assert.match(impresiones[1], /Taller Ruiz/); assert.match(impresiones[1], /Saldo pendiente/);
 ok('la factura a crédito sale del vendedor en impresora normal (A4), eligiendo la impresora con la predeterminada primero');
 
 // 5. Dos cajeros no cobran la misma venta
@@ -129,5 +132,6 @@ await assert.rejects(() => bd.cobrarPendiente(p2.id, { metodo_pago: 'efectivo' }
 assert.equal((await bd.listarPendientes()).length, 0);
 ok('una venta cancelada no se puede cobrar y sale de la lista');
 
+if (process.env.VOLCAR_IMPRESIONES) { const fs = await import('node:fs'); impresiones.forEach((h, i) => fs.writeFileSync(`${process.env.VOLCAR_IMPRESIONES}/impresion-${i}.html`, h)); }
 console.log(`\n${n} comprobaciones correctas`);
 process.exit(0);
