@@ -299,5 +299,85 @@ assert.ok((await cd.libroContable()).lineas.some((l) => l.origen === 'venta'));
 await assert.rejects(() => cd.guardarInicioConta('mañana'), /no es válida/);
 ok('la fecha de inicio contable deja fuera los documentos anteriores');
 
+// ---- activos fijos: revalorización y retiro con venta ----
+const cmo = await import('../src/conta-motor.js');
+await cd.crearActivo({ codigo: 'AF2', nombre: 'Máquina de soldar', categoria: 'Maquinaria y equipos', ubicacion: 'Taller', fecha_adq: '2027-01-10', costo: 12000, residual: 0, vida_meses: 12 });
+const maq = (await cd.listarActivos()).find((x) => x.codigo === 'AF2');
+assert.equal(maq.categoria, 'Maquinaria y equipos');
+await assert.rejects(() => cd.revalorizarActivo({ activo_id: maq.id, fecha: '2027-04-15', valor_nuevo: 10000 }), /igual al valor en libros/);
+await assert.rejects(() => cd.revalorizarActivo({ activo_id: maq.id, fecha: '2026-12-01', valor_nuevo: 50000 }), /antes de la compra/);
+const rv = await cd.revalorizarActivo({ activo_id: maq.id, fecha: '2027-04-15', valor_nuevo: 15000, nota: 'avalúo' });
+assert.deepEqual([rv.anterior, rv.ajuste], [10000, 5000]);
+const maq2 = (await cd.listarActivos()).find((x) => x.codigo === 'AF2');
+const dc = cmo.calendarioDepreciacion(maq2, '2028-12-31');
+assert.deepEqual(dc.slice(0, 4).map((x) => x.monto), [1000, 1000, 1500, 1500], 'antes 1,000 al mes; después de la revalorización 15,000 / 10 meses restantes');
+assert.equal(r2(dc.reduce((s, x) => s + x.monto, 0)), 17000, 'se deprecia todo el costo revalorizado');
+assert.deepEqual({ ...cmo.valoresActivo(maq2, '2027-06-30') }, { costo: 17000, dep: 6500, libros: 10500, retirado: false });
+const libR = await cd.libroContable({ hasta: '2027-06-30' });
+assert.equal(r2(libR.lineas.filter((l) => l.origen === 'revalorizacion' && l.cuenta_id === C['3501'].id).reduce((s, l) => s + l.haber, 0)), 5000, 'el aumento va a Superávit por revalorización');
+assert.equal(cm.balanceGeneral(libR.cuentas, libR.lineas, '2027-06-30').cuadra, true);
+await assert.rejects(() => cd.bajaActivo(maq.id, '2027-07-20', { motivo: 'venta', precio: 0 }), /precio de venta/);
+await assert.rejects(() => cd.bajaActivo(maq.id, '2027-03-01', { motivo: 'desecho' }), /revalorización posterior/);
+await cd.bajaActivo(maq.id, '2027-07-20', { motivo: 'venta', precio: 9000, nota: 'Vendida a Pedro' });
+const libV = await cd.libroContable({ hasta: '2027-12-31' });
+assert.equal(r2(libV.lineas.filter((l) => l.origen === 'baja' && l.cuenta_id === C['6299'].id).reduce((s, l) => s + l.debe, 0)), 10000 + 1500, 'pérdida del retiro: valor en libros 10,500 - 9,000 cobrado');
+assert.equal(cm.balanceGeneral(libV.cuentas, libV.lineas, '2027-12-31').cuadra, true);
+assert.equal(r2(cmo.calendarioDepreciacion((await cd.listarActivos()).find((x) => x.codigo === 'AF2'), '2028-12-31').reduce((s, x) => s + x.monto, 0)), 6500, 'deja de depreciar al retirarse');
+await assert.rejects(() => cd.revalorizarActivo({ activo_id: maq.id, fecha: '2027-08-01', valor_nuevo: 1 }), /dado de baja/);
+ok('la revalorización sube el valor y recalcula la depreciación; el retiro por venta registra ganancia o pérdida y el balance cuadra');
+
+// ---- tipos de depreciación, tipos de activo y tasa de inflación ----
+assert.equal((await cd.listarDepTipos()).length, 4, 'se siembran 4 tipos de depreciación de ejemplo');
+assert.equal((await cd.listarTiposActivo()).length, 8, 'se siembran 8 tipos de activo de ejemplo');
+await cd.guardarDepTipo({ nombre: 'Saldo decreciente 20%', metodo: 'saldo_decreciente', tasa_anual: 20 });
+await assert.rejects(() => cd.guardarDepTipo({ nombre: 'saldo decreciente 20%', metodo: 'saldo_decreciente', tasa_anual: 10 }), /Ya existe/);
+await assert.rejects(() => cd.guardarDepTipo({ nombre: 'Malo', metodo: 'saldo_decreciente', tasa_anual: 0 }), /entre 0 y 100/);
+const dep20 = (await cd.listarDepTipos()).find((d) => d.nombre === 'Saldo decreciente 20%');
+await cd.guardarTipoActivo({ nombre: 'Vehículos de reparto', vida_meses: 60, residual_pct: 10, dep_tipo_id: dep20.id });
+const tVeh = (await cd.listarTiposActivo()).find((t) => t.nombre === 'Vehículos de reparto');
+await cd.crearActivo({ codigo: 'AF3', nombre: 'Camión', fecha_adq: '2028-01-15', costo: 120000, residual: 12000, vida_meses: 60, tipo_id: tVeh.id });
+const camion = (await cd.listarActivos()).find((x) => x.codigo === 'AF3');
+assert.deepEqual([camion.categoria, camion.metodo_dep, camion.tasa_dep, camion.deprecia], ['Vehículos de reparto', 'saldo_decreciente', 20, 1]);
+const cs = cmo.calendarioDepreciacion(camion, '2028-04-30');
+assert.deepEqual(cs.map((x) => x.monto), [2000, 1966.67, 1933.89].map(r2), 'saldo decreciente: 20% / 12 del valor en libros de cada mes');
+const csTodo = cmo.calendarioDepreciacion(camion, '2100-12-31');
+assert.equal(r2(csTodo.reduce((x, d) => x + d.monto, 0)), 108000, 'nunca baja del valor residual');
+const libC = await cd.libroContable({ hasta: '2028-12-31' });
+assert.equal(cm.balanceGeneral(libC.cuentas, libC.lineas, '2028-12-31').cuadra, true);
+// terreno: no se deprecia
+const tTer = (await cd.listarTiposActivo()).find((t) => t.nombre === 'Terrenos');
+await cd.crearActivo({ codigo: 'AF4', nombre: 'Solar', fecha_adq: '2028-01-15', costo: 500000, vida_meses: 60, tipo_id: tTer.id });
+const solar = (await cd.listarActivos()).find((x) => x.codigo === 'AF4');
+assert.equal(cmo.calendarioDepreciacion(solar, '2030-12-31').length, 0);
+assert.equal(cmo.valoresActivo(solar, '2030-12-31').libros, 500000);
+// no se borra lo que está en uso; renombrar un tipo actualiza la categoría de sus activos
+await assert.rejects(() => cd.eliminarTipoActivo(tVeh.id), /Hay activos/);
+await assert.rejects(() => cd.eliminarDepTipo(dep20.id), /en uso/);
+await cd.guardarTipoActivo({ id: tVeh.id, nombre: 'Camiones', vida_meses: 60, residual_pct: 10, dep_tipo_id: dep20.id });
+assert.equal((await cd.listarActivos()).find((x) => x.codigo === 'AF3').categoria, 'Camiones');
+await cd.guardarDepTipo({ nombre: 'Temporal', metodo: 'lineal' });
+await cd.eliminarDepTipo((await cd.listarDepTipos()).find((d) => d.nombre === 'Temporal').id);
+// inflación
+await assert.rejects(() => cd.propuestaInflacion(2028), /No hay tasa/);
+await cd.guardarTasaInflacion({ anio: 2028, tasa: 5, fuente: 'Banco Central' });
+await cd.guardarTasaInflacion({ anio: 2028, tasa: 4, fuente: 'BCRD' });
+assert.equal((await cd.listarTasasInflacion()).length, 1, 'una tasa por año (se actualiza)');
+const prop = await cd.propuestaInflacion(2028);
+assert.equal(prop.tasa, 4);
+const pCam = prop.propuesta.find((p) => p.activo.codigo === 'AF3');
+assert.ok(pCam && pCam.ajuste > 0);
+assert.ok(!prop.propuesta.some((p) => p.activo.codigo === 'AF4'), 'los terrenos no se ajustan');
+assert.ok(!prop.propuesta.some((p) => p.activo.codigo === 'AF2'), 'los retirados no se ajustan');
+await assert.rejects(() => cd.aplicarInflacion(2028, []), /al menos un activo/);
+const nAj = await cd.aplicarInflacion(2028, [pCam.activo.id]);
+assert.equal(nAj, 1);
+const camion2 = (await cd.listarActivos()).find((x) => x.codigo === 'AF3');
+assert.equal(cmo.valoresActivo(camion2, '2028-12-31').libros, pCam.nuevo, 'el valor en libros queda subido por la tasa');
+assert.equal(camion2.revals[0].nota, 'Ajuste por inflación 2028 (4%)');
+assert.equal((await cd.propuestaInflacion(2028)).propuesta.some((p) => p.activo.codigo === 'AF3'), false, 'no se ajusta dos veces el mismo año');
+const libI = await cd.libroContable({ hasta: '2029-06-30' });
+assert.equal(cm.balanceGeneral(libI.cuentas, libI.lineas, '2029-06-30').cuadra, true);
+ok('tipos de depreciación y de activo (saldo decreciente, terrenos sin depreciar, uso protegido) y ajuste por inflación con el balance cuadrando');
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

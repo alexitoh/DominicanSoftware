@@ -67,6 +67,18 @@ export async function initDB() {
     'ALTER TABLE ventas ADD COLUMN ncf TEXT',
     'ALTER TABLE ventas ADD COLUMN cliente_nombre TEXT',
     'ALTER TABLE ventas ADD COLUMN cajero_id INTEGER',
+    'ALTER TABLE activos_fijos ADD COLUMN categoria TEXT',
+    'ALTER TABLE activos_fijos ADD COLUMN ubicacion TEXT',
+    'ALTER TABLE activos_fijos ADD COLUMN serie TEXT',
+    'ALTER TABLE activos_fijos ADD COLUMN baja_motivo TEXT',
+    'ALTER TABLE activos_fijos ADD COLUMN baja_precio REAL',
+    'ALTER TABLE activos_fijos ADD COLUMN baja_cuenta_id INTEGER REFERENCES cuentas_contables(id)',
+    'ALTER TABLE activos_fijos ADD COLUMN baja_nota TEXT',
+    'ALTER TABLE activos_fijos ADD COLUMN tipo_id INTEGER REFERENCES activos_tipos(id)',
+    'ALTER TABLE activos_fijos ADD COLUMN dep_tipo_id INTEGER REFERENCES dep_tipos(id)',
+    "ALTER TABLE activos_fijos ADD COLUMN metodo_dep TEXT NOT NULL DEFAULT 'lineal'",
+    'ALTER TABLE activos_fijos ADD COLUMN tasa_dep REAL',
+    'ALTER TABLE activos_fijos ADD COLUMN deprecia INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE conciliaciones ADD COLUMN conciliacion_id INTEGER REFERENCES conciliaciones_banco(id)',
     'ALTER TABLE caja ADD COLUMN conteo_cajero REAL',
     'ALTER TABLE caja ADD COLUMN conteo_fecha TEXT',
@@ -91,6 +103,7 @@ export async function initDB() {
   syncListo = n >= 60; // 3 por tabla sincronizada + 1 de usuarios
   if (!syncListo) console.warn(`Sincronización no disponible: solo ${n} triggers creados`);
   await sembrarCategorias();
+  await sembrarTiposActivo();
   await guardarWeb();
   return db;
 }
@@ -105,6 +118,26 @@ async function sembrarCategorias() {
     for (const c of CATEGORIAS_BASE) await ejecutar('INSERT OR IGNORE INTO categorias (nombre) VALUES (?)', [c]);
   }
   await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('categorias_sembradas', '1')");
+}
+
+// Tipos de activo y de depreciación de ejemplo: se siembran una sola vez (después el negocio los edita a su gusto)
+async function sembrarTiposActivo() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'tipos_activo_sembrados'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT (SELECT COUNT(*) FROM dep_tipos) + (SELECT COUNT(*) FROM activos_tipos) AS n');
+  if (n === 0) {
+    const deps = [['Línea recta', 'lineal', null, 'Cuota igual cada mes durante la vida útil.'],
+      ['Saldo decreciente 5% (DGII cat. 1)', 'saldo_decreciente', 5, 'Edificaciones. Porcentaje anual sobre el valor en libros.'],
+      ['Saldo decreciente 25% (DGII cat. 2)', 'saldo_decreciente', 25, 'Vehículos, computadoras y equipos de oficina.'],
+      ['Saldo decreciente 15% (DGII cat. 3)', 'saldo_decreciente', 15, 'Resto de activos.']];
+    for (const [nombre, metodo, tasa, notas] of deps) await ejecutar('INSERT OR IGNORE INTO dep_tipos (nombre, metodo, tasa_anual, notas) VALUES (?,?,?,?)', [nombre, metodo, tasa, notas]);
+    const tipos = [['Equipos de cómputo', 48, 1], ['Mobiliario y equipos de oficina', 120, 1], ['Vehículos', 60, 1], ['Maquinaria y equipos', 120, 1],
+      ['Herramientas', 36, 1], ['Edificaciones', 240, 1], ['Terrenos', 60, 0], ['Otros', 60, 1]];
+    for (const [nombre, vida, deprecia] of tipos) {
+      await ejecutar("INSERT OR IGNORE INTO activos_tipos (nombre, vida_meses, deprecia, dep_tipo_id) VALUES (?,?,?,(SELECT id FROM dep_tipos WHERE nombre = 'Línea recta'))", [nombre, vida, deprecia]);
+    }
+  }
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('tipos_activo_sembrados', '1')");
 }
 
 export async function listarCategorias() {

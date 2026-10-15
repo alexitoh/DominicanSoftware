@@ -107,10 +107,14 @@ export const TABLAS = [
     refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }],
   },
   { t: 'conciliaciones', cols: ['ref', 'fecha'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'conciliacion_id', tabla: 'conciliaciones_banco' }] },
+  { t: 'dep_tipos', cols: ['nombre', 'metodo', 'tasa_anual', 'notas', 'activo'], unicos: ['nombre'] },
+  { t: 'activos_tipos', cols: ['nombre', 'vida_meses', 'residual_pct', 'deprecia', 'notas', 'activo'], refs: [{ col: 'dep_tipo_id', tabla: 'dep_tipos' }], unicos: ['nombre'] },
+  { t: 'tasas_inflacion', cols: ['anio', 'tasa', 'fuente'], unicos: ['anio'] },
   {
-    t: 'activos_fijos', cols: ['codigo', 'nombre', 'fecha_adq', 'costo', 'residual', 'vida_meses', 'estado', 'fecha_baja', 'notas'],
-    refs: [{ col: 'contra_cuenta_id', tabla: 'cuentas_contables' }],
+    t: 'activos_fijos', cols: ['codigo', 'nombre', 'fecha_adq', 'costo', 'residual', 'vida_meses', 'estado', 'fecha_baja', 'notas', 'categoria', 'ubicacion', 'serie', 'baja_motivo', 'baja_precio', 'baja_nota', 'metodo_dep', 'tasa_dep', 'deprecia'],
+    refs: [{ col: 'contra_cuenta_id', tabla: 'cuentas_contables' }, { col: 'baja_cuenta_id', tabla: 'cuentas_contables' }, { col: 'tipo_id', tabla: 'activos_tipos' }, { col: 'dep_tipo_id', tabla: 'dep_tipos' }],
   },
+  { t: 'activos_reval', cols: ['fecha', 'valor_anterior', 'valor_nuevo', 'ajuste', 'nota'], refs: [{ col: 'activo_id', tabla: 'activos_fijos' }] },
   { t: 'empleados', cols: ['nombre', 'cedula', 'cargo', 'salario', 'fecha_ingreso', 'activo'], refs: [{ col: 'centro_id', tabla: 'centros_costo' }] },
   { t: 'nomina_corridas', cols: ['numero', 'periodo', 'fecha', 'estado', 'pagada', 'fecha_pago', 'metodo_pago', 'notas'], unicos: ['numero'] },
   {

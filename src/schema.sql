@@ -472,6 +472,36 @@ CREATE TABLE IF NOT EXISTS conciliaciones (
   conciliacion_id INTEGER REFERENCES conciliaciones_banco(id)
 );
 
+-- Tipos de depreciación: línea recta (según la vida útil del activo) o saldo decreciente (% anual sobre el valor en libros)
+CREATE TABLE IF NOT EXISTS dep_tipos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  metodo TEXT NOT NULL DEFAULT 'lineal', -- lineal | saldo_decreciente
+  tasa_anual REAL,
+  notas TEXT,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+-- Tipos de activo fijo: valores por defecto (vida útil, residual, método) que se copian al registrar un activo
+CREATE TABLE IF NOT EXISTS activos_tipos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  vida_meses INTEGER NOT NULL DEFAULT 60,
+  residual_pct REAL NOT NULL DEFAULT 0,
+  deprecia INTEGER NOT NULL DEFAULT 1,
+  dep_tipo_id INTEGER REFERENCES dep_tipos(id),
+  notas TEXT,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+-- Tasa de inflación anual (%) para ajustar el valor de los activos
+CREATE TABLE IF NOT EXISTS tasas_inflacion (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  anio INTEGER NOT NULL UNIQUE,
+  tasa REAL NOT NULL,
+  fuente TEXT
+);
+
 CREATE TABLE IF NOT EXISTS activos_fijos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   codigo TEXT,
@@ -483,7 +513,30 @@ CREATE TABLE IF NOT EXISTS activos_fijos (
   contra_cuenta_id INTEGER REFERENCES cuentas_contables(id),
   estado TEXT NOT NULL DEFAULT 'activo', -- activo | baja
   fecha_baja TEXT,
-  notas TEXT
+  notas TEXT,
+  categoria TEXT,
+  ubicacion TEXT,
+  serie TEXT,
+  baja_motivo TEXT,                 -- venta | desecho | perdida | donacion | baja
+  baja_precio REAL,                 -- lo cobrado si se vendió
+  baja_cuenta_id INTEGER REFERENCES cuentas_contables(id), -- dónde entró el dinero (por defecto Caja)
+  baja_nota TEXT,
+  tipo_id INTEGER REFERENCES activos_tipos(id),
+  dep_tipo_id INTEGER REFERENCES dep_tipos(id),
+  metodo_dep TEXT NOT NULL DEFAULT 'lineal',
+  tasa_dep REAL,
+  deprecia INTEGER NOT NULL DEFAULT 1
+);
+
+-- Revalorización: cambia el valor en libros de un activo a una fecha; la depreciación se recalcula sobre la vida restante
+CREATE TABLE IF NOT EXISTS activos_reval (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  activo_id INTEGER NOT NULL REFERENCES activos_fijos(id),
+  fecha TEXT NOT NULL,
+  valor_anterior REAL NOT NULL,
+  valor_nuevo REAL NOT NULL,
+  ajuste REAL NOT NULL,
+  nota TEXT
 );
 
 CREATE TABLE IF NOT EXISTS empleados (
@@ -565,6 +618,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('3201', 'Utilidades acumuladas', 'patrimonio', 0, 'utilidades_acum', NULL, 1),
   ('3301', 'Utilidad del ejercicio', 'patrimonio', 0, 'utilidad_ejercicio', NULL, 1),
   ('3401', 'Retiros del propietario', 'patrimonio', 0, NULL, NULL, 1),
+  ('3501', 'Superávit por revalorización de activos', 'patrimonio', 0, 'superavit_reval', NULL, 1),
   ('4', 'INGRESOS', 'ingreso', 1, NULL, NULL, 1),
   ('4101', 'Ventas de mercancía', 'ingreso', 0, 'ventas', NULL, 1),
   ('4102', 'Ingresos por servicios', 'ingreso', 0, 'servicios', NULL, 1),

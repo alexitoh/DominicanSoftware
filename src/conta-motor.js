@@ -28,21 +28,60 @@ export const rolMetodo = (metodo) => (['tarjeta', 'transferencia', 'cheque'].inc
 
 // ---------- Depreciación (línea recta, mensual) ----------
 // Empieza el mes siguiente a la adquisición y se registra el último día de cada mes. Termina al agotar la vida útil o al dar de baja.
+// Si el activo se revalorizó (a.revals), desde el mes siguiente a esa fecha se deprecia el nuevo valor en libros sobre la vida que le queda.
 export function calendarioDepreciacion(a, hasta) {
-  const base = r2(a.costo - (a.residual || 0));
+  if (a.deprecia === 0) return []; // terrenos y otros activos que no se deprecian
+  if (a.metodo_dep === 'saldo_decreciente' && a.tasa_dep > 0) return calendarioSaldoDecreciente(a, hasta);
   const vida = Math.max(1, parseInt(a.vida_meses, 10) || 1);
-  const cuota = r2(base / vida);
+  const residual = a.residual || 0;
+  const revs = [...(a.revals || [])].sort((x, y) => (x.fecha < y.fecha ? -1 : x.fecha > y.fecha ? 1 : (x.id || 0) - (y.id || 0)));
+  let cuota = r2((a.costo - residual) / vida);
+  let libros = a.costo;
+  let ri = 0;
   const out = [];
-  let acum = 0;
   for (let k = 1; k <= vida; k++) {
     const fecha = finDeMes(sumarMeses(dia(a.fecha_adq).slice(0, 7), k));
     if (fecha > hasta) break;
     if (a.estado === 'baja' && a.fecha_baja && fecha > dia(a.fecha_baja)) break;
-    const monto = k === vida ? r2(base - acum) : cuota;
-    acum = r2(acum + monto);
+    while (ri < revs.length && revs[ri].fecha < fecha) {
+      libros = r2(revs[ri].valor_nuevo);
+      cuota = r2(Math.max(0, libros - residual) / (vida - k + 1));
+      ri++;
+    }
+    const monto = k === vida ? r2(Math.max(0, libros - residual)) : cuota;
+    libros = r2(libros - monto);
     out.push({ fecha, monto });
   }
   return out;
+}
+
+// Saldo decreciente: cada mes se deprecia (tasa anual / 12) del valor en libros al inicio del mes, sin bajar del valor residual.
+function calendarioSaldoDecreciente(a, hasta) {
+  const residual = a.residual || 0;
+  const tasa = a.tasa_dep / 100 / 12;
+  const revs = [...(a.revals || [])].sort((x, y) => (x.fecha < y.fecha ? -1 : x.fecha > y.fecha ? 1 : (x.id || 0) - (y.id || 0)));
+  let libros = a.costo;
+  let ri = 0;
+  const out = [];
+  for (let k = 1; k <= 1200; k++) {
+    const fecha = finDeMes(sumarMeses(dia(a.fecha_adq).slice(0, 7), k));
+    if (fecha > hasta) break;
+    if (a.estado === 'baja' && a.fecha_baja && fecha > dia(a.fecha_baja)) break;
+    while (ri < revs.length && revs[ri].fecha < fecha) { libros = r2(revs[ri].valor_nuevo); ri++; }
+    const monto = r2(Math.min(libros - residual, libros * tasa));
+    if (!(monto >= 0.01)) break;
+    libros = r2(libros - monto);
+    out.push({ fecha, monto });
+  }
+  return out;
+}
+
+// Costo (con revalorizaciones), depreciación acumulada y valor en libros de un activo a una fecha
+export function valoresActivo(a, fecha) {
+  const retirado = a.estado === 'baja' && a.fecha_baja && dia(a.fecha_baja) <= fecha;
+  const costo = r2(a.costo + (a.revals || []).filter((r) => r.fecha <= fecha).reduce((s, r) => s + r.ajuste, 0));
+  const dep = r2(calendarioDepreciacion(a, fecha).reduce((s, d) => s + d.monto, 0));
+  return { costo, dep, libros: retirado ? 0 : r2(costo - dep), retirado: !!retirado };
 }
 
 // ---------- Asientos automáticos ----------
@@ -108,10 +147,22 @@ export function asientosAutomaticos(f, { inicio = '', hasta = '9999-12-31' } = {
       if (!depPorMes.has(k)) depPorMes.set(k, []);
       depPorMes.get(k).push({ a, monto: d.monto });
     }
+    for (const rv of a.revals || []) {
+      const aj = r2(rv.ajuste);
+      add('revalorizacion', `A${a.id}-R${rv.uid || rv.id}`, rv.fecha, `Revalorización de activo: ${a.nombre}`, aj >= 0
+        ? [{ rol: 'activo_fijo', debe: aj }, { rol: 'superavit_reval', haber: aj }]
+        : [{ rol: 'gasto_otros', debe: -aj }, { rol: 'activo_fijo', haber: -aj }]);
+    }
     if (a.estado === 'baja' && a.fecha_baja) {
-      const acum = r2(calendarioDepreciacion(a, dia(a.fecha_baja)).reduce((s, d) => s + d.monto, 0));
-      add('baja', `A${a.id}`, a.fecha_baja, `Baja de activo: ${a.nombre}`, [
-        { rol: 'dep_acumulada', debe: acum }, { rol: 'gasto_otros', debe: r2(a.costo - acum) }, { rol: 'activo_fijo', haber: a.costo },
+      const v = valoresActivo(a, dia(a.fecha_baja));
+      const precio = r2(a.baja_precio || 0);
+      const dif = r2(v.costo - v.dep - precio); // valor en libros menos lo cobrado: pérdida si es positivo, ganancia si es negativo
+      const motivo = { venta: 'Venta', desecho: 'Desecho', perdida: 'Pérdida o robo', donacion: 'Donación' }[a.baja_motivo];
+      add('baja', `A${a.id}`, a.fecha_baja, `${motivo ? `${motivo} de activo` : 'Baja de activo'}: ${a.nombre}`, [
+        { rol: 'dep_acumulada', debe: v.dep },
+        a.baja_cuenta_id ? { cuenta_id: a.baja_cuenta_id, debe: precio } : { rol: 'caja', debe: precio },
+        { rol: 'gasto_otros', debe: dif > 0 ? dif : 0 }, { rol: 'otros_ingresos', haber: dif < 0 ? -dif : 0 },
+        { rol: 'activo_fijo', haber: v.costo },
       ]);
     }
   }

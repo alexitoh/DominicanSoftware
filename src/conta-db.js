@@ -1,7 +1,7 @@
 // conta-db.js - capa de datos de Contabilidad: catálogo, asientos, bancos, activos, nómina, presupuestos y cierres.
 import { consultar, ejecutar, transaccion, numeroDocumento, redondear, usuarioId } from './database.js';
 import {
-  asientosAutomaticos, construirLibro, validarAsiento, asientoCierre, mapaRoles, finDeMes, r2,
+  asientosAutomaticos, construirLibro, validarAsiento, asientoCierre, mapaRoles, finDeMes, r2, valoresActivo, calendarioDepreciacion,
 } from './conta-motor.js';
 import { calcularNomina, paramsDesde } from './conta-nomina.js';
 import { TIPOS_CUENTA, ROLES } from './conta-plan.js';
@@ -150,7 +150,8 @@ export async function cargarFuentes() {
   const compras = await q(`SELECT c.numero, c.fecha, c.total, c.itbis, c.estado, p.nombre AS proveedor FROM compras c LEFT JOIN proveedores p ON p.id = c.proveedor_id`);
   const pagosCompra = await q(`SELECT COALESCE(p.uid, p.id) AS id, c.numero AS compra_numero, p.fecha, p.monto, p.metodo FROM pagos_compra p JOIN compras c ON c.id = p.compra_id`);
   const gastos = await q('SELECT COALESCE(uid, id) AS id, fecha, concepto, categoria, monto, itbis, metodo FROM gastos');
-  const activos = await q('SELECT * FROM activos_fijos');
+  const revs = await q('SELECT * FROM activos_reval ORDER BY fecha, id');
+  const activos = (await q('SELECT * FROM activos_fijos')).map((a) => ({ ...a, revals: revs.filter((r) => r.activo_id === a.id) }));
   const corridas = await q('SELECT * FROM nomina_corridas');
   const tots = await q(`SELECT corrida_id, SUM(salario) AS salario, SUM(otros_ingresos) AS otros_ingresos, SUM(afp) AS afp, SUM(sfs) AS sfs, SUM(isr) AS isr,
       SUM(otros_desc) AS otros_desc, SUM(neto) AS neto, SUM(afp_pat) AS afp_pat, SUM(sfs_pat) AS sfs_pat, SUM(srl_pat) AS srl_pat, SUM(infotep) AS infotep
@@ -329,8 +330,15 @@ export async function deshacerConciliacion(id) {
 }
 
 // ---------- Activos fijos ----------
-export const listarActivos = () => consultar('SELECT * FROM activos_fijos ORDER BY estado, fecha_adq DESC, id DESC');
-export async function crearActivo({ codigo = '', nombre, fecha_adq, costo, residual = 0, vida_meses, contra_cuenta_id = null, notas = '' }) {
+export const MOTIVOS_RETIRO = { venta: 'Venta', desecho: 'Desecho u obsolescencia', perdida: 'Pérdida o robo', donacion: 'Donación' };
+export const CATEGORIAS_ACTIVO = ['Equipos de cómputo', 'Mobiliario y equipos de oficina', 'Vehículos', 'Maquinaria y equipos', 'Herramientas', 'Edificaciones', 'Terrenos', 'Otros'];
+
+export async function listarActivos() {
+  const activos = await consultar('SELECT * FROM activos_fijos ORDER BY estado, fecha_adq DESC, id DESC');
+  const revs = await consultar('SELECT * FROM activos_reval ORDER BY fecha, id');
+  return activos.map((a) => ({ ...a, revals: revs.filter((r) => r.activo_id === a.id) }));
+}
+export async function crearActivo({ codigo = '', nombre, fecha_adq, costo, residual = 0, vida_meses, contra_cuenta_id = null, notas = '', categoria = '', ubicacion = '', serie = '', tipo_id = null, dep_tipo_id = null }) {
   if (!String(nombre || '').trim()) throw new Error('Escribe el nombre del activo.');
   await exigirPeriodoAbierto(fecha_adq);
   costo = redondear(costo); residual = redondear(residual || 0);
@@ -338,16 +346,151 @@ export async function crearActivo({ codigo = '', nombre, fecha_adq, costo, resid
   if (!(residual >= 0) || residual >= costo) throw new Error('El valor residual debe ser menor que el costo.');
   vida_meses = parseInt(vida_meses, 10);
   if (!(vida_meses >= 1 && vida_meses <= 600)) throw new Error('La vida útil debe estar entre 1 y 600 meses.');
-  await ejecutar('INSERT INTO activos_fijos (codigo, nombre, fecha_adq, costo, residual, vida_meses, contra_cuenta_id, notas) VALUES (?,?,?,?,?,?,?,?)',
-    [codigo.trim() || null, nombre.trim(), fecha_adq, costo, residual, vida_meses, contra_cuenta_id, notas.trim() || null]);
+  // El tipo de activo aporta el nombre de categoría, si se deprecia y el tipo de depreciación; ese se copia al activo (cambiar el tipo después no reescribe el pasado)
+  let deprecia = 1;
+  if (tipo_id) {
+    const [t] = await consultar('SELECT * FROM activos_tipos WHERE id = ?', [tipo_id]);
+    if (!t) throw new Error('El tipo de activo no existe.');
+    deprecia = t.deprecia ? 1 : 0;
+    if (!String(categoria).trim()) categoria = t.nombre;
+    if (!dep_tipo_id) dep_tipo_id = t.dep_tipo_id;
+  }
+  let metodo = 'lineal', tasa = null;
+  if (dep_tipo_id) {
+    const [d] = await consultar('SELECT * FROM dep_tipos WHERE id = ?', [dep_tipo_id]);
+    if (!d) throw new Error('El tipo de depreciación no existe.');
+    metodo = d.metodo; tasa = d.metodo === 'saldo_decreciente' ? d.tasa_anual : null;
+  }
+  await ejecutar('INSERT INTO activos_fijos (codigo, nombre, fecha_adq, costo, residual, vida_meses, contra_cuenta_id, notas, categoria, ubicacion, serie, tipo_id, dep_tipo_id, metodo_dep, tasa_dep, deprecia) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    [codigo.trim() || null, nombre.trim(), fecha_adq, costo, residual, vida_meses, contra_cuenta_id, notas.trim() || null, categoria.trim() || null, ubicacion.trim() || null, serie.trim() || null,
+      tipo_id || null, dep_tipo_id || null, metodo, tasa, deprecia]);
 }
-export async function bajaActivo(id, fecha) {
-  const [a] = await consultar('SELECT * FROM activos_fijos WHERE id = ?', [id]);
+// Datos descriptivos: no tocan la contabilidad
+export async function actualizarActivo(id, { codigo = '', nombre, categoria = '', ubicacion = '', serie = '', notas = '' }) {
+  if (!String(nombre || '').trim()) throw new Error('Escribe el nombre del activo.');
+  await ejecutar('UPDATE activos_fijos SET codigo = ?, nombre = ?, categoria = ?, ubicacion = ?, serie = ?, notas = ? WHERE id = ?',
+    [codigo.trim() || null, nombre.trim(), categoria.trim() || null, ubicacion.trim() || null, serie.trim() || null, notas.trim() || null, id]);
+}
+// Retiro: venta (con lo cobrado), desecho, pérdida/robo o donación. La ganancia o pérdida sale contra el valor en libros a esa fecha.
+export async function bajaActivo(id, fecha, { motivo = null, precio = 0, cuenta_id = null, nota = '' } = {}) {
+  const [a] = (await listarActivos()).filter((x) => x.id === id);
   if (!a) throw new Error('El activo no existe.');
   if (a.estado === 'baja') throw new Error('El activo ya está dado de baja.');
+  if (!fecha) throw new Error('Elige la fecha del retiro.');
   if (fecha < a.fecha_adq) throw new Error('La baja no puede ser antes de la compra.');
+  if (a.revals.some((r) => r.fecha > fecha)) throw new Error('Hay una revalorización posterior a esa fecha.');
+  if (motivo && !MOTIVOS_RETIRO[motivo]) throw new Error('Motivo de retiro no válido.');
+  precio = motivo === 'venta' ? redondear(precio || 0) : 0;
+  if (!(precio >= 0)) throw new Error('El precio de venta no puede ser negativo.');
+  if (motivo === 'venta' && !(precio > 0)) throw new Error('Escribe el precio de venta.');
   await exigirPeriodoAbierto(fecha);
-  await ejecutar("UPDATE activos_fijos SET estado = 'baja', fecha_baja = ? WHERE id = ?", [fecha, id]);
+  await ejecutar("UPDATE activos_fijos SET estado = 'baja', fecha_baja = ?, baja_motivo = ?, baja_precio = ?, baja_cuenta_id = ?, baja_nota = ? WHERE id = ?",
+    [fecha, motivo, precio || null, precio ? cuenta_id : null, nota.trim() || null, id]);
+}
+// Revalorización: fija un nuevo valor en libros. La diferencia va a Superávit por revalorización (si sube) o a pérdida (si baja),
+// y desde el mes siguiente se deprecia el nuevo valor durante la vida que queda.
+export async function revalorizarActivo({ activo_id, fecha, valor_nuevo, nota = '' }) {
+  const [a] = (await listarActivos()).filter((x) => x.id === activo_id);
+  if (!a) throw new Error('El activo no existe.');
+  if (a.estado === 'baja') throw new Error('El activo está dado de baja.');
+  if (!fecha) throw new Error('Elige la fecha de la revalorización.');
+  if (fecha < a.fecha_adq) throw new Error('La fecha no puede ser antes de la compra.');
+  if (a.revals.some((r) => r.fecha > fecha)) throw new Error('Ya hay una revalorización posterior a esa fecha.');
+  valor_nuevo = redondear(valor_nuevo);
+  if (!(valor_nuevo >= 0) || String(valor_nuevo) === 'NaN') throw new Error('Escribe el nuevo valor en libros.');
+  if (valor_nuevo < redondear(a.residual || 0)) throw new Error('El nuevo valor no puede ser menor que el valor residual.');
+  await exigirPeriodoAbierto(fecha);
+  const v = valoresActivo(a, fecha);
+  const ajuste = redondear(valor_nuevo - v.libros);
+  if (Math.abs(ajuste) < 0.005) throw new Error('El nuevo valor es igual al valor en libros actual.');
+  await ejecutar('INSERT INTO activos_reval (activo_id, fecha, valor_anterior, valor_nuevo, ajuste, nota) VALUES (?,?,?,?,?,?)',
+    [activo_id, fecha, v.libros, valor_nuevo, ajuste, nota.trim() || null]);
+  return { anterior: v.libros, nuevo: valor_nuevo, ajuste };
+}
+
+// ---------- Tipos de depreciación, tipos de activo y tasas de inflación ----------
+export const METODOS_DEP = { lineal: 'Línea recta', saldo_decreciente: 'Saldo decreciente' };
+
+export const listarDepTipos = () => consultar('SELECT * FROM dep_tipos ORDER BY activo DESC, nombre COLLATE NOCASE');
+export async function guardarDepTipo({ id = null, nombre, metodo = 'lineal', tasa_anual = null, notas = '', activo = 1 }) {
+  nombre = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!nombre) throw new Error('Escribe el nombre del tipo de depreciación.');
+  if (!METODOS_DEP[metodo]) throw new Error('Elige el método de depreciación.');
+  let tasa = null;
+  if (metodo === 'saldo_decreciente') {
+    tasa = Number(tasa_anual);
+    if (!(tasa > 0 && tasa <= 100)) throw new Error('El porcentaje anual debe estar entre 0 y 100.');
+  }
+  const [dup] = await consultar('SELECT id FROM dep_tipos WHERE lower(nombre) = lower(?) AND id <> ?', [nombre, id || 0]);
+  if (dup) throw new Error('Ya existe un tipo de depreciación con ese nombre.');
+  if (id) await ejecutar('UPDATE dep_tipos SET nombre = ?, metodo = ?, tasa_anual = ?, notas = ?, activo = ? WHERE id = ?', [nombre, metodo, tasa, notas.trim() || null, activo ? 1 : 0, id]);
+  else await ejecutar('INSERT INTO dep_tipos (nombre, metodo, tasa_anual, notas, activo) VALUES (?,?,?,?,?)', [nombre, metodo, tasa, notas.trim() || null, activo ? 1 : 0]);
+}
+export async function eliminarDepTipo(id) {
+  const [{ n }] = await consultar('SELECT (SELECT COUNT(*) FROM activos_tipos WHERE dep_tipo_id = ?) + (SELECT COUNT(*) FROM activos_fijos WHERE dep_tipo_id = ?) AS n', [id, id]);
+  if (n) throw new Error('Está en uso por tipos de activo o activos. Desactívalo en lugar de eliminarlo.');
+  await ejecutar('DELETE FROM dep_tipos WHERE id = ?', [id]);
+}
+
+export const listarTiposActivo = () => consultar(
+  `SELECT t.*, d.nombre AS dep_nombre, (SELECT COUNT(*) FROM activos_fijos a WHERE a.tipo_id = t.id) AS n_activos
+     FROM activos_tipos t LEFT JOIN dep_tipos d ON d.id = t.dep_tipo_id ORDER BY t.activo DESC, t.nombre COLLATE NOCASE`);
+export async function guardarTipoActivo({ id = null, nombre, vida_meses = 60, residual_pct = 0, deprecia = 1, dep_tipo_id = null, notas = '', activo = 1 }) {
+  nombre = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!nombre) throw new Error('Escribe el nombre del tipo de activo.');
+  vida_meses = parseInt(vida_meses, 10);
+  if (!(vida_meses >= 1 && vida_meses <= 600)) throw new Error('La vida útil debe estar entre 1 y 600 meses.');
+  residual_pct = Number(residual_pct || 0);
+  if (!(residual_pct >= 0 && residual_pct < 100)) throw new Error('El valor residual debe ser un porcentaje menor a 100.');
+  const [dup] = await consultar('SELECT id FROM activos_tipos WHERE lower(nombre) = lower(?) AND id <> ?', [nombre, id || 0]);
+  if (dup) throw new Error('Ya existe un tipo de activo con ese nombre.');
+  const campos = [nombre, vida_meses, residual_pct, deprecia ? 1 : 0, dep_tipo_id || null, notas.trim() || null, activo ? 1 : 0];
+  if (id) {
+    await ejecutar('UPDATE activos_tipos SET nombre = ?, vida_meses = ?, residual_pct = ?, deprecia = ?, dep_tipo_id = ?, notas = ?, activo = ? WHERE id = ?', [...campos, id]);
+    await ejecutar('UPDATE activos_fijos SET categoria = ? WHERE tipo_id = ?', [nombre, id]); // la categoría que se ve en listados y reportes sigue el nombre
+  } else await ejecutar('INSERT INTO activos_tipos (nombre, vida_meses, residual_pct, deprecia, dep_tipo_id, notas, activo) VALUES (?,?,?,?,?,?,?)', campos);
+}
+export async function eliminarTipoActivo(id) {
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM activos_fijos WHERE tipo_id = ?', [id]);
+  if (n) throw new Error('Hay activos de este tipo. Desactívalo en lugar de eliminarlo.');
+  await ejecutar('DELETE FROM activos_tipos WHERE id = ?', [id]);
+}
+
+export const listarTasasInflacion = () => consultar('SELECT * FROM tasas_inflacion ORDER BY anio DESC');
+export async function guardarTasaInflacion({ anio, tasa, fuente = '' }) {
+  anio = parseInt(anio, 10);
+  if (!(anio >= 1990 && anio <= 2100)) throw new Error('Escribe un año válido.');
+  tasa = Number(tasa);
+  if (!Number.isFinite(tasa) || tasa <= -100 || tasa > 1000) throw new Error('Escribe la tasa de inflación en porcentaje (por ejemplo 4.5).');
+  const [ya] = await consultar('SELECT id FROM tasas_inflacion WHERE anio = ?', [anio]);
+  if (ya) await ejecutar('UPDATE tasas_inflacion SET tasa = ?, fuente = ? WHERE id = ?', [tasa, fuente.trim() || null, ya.id]);
+  else await ejecutar('INSERT INTO tasas_inflacion (anio, tasa, fuente) VALUES (?,?,?)', [anio, tasa, fuente.trim() || null]);
+}
+export const eliminarTasaInflacion = (id) => ejecutar('DELETE FROM tasas_inflacion WHERE id = ?', [id]);
+
+// Ajuste por inflación: propone subir el valor en libros de cada activo (que se deprecia y tenga valor) por la tasa del año, al 31 de diciembre.
+export async function propuestaInflacion(anio) {
+  const [t] = await consultar('SELECT * FROM tasas_inflacion WHERE anio = ?', [anio]);
+  if (!t) throw new Error(`No hay tasa de inflación registrada para ${anio}.`);
+  const fecha = `${anio}-12-31`;
+  const propuesta = [];
+  for (const a of await listarActivos()) {
+    if (a.estado !== 'activo' || a.fecha_adq > fecha || a.deprecia === 0) continue;
+    if (a.revals.some((r) => r.fecha >= fecha)) continue;
+    const v = valoresActivo(a, fecha);
+    if (!(v.libros > 0)) continue;
+    const nuevo = redondear(v.libros * (1 + t.tasa / 100));
+    if (Math.abs(nuevo - v.libros) < 0.005) continue;
+    propuesta.push({ activo: a, libros: v.libros, nuevo, ajuste: redondear(nuevo - v.libros) });
+  }
+  return { tasa: t.tasa, fecha, propuesta };
+}
+export async function aplicarInflacion(anio, activoIds) {
+  const { tasa, fecha, propuesta } = await propuestaInflacion(anio);
+  const elegidos = propuesta.filter((p) => activoIds.includes(p.activo.id));
+  if (!elegidos.length) throw new Error('Elige al menos un activo.');
+  for (const p of elegidos) await revalorizarActivo({ activo_id: p.activo.id, fecha, valor_nuevo: p.nuevo, nota: `Ajuste por inflación ${anio} (${tasa}%)` });
+  return elegidos.length;
 }
 
 // ---------- Empleados y nómina ----------

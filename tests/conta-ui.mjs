@@ -126,6 +126,14 @@ await pulsar(boton(rb, 'Nueva cuenta bancaria')); await pulsar(rb.todos((x) => x
 assert.ok(textoDe(document.body).includes('Conciliación'));
 const rac = new Nodo('div'); await vistaActivos(rac); await pausa();
 await pulsar(boton(rac, 'Nuevo activo fijo')); await pulsar(rac.todos((x) => x.className.includes('fila'))[0]);
+// Las cinco secciones de Activos fijos abren, con el activo creado en la lista
+for (const [seccion, texto] of [['Depreciación', 'Depreciación de'], ['Reportes AF', 'Reporte'], ['Retiro', 'Activos retirados'], ['Revalorización', 'Revalorizaciones hechas'], ['Tasa de Inflación', 'Nueva tasa de inflación'], ['Tipo de Activo Fijo', 'Nuevo tipo de activo'], ['Tipo de Depreciación', 'Nuevo tipo de depreciación'], ['Activo Fijo', 'Nuevo activo fijo']]) {
+  const tab = rac.todos((x) => x.tag === 'button' && x.attrs.role === 'tab' && x.texto.includes(seccion))[0];
+  assert.ok(tab, 'falta la sección ' + seccion);
+  await pulsar(tab); await pausa();
+  assert.ok(textoDe(rac).includes(texto), `la sección ${seccion} debe mostrar "${texto}"`);
+  if (/Inflación|Tipo de/.test(seccion)) await pulsar(boton(rac, texto)); // abre el formulario de alta
+}
 const rn = new Nodo('div'); await vistaNomina(rn); await pausa();
 await pulsar(boton(rn, 'Nueva nómina')); await pulsar(boton(rn, 'Parámetros')); await pulsar(boton(rn, 'Nuevo empleado'));
 await pulsar(rn.todos((x) => x.className.includes('fila'))[0]);

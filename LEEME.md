@@ -237,3 +237,9 @@ Cada negocio tiene sus propias categorías (se guardan en su base y se sincroniz
 
 ## Conciliación bancaria
 Contabilidad → Bancos → toca una cuenta → **Nueva conciliación**. Pones la fecha de corte y el saldo final de tu estado de cuenta, y marcas los movimientos que ya aparecen en él. Lo que no marcas queda "en tránsito" (depósitos o cheques que el banco aún no refleja). El sistema calcula: saldo del estado de cuenta + depósitos en tránsito − cheques en circulación = saldo bancario ajustado, que debe ser igual al saldo en libros. Si hay diferencia, falta registrar algo que el banco hizo (comisión, interés, nota de débito/crédito): usa "Registrar movimiento" y vuelve. Solo se puede finalizar cuando cuadra; queda en el historial de la cuenta y se puede deshacer la última.
+
+## Activos fijos (Contabilidad → Activos fijos)
+Ocho secciones: **Activo Fijo**, **Depreciación**, **Reportes AF**, **Retiro**, **Revalorización**, **Tasa de Inflación**, **Tipo de Activo Fijo** y **Tipo de Depreciación**.
+- **Tipo de Depreciación:** línea recta (cuotas iguales según la vida útil) o saldo decreciente (% anual sobre el valor en libros, sin bajar del residual). Vienen de ejemplo línea recta y saldo decreciente 5 %, 25 % y 15 % (categorías de la DGII); se editan y se crean otros.
+- **Tipo de Activo Fijo:** trae vida útil, % de valor residual y tipo de depreciación por defecto (los terrenos no se deprecian). Al registrar un activo eliges el tipo y esos valores se copian al activo; cambiar el tipo después no reescribe activos viejos.
+- **Tasa de Inflación:** una tasa por año. "Ajustar activos" propone subir el valor en libros de cada activo por esa tasa al 31 de diciembre; es una revalorización (la diferencia va a Superávit por revalorización) y no se aplica dos veces el mismo año. Confirma la tasa y el tratamiento fiscal con tu contador.
