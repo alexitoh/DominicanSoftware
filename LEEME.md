@@ -301,3 +301,8 @@ Doce secciones, igual que CxC (todo lo de cuentas por pagar vive aquí; Compras 
 - **Solicitud Compras** → **Requisición Cotización** (cuadro comparativo, ★ = menor precio, "Ordenar a" genera la orden) → Orden de Compras.
 - **Tipo de Suplidor**: catálogo.
 Notas de crédito/débito y anticipos aún no salen en el 606; un anticipo en efectivo no entra al cuadre del cajero.
+
+### Órdenes de compra y condición del suplidor
+- Cada suplidor tiene condición **Contado** o **Crédito + días** (Contabilidad → CxP → Suplidor, o su ficha en Proveedores). Se propone sola en sus órdenes y facturas.
+- **Órdenes de compra** se generan desde Compras (botón "Órdenes de compra") o desde CxP → Orden de Compras. Cada una lleva su forma de pago (contado o crédito N días).
+- Flujo: Pendiente → **Autorizar despacho** (permiso "Autorizar órdenes de compra": administrador y gerente) → **Imprimir orden** (documento para llevar al suplidor) → **Recibir** (abre la factura ya llena con esa forma de pago) → Recibida.

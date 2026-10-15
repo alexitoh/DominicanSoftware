@@ -442,16 +442,24 @@ export async function adjudicarRequisicion({ requisicion_id, proveedor_id, entre
 }
 
 // ---------- Orden de compras ----------
-export const ESTADOS_ORDEN = { pendiente: 'Pendiente', recibida: 'Recibida', anulada: 'Anulada' };
-export async function crearOrden({ proveedor_id, items, entrega = '', notas = '', requisicion_id = null, fecha = hoy() }) {
+export const ESTADOS_ORDEN = { pendiente: 'Pendiente de autorizar', autorizada: 'Autorizada', recibida: 'Recibida', anulada: 'Anulada' };
+// condicion: 'contado' o 'credito' (si no se indica, la del suplidor). dias_credito: plazo si es a crédito (si no se indica, el del suplidor o 30)
+export async function crearOrden({ proveedor_id, items, entrega = '', notas = '', requisicion_id = null, fecha = hoy(), condicion = null, dias_credito = null }) {
   if (!fechaValida(fecha)) throw new Error('La fecha no es válida.');
   if (entrega && !fechaValida(entrega)) throw new Error('La fecha de entrega no es válida.');
-  const [p] = await consultar('SELECT id FROM proveedores WHERE id = ?', [proveedor_id]);
+  const [p] = await consultar('SELECT id, condicion, dias_credito FROM proveedores WHERE id = ?', [proveedor_id]);
   if (!p) throw new Error('Elige el suplidor.');
+  const cond = condicion || p.condicion || 'contado';
+  if (!['contado', 'credito'].includes(cond)) throw new Error('La forma de pago debe ser contado o crédito.');
+  let dias = null;
+  if (cond === 'credito') {
+    dias = dias_credito === '' || dias_credito == null ? (p.dias_credito ?? 30) : Number(dias_credito);
+    if (!Number.isInteger(dias) || dias < 0 || dias > 365) throw new Error('Los días de crédito deben ser un número entero entre 0 y 365.');
+  }
   const ls = await lineasValidas(items, { conCosto: true });
   const numero = await numeroDocumento('OC', 'siguiente_numero_orden');
-  const set = [{ statement: 'INSERT INTO ordenes_compra (numero, fecha, proveedor_id, entrega, requisicion_id, notas, usuario_id) VALUES (?,?,?,?,?,?,?)',
-    values: [numero, fecha, proveedor_id, entrega || null, requisicion_id || null, limpio(notas) || null, usuarioId()] }];
+  const set = [{ statement: 'INSERT INTO ordenes_compra (numero, fecha, proveedor_id, entrega, condicion, dias_credito, requisicion_id, notas, usuario_id) VALUES (?,?,?,?,?,?,?,?,?)',
+    values: [numero, fecha, proveedor_id, entrega || null, cond, dias, requisicion_id || null, limpio(notas) || null, usuarioId()] }];
   for (const l of ls) set.push({ statement: 'INSERT INTO orden_detalle (orden_id, producto_id, cantidad, costo_unitario) VALUES ((SELECT id FROM ordenes_compra WHERE numero = ?), ?, ?, ?)', values: [numero, l.producto_id, l.cantidad, l.costo_unitario] });
   set.push(contador('siguiente_numero_orden'));
   await transaccion(set);
@@ -463,23 +471,41 @@ export const listarOrdenes = () => consultar(
           (SELECT COALESCE(SUM(d.cantidad * d.costo_unitario), 0) FROM orden_detalle d WHERE d.orden_id = o.id) AS total
      FROM ordenes_compra o JOIN proveedores p ON p.id = o.proveedor_id LEFT JOIN compras c ON c.id = o.compra_id ORDER BY o.id DESC LIMIT 500`);
 export async function detalleOrden(id) {
-  const [o] = await consultar('SELECT o.*, p.nombre AS proveedor, c.numero AS factura FROM ordenes_compra o JOIN proveedores p ON p.id = o.proveedor_id LEFT JOIN compras c ON c.id = o.compra_id WHERE o.id = ?', [id]);
+  const [o] = await consultar('SELECT o.*, p.nombre AS proveedor, p.telefono AS proveedor_tel, p.direccion AS proveedor_dir, p.documento AS proveedor_doc, c.numero AS factura FROM ordenes_compra o JOIN proveedores p ON p.id = o.proveedor_id LEFT JOIN compras c ON c.id = o.compra_id WHERE o.id = ?', [id]);
   if (!o) throw new Error('La orden no existe.');
   const items = await consultar('SELECT d.*, p.nombre FROM orden_detalle d JOIN productos p ON p.id = d.producto_id WHERE d.orden_id = ? ORDER BY d.id', [id]);
   return { ...o, items, total: r2(items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0)) };
 }
+// Autorizar el despacho: el suplidor puede entregar la mercancía en la forma de pago de la orden (contado o crédito con sus días)
+export async function autorizarOrden(id) {
+  const [o] = await consultar('SELECT estado FROM ordenes_compra WHERE id = ?', [id]);
+  if (!o) throw new Error('La orden no existe.');
+  if (o.estado !== 'pendiente') throw new Error('Solo se puede autorizar una orden pendiente.');
+  const [u] = usuarioId() ? await consultar('SELECT nombre FROM usuarios WHERE id = ?', [usuarioId()]) : [];
+  await ejecutar("UPDATE ordenes_compra SET estado = 'autorizada', autorizado_por = ?, autorizada_fecha = ? WHERE id = ?", [u?.nombre || 'Administrador', hoy(), id]);
+}
 export async function anularOrden(id) {
   const [o] = await consultar('SELECT estado FROM ordenes_compra WHERE id = ?', [id]);
   if (!o) throw new Error('La orden no existe.');
-  if (o.estado !== 'pendiente') throw new Error('Solo se puede anular una orden pendiente.');
+  if (!['pendiente', 'autorizada'].includes(o.estado)) throw new Error('Solo se puede anular una orden que aún no se ha recibido.');
   await ejecutar("UPDATE ordenes_compra SET estado = 'anulada' WHERE id = ?", [id]);
 }
-// Se llama cuando la factura del suplidor ya se registró (la orden queda recibida y enlazada a esa factura)
+// Se llama cuando la factura del suplidor ya se registró (la orden queda recibida y enlazada a esa factura). Solo las órdenes autorizadas se reciben.
 export async function marcarOrdenRecibida(id, numeroCompra) {
   const [o] = await consultar('SELECT estado FROM ordenes_compra WHERE id = ?', [id]);
   if (!o) throw new Error('La orden no existe.');
-  if (o.estado !== 'pendiente') throw new Error('La orden ya no está pendiente.');
+  if (o.estado !== 'autorizada') throw new Error('La orden debe estar autorizada para recibirla.');
   const [c] = await consultar('SELECT id FROM compras WHERE numero = ?', [numeroCompra]);
   if (!c) throw new Error('No se encontró la factura del suplidor.');
   await ejecutar("UPDATE ordenes_compra SET estado = 'recibida', compra_id = ? WHERE id = ?", [c.id, id]);
+}
+
+// Condición de pago de un suplidor: contado o crédito con sus días (lo que se propone en sus órdenes de compra y facturas)
+export async function guardarCondicionProveedor(proveedorId, { condicion, dias = null }) {
+  const [p] = await consultar('SELECT id FROM proveedores WHERE id = ?', [proveedorId]);
+  if (!p) throw new Error('El suplidor no existe.');
+  if (condicion !== null && !['contado', 'credito'].includes(condicion)) throw new Error('La condición debe ser contado o crédito.');
+  let d = null;
+  if (condicion === 'credito') { d = Number(dias); if (!Number.isInteger(d) || d < 0 || d > 365) throw new Error('Los días deben ser un número entero entre 0 y 365.'); }
+  await ejecutar('UPDATE proveedores SET condicion = ?, dias_credito = ? WHERE id = ?', [condicion, d, proveedorId]);
 }

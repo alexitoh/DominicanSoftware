@@ -412,8 +412,12 @@ CREATE TABLE IF NOT EXISTS ordenes_compra (
   numero TEXT UNIQUE,
   fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
-  estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | recibida | anulada
+  estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | autorizada | recibida | anulada
   entrega TEXT,                             -- fecha esperada de entrega
+  condicion TEXT NOT NULL DEFAULT 'contado', -- contado | credito: cómo se autoriza el despacho
+  dias_credito INTEGER,                     -- plazo si es a crédito
+  autorizado_por TEXT,
+  autorizada_fecha TEXT,
   requisicion_id INTEGER REFERENCES requisiciones(id),
   compra_id INTEGER REFERENCES compras(id), -- la factura del suplidor con la que se recibió
   notas TEXT,

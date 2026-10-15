@@ -2,13 +2,13 @@
 // Factura Suplidor, Nota de Crédito, Nota de Débito, Orden de Compras, Suplidor, Anticipo CxP, Pago de Contado, Reporte CxP, Reporte Dinámico,
 // Requisición Cotización, Solicitud Compras y Tipo de Suplidor.
 import { h, hoja, toast, dinero } from './ui.js';
-import { proveedoresCxp, estadoCuentaProveedor, listarTiposProveedor, guardarTipoProveedor, eliminarTipoProveedor, guardarTipoDeProveedor } from './cxp-db.js';
+import { proveedoresCxp, estadoCuentaProveedor, listarTiposProveedor, guardarTipoProveedor, eliminarTipoProveedor, guardarTipoDeProveedor, guardarCondicionProveedor } from './cxp-db.js';
 import { formularioProveedor } from './proveedores.js';
 import { formularioCompra } from './compras.js';
 import { seccionFacturas, seccionNotasProv, seccionAnticiposProv, seccionContado, abrirNotaProv, abrirAnticipoProv, formularioPagoProveedor, selectDe } from './cxp-docs.js';
 import { seccionSolicitudes, seccionRequisiciones, seccionOrdenes } from './cxp-compras.js';
 import { seccionReporteCxp, seccionDinamicoCxp } from './cxp-reportes.js';
-import { campo, texto, tabla, vacio, fechaCorta, limpiar, renglon } from './conta-ui-comun.js';
+import { campo, numero, texto, tabla, vacio, fechaCorta, limpiar, renglon } from './conta-ui-comun.js';
 
 export const SECCIONES_CXP = [
   ['factura', 'Factura Suplidor'], ['credito', 'Nota de Crédito'], ['debito', 'Nota de Débito'], ['orden', 'Orden de Compras'], ['suplidor', 'Suplidor'], ['anticipo', 'Anticipo CxP'],
@@ -56,11 +56,19 @@ async function seccionSuplidor(raiz, recargar) {
     const e = await estadoCuentaProveedor(id);
     const p = e.proveedor;
     const tipo = selectDe(tipos.filter((t) => t.activo || t.id === p.tipo_proveedor_id).map((t) => [t.id, t.nombre]), { valor: p.tipo_proveedor_id ?? '', vacioTexto: 'Sin tipo', etiqueta: 'Tipo de suplidor' });
+    const cond = selectDe([['contado', 'Contado'], ['credito', 'Crédito']], { valor: p.condicion === 'credito' ? 'credito' : 'contado', etiqueta: 'Condición de pago' });
+    const dias = numero(String(p.dias_credito ?? 30), '30'); dias.setAttribute('step', '1'); dias.setAttribute('aria-label', 'Días de crédito');
+    const filaDias = campo('Días de crédito', dias);
+    const verDias = () => { filaDias.style.display = cond.value === 'credito' ? '' : 'none'; };
+    cond.addEventListener('change', verDias); verDias();
     const error = h('p', { class: 'error', role: 'alert' });
     const refrescar = async () => { cerrar(); await recargar(); };
     const cerrar = hoja(p.nombre, h('div', { class: 'cuerpo' },
       h('p', { class: 'ayuda' }, [p.telefono, p.documento && `Documento ${p.documento}`, p.condicion === 'credito' ? `Crédito ${p.dias_credito ?? 30} días` : p.condicion === 'contado' ? 'Contado' : null].filter(Boolean).join(' · ') || 'Sin datos de contacto'),
       h('div', { class: 'totales' }, renglon('Se le debe', dinero(e.saldo), 'gran'), renglon('Anticipos sin aplicar', dinero(e.anticiposDisponibles))),
+      campo('Condición de pago', cond), filaDias,
+      h('p', { class: 'ayuda' }, 'Se propone sola en sus órdenes de compra y facturas.'),
+      h('button', { class: 'btn', onClick: async () => { error.textContent = ''; try { await guardarCondicionProveedor(id, { condicion: cond.value, dias: dias.value }); toast('Condición guardada'); await refrescar(); } catch (x) { error.textContent = limpiar(x); } } }, 'Guardar condición'),
       campo('Tipo de suplidor', tipo), error,
       h('button', { class: 'btn', onClick: async () => { error.textContent = ''; try { await guardarTipoDeProveedor(id, Number(tipo.value) || null); toast('Tipo guardado'); await refrescar(); } catch (x) { error.textContent = limpiar(x); } } }, 'Guardar tipo'),
       h('h3', {}, 'Facturas pendientes'),

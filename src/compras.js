@@ -21,6 +21,8 @@ const margenDesde = (costo, precio) => (costo > 0 ? ((precio - costo) / costo) *
 const fmt = (n) => String(redondear(n));
 
 export async function vistaCompras(raiz) {
+  const ordenesRaiz = h('div', {});
+  const cargarOrdenes = async () => { const { seccionOrdenes } = await import('./cxp-compras.js'); await seccionOrdenes(ordenesRaiz, cargarOrdenes); };
   const estado = { periodo: 'hoy', rango: rangoInicial() };
   const resumen = h('dl', { class: 'resumen' });
   const lista = h('div', { class: 'lista' });
@@ -117,7 +119,9 @@ export async function vistaCompras(raiz) {
   raiz.replaceChildren(
     h('header', { class: 'barra' },
       h('h1', {}, 'Compras'),
-      h('button', { class: 'btn claro', onClick: () => formularioCompra(pintar) }, 'Nueva compra')),
+      h('div', { class: 'acciones' },
+        h('button', { class: 'btn claro', onClick: () => hoja('Órdenes de compra', h('div', { class: 'cuerpo' }, ordenesRaiz)) && cargarOrdenes() }, 'Órdenes de compra'),
+        h('button', { class: 'btn claro', onClick: () => formularioCompra(pintar) }, 'Nueva compra'))),
     resumen,
     h('div', { class: 'filtros' }, segmento, filaRango.el),
     lista);
@@ -395,6 +399,7 @@ export async function formularioCompra(alGuardar = () => {}, opciones = {}) {
   await cargarProveedores();
   if (opciones.proveedorId) { proveedor.value = String(opciones.proveedorId); aplicarCondicion(); }
   if (opciones.formaPago) { formaPago.value = opciones.formaPago; mostrarCredito(); }
+  if (opciones.plazo != null && formaPago.value === 'credito') plazo.value = String(opciones.plazo);
   for (const it of opciones.items || []) {
     const [p] = await consultar('SELECT * FROM productos WHERE id = ?', [it.producto_id]);
     if (!p) continue;

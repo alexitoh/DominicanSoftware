@@ -391,9 +391,17 @@ void lineaReq;
 limpiarHojas();
 await verCxp('Orden de Compras');
 assert.ok(textoDe(rxp).includes('OC-') && textoDe(rxp).includes('Suplidor CxP'));
+{ const auth = await import('../src/auth.js'); if (!auth.usuarioActual()) { await auth.registrarPropietario({ negocio: 'Prueba', nombre: 'Admin', usuario: 'admin', correo: 'a@b.com', clave: 'Clave-segura-123' }); await auth.iniciarSesion('admin', 'Clave-segura-123'); } }
 await pulsar(rxp.todos((x) => x.className.includes('fila') && x.texto.includes('OC-'))[0]);
 hx = document.body.hijos.at(-1);
-assert.ok(textoDe(hx).includes('Recibir (registrar factura)') && textoDe(hx).includes('Anular orden'));
+assert.ok(textoDe(hx).includes('Autorizar despacho') && textoDe(hx).includes('Anular orden') && textoDe(hx).includes('Imprimir orden'));
+assert.ok(!textoDe(hx).includes('Recibir (registrar factura)'), 'sin autorizar no se recibe');
+await pulsar(boton(hx, 'Autorizar despacho'));
+limpiarHojas();
+await verCxp('Orden de Compras');
+await pulsar(rxp.todos((x) => x.className.includes('fila') && x.texto.includes('OC-'))[0]);
+hx = document.body.hijos.at(-1);
+assert.ok(textoDe(hx).includes('Recibir (registrar factura)'));
 const stockAntes = (await bd.consultar('SELECT stock_actual FROM productos WHERE id = ?', [pCx]))[0].stock_actual;
 await pulsar(boton(hx, 'Recibir (registrar factura)'));
 hx = document.body.hijos.at(-1);

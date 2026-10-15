@@ -3,11 +3,13 @@ import { h, hoja, toast, dinero } from './ui.js';
 import {
   listarSolicitudes, detalleSolicitud, crearSolicitud, cambiarEstadoSolicitud, ESTADOS_SOLICITUD,
   listarRequisiciones, detalleRequisicion, crearRequisicion, guardarCotizacion, quitarCotizacion, anularRequisicion, adjudicarRequisicion, ESTADOS_REQUISICION,
-  listarOrdenes, detalleOrden, crearOrden, anularOrden, marcarOrdenRecibida, ESTADOS_ORDEN,
+  listarOrdenes, detalleOrden, crearOrden, anularOrden, autorizarOrden, marcarOrdenRecibida, ESTADOS_ORDEN,
 } from './cxp-db.js';
 import { consultar } from './database.js';
 import { fechaHoy } from './conta-db.js';
 import { formularioCompra } from './compras.js';
+import { tienePermiso } from './auth.js';
+import { imprimirOrdenCompra, textoPagoOrden } from './orden-compra-imp.js';
 import { selectDe } from './cxp-docs.js';
 import { campo, numero, fechaInput, texto, tabla, vacio, fechaCorta, limpiar, renglon } from './conta-ui-comun.js';
 
@@ -170,13 +172,23 @@ export async function seccionOrdenes(raiz, recargar) {
     if (!provs.length) { toast('Primero crea un suplidor'); return; }
     const ed = await editorLineas({ conCosto: true });
     const prov = selectDe(provs.map((p) => [p.id, p.nombre]), { etiqueta: 'Suplidor' });
+    const cond = selectDe([['contado', 'Contado'], ['credito', 'Crédito']], { etiqueta: 'Forma de pago' });
+    const dias = numero('30', '30'); dias.setAttribute('step', '1'); dias.setAttribute('aria-label', 'Días de crédito');
+    const filaDias = campo('Días de crédito', dias);
+    const verDias = () => { filaDias.style.display = cond.value === 'credito' ? '' : 'none'; };
+    const deSuplidor = async () => {
+      const [p] = await consultar('SELECT condicion, dias_credito FROM proveedores WHERE id = ?', [Number(prov.value)]);
+      cond.value = p?.condicion === 'credito' ? 'credito' : 'contado'; dias.value = String(p?.dias_credito ?? 30); verDias();
+    };
+    prov.addEventListener('change', deSuplidor); cond.addEventListener('change', verDias);
+    prov.value = String(provs[0].id); await deSuplidor();
     const entrega = fechaInput(''); const notas = texto('', 'Opcional'); const fecha = fechaInput(fechaHoy()); const error = h('p', { class: 'error', role: 'alert' });
     const cerrar = hoja('Nueva orden de compra', h('div', { class: 'cuerpo' },
-      h('p', { class: 'ayuda' }, 'Lo que le pides a un suplidor. No mueve inventario ni contabilidad: cuando llegue la mercancía, usa "Recibir" para registrar su factura.'),
-      campo('Suplidor', prov), h('div', { class: 'rejilla' }, campo('Fecha', fecha), campo('Entrega esperada', entrega)), campo('Notas', notas), ed.el, error,
+      h('p', { class: 'ayuda' }, 'Lo que le pides a un suplidor, con la forma de pago (contado o crédito) con que se autoriza el despacho. Se imprime para llevárselo. No mueve inventario ni contabilidad: cuando llegue la mercancía, usa "Recibir" para registrar su factura.'),
+      campo('Suplidor', prov), h('div', { class: 'rejilla' }, campo('Forma de pago', cond), filaDias), h('div', { class: 'rejilla' }, campo('Fecha', fecha), campo('Entrega esperada', entrega)), campo('Notas', notas), ed.el, error,
       h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: async () => {
         error.textContent = '';
-        try { const r = await crearOrden({ proveedor_id: Number(prov.value), items: ed.items(), entrega: entrega.value, notas: notas.value, fecha: fecha.value }); cerrar(); toast(`Orden ${r.numero} guardada`); await recargar(); }
+        try { const r = await crearOrden({ proveedor_id: Number(prov.value), items: ed.items(), entrega: entrega.value, notas: notas.value, fecha: fecha.value, condicion: cond.value, dias_credito: dias.value }); cerrar(); toast(`Orden ${r.numero} guardada`); await recargar(); }
         catch (e) { error.textContent = limpiar(e); }
       } }, 'Guardar orden'))));
   }
@@ -184,16 +196,18 @@ export async function seccionOrdenes(raiz, recargar) {
     const d = await detalleOrden(o.id);
     const error = h('p', { class: 'error', role: 'alert' });
     const cerrar = hoja(`Orden ${d.numero}`, h('div', { class: 'cuerpo' },
-      h('div', { class: 'totales' }, renglon('Total estimado', dinero(d.total), 'gran'), renglon('Estado', badge(d.estado, ESTADOS_ORDEN))),
+      h('div', { class: 'totales' }, renglon('Total estimado', dinero(d.total), 'gran'), renglon('Estado', badge(d.estado, ESTADOS_ORDEN)), renglon('Forma de pago', textoPagoOrden(d)), d.autorizado_por ? renglon('Autorizada por', `${d.autorizado_por} · ${fechaCorta(d.autorizada_fecha)}`) : null),
       h('p', { class: 'ayuda' }, [fechaCorta(d.fecha), d.proveedor, d.entrega && `Entrega ${fechaCorta(d.entrega)}`, d.factura && `Factura ${d.factura}`, d.notas].filter(Boolean).join(' · ')),
       tabla(['Producto', 'Cant.', 'Costo', 'Importe'], d.items.map((i) => [i.nombre, String(i.cantidad), dinero(i.costo_unitario), dinero(i.cantidad * i.costo_unitario)]), { num: [1, 2, 3] }), error,
-      d.estado === 'pendiente' ? h('div', { class: 'acciones' },
-        h('button', { class: 'btn primario', onClick: () => {
+      h('div', { class: 'acciones' },
+        d.estado !== 'anulada' ? h('button', { class: 'btn claro', onClick: async () => { try { await imprimirOrdenCompra(d.id); } catch (e) { error.textContent = limpiar(e); } } }, 'Imprimir orden') : null,
+        d.estado === 'pendiente' && tienePermiso('autorizar_compras') ? h('button', { class: 'btn primario', onClick: async () => { try { await autorizarOrden(d.id); cerrar(); toast('Despacho autorizado'); await recargar(); } catch (e) { error.textContent = limpiar(e); } } }, `Autorizar despacho (${textoPagoOrden(d)})`) : null,
+        d.estado === 'autorizada' ? h('button', { class: 'btn primario', onClick: () => {
           cerrar();
           formularioCompra(async (numeroCompra) => { try { await marcarOrdenRecibida(d.id, numeroCompra); } catch (e) { toast(limpiar(e), 'error'); } await recargar(); },
-            { proveedorId: d.proveedor_id, items: d.items.map((i) => ({ producto_id: i.producto_id, cantidad: i.cantidad, costo_unitario: i.costo_unitario })) });
-        } }, 'Recibir (registrar factura)'),
-        h('button', { class: 'btn peligro', onClick: async () => { try { await anularOrden(d.id); cerrar(); toast('Orden anulada'); await recargar(); } catch (e) { error.textContent = limpiar(e); } } }, 'Anular orden')) : null));
+            { proveedorId: d.proveedor_id, formaPago: d.condicion === 'credito' ? 'credito' : 'efectivo', plazo: d.dias_credito, items: d.items.map((i) => ({ producto_id: i.producto_id, cantidad: i.cantidad, costo_unitario: i.costo_unitario })) });
+        } }, 'Recibir (registrar factura)') : null,
+        ['pendiente', 'autorizada'].includes(d.estado) ? h('button', { class: 'btn peligro', onClick: async () => { try { await anularOrden(d.id); cerrar(); toast('Orden anulada'); await recargar(); } catch (e) { error.textContent = limpiar(e); } } }, 'Anular orden') : null)));
   }
   raiz.replaceChildren(
     h('p', { class: 'ayuda' }, 'Pedidos a suplidores. Al llegar la mercancía, "Recibir" abre la factura del suplidor ya llena para que solo confirmes: ahí entra al inventario.'),

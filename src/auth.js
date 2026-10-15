@@ -17,7 +17,7 @@ export const PERMISOS = [
   ['ventas', 'Ventas y cotizaciones'], ['productos', 'Productos'], ['inventario', 'Inventario'], ['compras', 'Compras'],
   ['caja', 'Caja'], ['clientes', 'Clientes'], ['proveedores', 'Proveedores'],
   ['garantias', 'Garantías'], ['reportes', 'Reportes'], ['contabilidad', 'Contabilidad'], ['finanzas', 'Finanzas'], ['ajustes', 'Ajustes y respaldo'],
-  ['anular', 'Anular ventas y compras'],
+  ['anular', 'Anular ventas y compras'], ['autorizar_compras', 'Autorizar órdenes de compra'],
 ];
 const TODOS = PERMISOS.map(([id]) => id);
 
