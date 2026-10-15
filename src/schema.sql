@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS ventas (
   estado TEXT NOT NULL DEFAULT 'completada',    -- completada | anulada
   notas TEXT,
   itbis REAL NOT NULL DEFAULT 0,
-  ncf TEXT
+  ncf TEXT,
+  cliente_nombre TEXT -- cliente ambulante de consumo (nombre suelto, sin ficha)
 );
 
 CREATE TABLE IF NOT EXISTS venta_detalle (

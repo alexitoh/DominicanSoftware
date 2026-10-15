@@ -39,7 +39,7 @@ await bd.registrarCompra({ proveedor_id: prov, ncf: 'B0100000001', itbis: 180, i
 // compra de 10 × 118 = 1180 (ITBIS 180): inventario 1000 al costo de 100
 await bd.ejecutar('UPDATE productos SET costo = 100 WHERE id = ?', [pid]);
 const v1 = await bd.registrarVenta({ items: [{ producto_id: pid, cantidad: 2, precio_unitario: 118 }] });               // contado 236 (ITBIS 36), costo 200
-const cli = await bd.ejecutar("INSERT INTO clientes (nombre) VALUES ('Taller Ruiz')");
+const cli = await bd.ejecutar("INSERT INTO clientes (nombre, condicion, dias_credito) VALUES ('Taller Ruiz', 'credito', 30)");
 const cid = (await uno("SELECT id FROM clientes WHERE nombre = 'Taller Ruiz'")).id;
 const v2 = await bd.registrarVenta({ cliente_id: cid, metodo_pago: 'credito', inicial: 50, dias_credito: 30, items: [{ producto_id: pid, cantidad: 3, precio_unitario: 118 }] }); // 354 (ITBIS 54), costo 300
 const vcre = (await uno('SELECT id FROM ventas WHERE numero = ?', [v2])).id;

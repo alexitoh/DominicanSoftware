@@ -46,6 +46,7 @@ nb.nube.consultarRNC = async (num) => {
   return p ? { encontrado: true, activo: p.activo, nombre: p.nombre, regimen: p.regimen, estado: p.estado || 'ACTIVO', rnc: num } : { encontrado: false };
 };
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo','adicional')");
+await bd.guardarSecuenciaNCF('B02', 1, 50); await bd.guardarSecuenciaNCF('B01', 1, 50);
 await bd.ejecutar("INSERT INTO clientes (nombre, telefono, direccion) VALUES ('Juan Pérez','809-555-0001','Calle 1')");
 await bd.ejecutar("INSERT INTO clientes (nombre, telefono, direccion) VALUES ('Juana Gómez','809-555-0002','Calle 2')");
 await bd.ejecutar("INSERT INTO clientes (nombre, tipo_doc, documento, telefono, direccion) VALUES ('Tienda Completa SRL','rnc','131000111','809-555-0003','Av. Principal 5')");
@@ -62,7 +63,7 @@ await raiz.todos((x) => x.tag === 'button' && x.texto.includes('Nueva venta'))[0
 const barra = porAria('Cliente'); const rnc = porAria('RNC del cliente');
 assert.ok(barra && barra.tag === 'input', 'el cliente es una barra de búsqueda');
 const sugerencias = () => hoja().todos((x) => x.attrs['aria-label'] === 'Sugerencias de clientes')[0];
-const nombres = () => sugerencias().todos((x) => x.tag === 'button').map((b) => b.todos((y) => y.tag === 'strong')[0].texto);
+const nombres = () => sugerencias().todos((x) => x.tag === 'button' && x.attrs['data-id'] !== undefined).map((b) => b.todos((y) => y.tag === 'strong')[0].texto);
 const comprobante = () => hoja().todos((x) => x.attrs['aria-label'] === 'Tipo de comprobante')[0];
 
 // 1. Sugerencias al escribir
@@ -129,6 +130,51 @@ await escribir(barra, 'zzz inexistente');
 await cobrar.click(); await pausa();
 assert.match(hoja().texto, /Elige un cliente de la lista/);
 ok('texto sin cliente elegido no se factura por error como cliente general');
+
+// 8. Cliente ambulante: el nombre suelto va en la factura sin crear cliente
+const clientesAntes = (await bd.consultar('SELECT COUNT(*) AS n FROM clientes'))[0].n;
+await escribir(barra, 'Pedro el del taller');
+const ambBtn = sugerencias().todos((x) => x.tag === 'button' && x.attrs['data-ambulante'])[0];
+assert.ok(ambBtn, 'se ofrece usar el nombre como cliente de consumo');
+await ambBtn.click(); await pausa();
+assert.match(hoja().texto, /Cliente de consumo \(ambulante\)/);
+assert.match(comprobante().options[0].textContent, /consumo \(B02\)/);
+await porAria('Método de pago').disparar('change');
+await cobrar.click(); await pausa();
+const [va] = await bd.consultar('SELECT * FROM ventas ORDER BY id DESC LIMIT 1');
+assert.equal(va.cliente_nombre, 'Pedro el del taller'); assert.equal(va.cliente_id, null);
+assert.equal((await bd.consultar('SELECT COUNT(*) AS n FROM clientes'))[0].n, clientesAntes, 'no se crea ficha de cliente');
+assert.match(va.ncf, /^B02/);
+ok('un nombre suelto se factura como cliente de consumo (B02) sin crear cliente');
+
+// 9. Crédito solo para clientes con crédito autorizado (condición Crédito y días)
+await bd.ejecutar("INSERT INTO productos (nombre, precio, costo, stock_actual, activo) VALUES ('Amplificador', 2000, 1200, 5, 1)");
+const abrir = async () => { await raiz.todos((x) => x.tag === 'button' && x.texto.includes('Nueva venta'))[0].click(); await pausa(); };
+await abrir();
+const b2 = porAria('Cliente');
+await escribir(b2, 'Juan'); await sugerencias().todos((x) => x.tag === 'button' && x.attrs['data-id'])[0].click(); await pausa();
+const sel = porAria('Método de pago'); sel.value = 'credito'; await sel.disparar('change'); await pausa();
+assert.match(hoja().texto, /no tiene crédito autorizado/);
+await hoja().todos((x) => x.className === 'resultado' && !x.attrs['data-id'])[0].click(); await pausa();
+await hoja().todos((x) => x.tag === 'button' && x.texto === 'Cobrar')[0].click(); await pausa();
+assert.match(hoja().texto, /no tiene crédito autorizado/);
+assert.equal((await bd.consultar("SELECT COUNT(*) AS n FROM ventas WHERE metodo_pago = 'credito'"))[0].n, 0);
+// Contabilidad le da crédito y ya puede
+await bd.ejecutar("UPDATE clientes SET condicion = 'credito', dias_credito = 45 WHERE nombre = 'Juan Pérez'");
+ok('a un cliente sin crédito autorizado no se le factura a crédito');
+
+// 10. Solo Contabilidad configura el crédito en el perfil del cliente
+const { formularioCliente } = await import('../src/clientes.js');
+const auth = await import('../src/auth.js');
+const camposCredito = () => { const d = document.body.todos((x) => x.attrs.role === 'dialog').pop(); return [...d.todos((x) => x.attrs['aria-label'] === 'Condición de pago'), ...d.todos((x) => x.attrs['aria-label'] === 'Días para pagar'), ...d.todos((x) => x.attrs['aria-label'] === 'Límite de crédito')]; };
+formularioCliente(null); await pausa();
+assert.ok(camposCredito().length === 3 && camposCredito().every((x) => x.disabled), 'sin permiso de Contabilidad el crédito no se edita');
+assert.match(document.body.todos((x) => x.attrs.role === 'dialog').pop().texto, /solo lo configura Contabilidad/);
+await auth.registrarPropietario({ negocio: 'Prueba', nombre: 'Admin', usuario: 'admin', correo: 'a@b.com', clave: 'Clave-segura-123' });
+await auth.iniciarSesion('admin', 'Clave-segura-123');
+formularioCliente(null); await pausa();
+assert.ok(camposCredito().every((x) => !x.disabled), 'con permiso de Contabilidad sí se edita');
+ok('el crédito del cliente solo lo configura quien tiene el permiso de Contabilidad');
 
 console.log(`\n${n} comprobaciones correctas`);
 process.exit(0);

@@ -104,7 +104,7 @@ await bd.ejecutar("UPDATE productos SET itbis_exento = 1 WHERE id = ?", [pid]);
 const v3 = await fila(await vender({}));
 assert.deepEqual([v3.itbis, v3.total], [0, 1000], 'producto exento no paga ITBIS');
 await bd.ejecutar("UPDATE productos SET itbis_exento = 0 WHERE id = ?", [pid]);
-await bd.ejecutar("UPDATE clientes SET limite_credito = 1100 WHERE id = ?", [sinRnc]);
+await bd.ejecutar("UPDATE clientes SET limite_credito = 1100, condicion = 'credito', dias_credito = 30 WHERE id = ?", [sinRnc]);
 await assert.rejects(vender({ cliente_id: sinRnc, metodo_pago: 'credito' }), /límite de crédito/, 'el límite de crédito cuenta el ITBIS (1,180 > 1,100)');
 await bd.guardarSecuenciaNCF('B02', 0, 0);
 await assert.rejects(vender({ cliente_id: sinRnc }), /no hay números disponibles/, 'sin secuencia no se vende sin comprobante');

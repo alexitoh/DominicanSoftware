@@ -91,7 +91,7 @@ export async function crearPDF(ventaId) {
   doc.text(L(`Fecha: ${fechaLegible(v.fecha)}`), M, y);
   doc.text(`${L('Pago')}: ${L(METODOS[v.metodo_pago] || v.metodo_pago)}`, DER, y, { align: 'right' });
   y += 5;
-  doc.text(`${L('Cliente')}: ${L(v.cliente || 'Cliente general')}`, M, y);
+  doc.text(`${L('Cliente')}: ${L(v.cliente || v.cliente_nombre || 'Cliente general')}`, M, y);
   if (v.cliente_tel) doc.text(L(`Tel. ${v.cliente_tel}`), DER, y, { align: 'right' });
   if (v.ncf) { y += 5; doc.text(`${L('Comprobante')}: ${L(tipoCpb || '')}`, M, y); doc.text(`NCF: ${v.ncf}`, DER, y, { align: 'right' }); }
   if (v.cliente_doc) { y += 5; doc.text(`${L(textoDocumento(v.cliente_tipo_doc, v.cliente_doc))}`, M, y); }

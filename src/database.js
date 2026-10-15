@@ -65,6 +65,7 @@ export async function initDB() {
     'ALTER TABLE productos ADD COLUMN itbis_exento INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE ventas ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
     'ALTER TABLE ventas ADD COLUMN ncf TEXT',
+    'ALTER TABLE ventas ADD COLUMN cliente_nombre TEXT',
     'ALTER TABLE compras ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
     'ALTER TABLE compras ADD COLUMN ncf TEXT',
     'ALTER TABLE gastos ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
@@ -141,7 +142,7 @@ export const margenDesde = (costo, precio) => (costo > 0 ? redondear(((precio - 
 export const margenProducto = (p) => (p.margen != null ? p.margen : margenDesde(p.costo, p.precio));
 
 // metodo_pago 'credito' = venta fiada: exige cliente y admite un pago inicial
-export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null, tipo_ncf = 'auto' }) {
+export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null, tipo_ncf = 'auto', cliente_nombre = '' }) {
   if (!items.length && !servicios.length) throw new Error('Agrega al menos un producto o servicio.');
   // Con la nube conectada no se factura sin internet (ni con comprobante ni sin él): así no se cruzan números entre equipos
   if (reservaNCF?.activo()) await reservaNCF.exigirConexion();
@@ -180,6 +181,13 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
   if (metodo_pago === 'credito') {
     if (!cliente_id) throw new Error('Para vender a crédito elige un cliente.');
     if (inicial < 0 || redondear(inicial) > total) throw new Error('El pago inicial no puede ser mayor que el total.');
+    // Solo se fía a clientes a los que Contabilidad les dio crédito (condición Crédito y días) en su perfil
+    const [cc] = await consultar('SELECT nombre, condicion, dias_credito FROM clientes WHERE id = ?', [cliente_id]);
+    if (!cc) throw new Error('El cliente no existe.');
+    if (cc.condicion !== 'credito' || cc.dias_credito == null) {
+      throw new Error(`${cc.nombre} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes (condición Crédito y días permitidos); mientras tanto la venta debe ser de contado.`);
+    }
+    dias_credito = cc.dias_credito; // los días permitidos los fija el perfil del cliente
     // Límite de crédito del cliente: lo que ya debe más lo que queda pendiente de esta venta no puede pasarlo
     const [lim] = await consultar('SELECT nombre, limite_credito FROM clientes WHERE id = ?', [cliente_id]);
     if (lim?.limite_credito > 0) {
@@ -203,9 +211,10 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     // 2. Guardar todo en una sola transacción
     const set = [
       {
-        statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId, itbis, ncf?.ncf ?? null],
+        statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf, cliente_nombre)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId, itbis, ncf?.ncf ?? null,
+          cliente_id ? null : (String(cliente_nombre || '').trim().slice(0, 80) || null)],
       },
     ];
     for (const it of items) {

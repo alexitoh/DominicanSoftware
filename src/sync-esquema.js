@@ -22,7 +22,7 @@ export const TABLAS = [
   },
   {
     t: 'ventas',
-    cols: ['numero', 'fecha', 'subtotal', 'descuento', 'total', 'metodo_pago', 'estado', 'notas', 'itbis', 'ncf'],
+    cols: ['numero', 'fecha', 'subtotal', 'descuento', 'total', 'metodo_pago', 'estado', 'notas', 'itbis', 'ncf', 'cliente_nombre'],
     refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }],
     unicos: ['numero'],
   },

@@ -170,6 +170,8 @@ Límites a tener presentes:
 - Todo cliente con RNC/cédula debe tener **teléfono y dirección** (obligatorios): aparece un aviso para llenarlos y no se puede cobrar hasta guardarlos (también aplica a clientes antiguos que no los tenían).
 - Al elegir un cliente con RNC se llena el campo RNC y el comprobante automático pasa a fiscal (B01, o el que corresponda por su régimen).
 - Si escribes texto sin elegir a nadie de la lista, no se factura como "Cliente general" por error: pide elegir o borrar.
+- **Cliente ambulante:** al escribir un nombre aparece "Usar «nombre» como cliente de consumo". Solo se anota el nombre en la factura (se ve en el listado, el detalle y el PDF); **no se crea ficha** y el comprobante es de consumo (B02). Las cotizaciones con nombre suelto lo conservan al convertirse en venta.
+- **Crédito solo autorizado:** no se factura a crédito a un cliente cuya condición no sea "Crédito" con días definidos. Esos parámetros (condición, días y límite) los configura únicamente quien tenga el permiso **Contabilidad** (Administrador y Gerente por defecto; Vendedor y Cajero no). Los días de la venta salen siempre del perfil del cliente. Los clientes que antes se fiaban sin condición definida quedan de contado hasta que Contabilidad les asigne el crédito.
 
 ## Tipo de comprobante y consulta de RNC en la DGII
 - **Al facturar** (si el ITBIS está activo): eliges *Automático*, B01 Crédito fiscal, B02 Consumo, B14 Régimen especial, B15 Gubernamental o *Sin comprobante*. B01, B14 y B15 exigen un cliente con RNC y una secuencia autorizada con números disponibles (Ajustes → Datos fiscales); si no, la venta se rechaza con el motivo y no gasta números.

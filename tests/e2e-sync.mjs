@@ -81,6 +81,7 @@ const cJuan = (await uno(A, "SELECT uid FROM clientes WHERE nombre = 'Juan'")).u
 A.run("UPDATE config SET valor = 'Audio Pro' WHERE clave = 'negocio_nombre'");
 await venderLocal(A, pA, 2, 'V-000001', cJuan); // stock P-1: 8
 A.run("INSERT INTO ventas (numero, cliente_id, subtotal, total, metodo_pago) VALUES ('V-000002', ?, 800, 800, 'credito')", [(await uno(A, 'SELECT id FROM clientes')).id]);
+A.run("UPDATE ventas SET cliente_nombre = 'Cliente ambulante X' WHERE numero = 'V-000001'");
 const vc = (await uno(A, "SELECT id FROM ventas WHERE numero = 'V-000002'")).id;
 A.run("INSERT INTO cuentas_cobrar (venta_id, vence) VALUES (?, '2030-01-31')", [vc]);
 A.run("INSERT INTO pagos (venta_id, monto, metodo, nota) VALUES (?, 200, 'efectivo', 'Inicial')", [vc]);
@@ -108,6 +109,7 @@ const detB = await uno(B, `SELECT p.nombre, d.cantidad, v.numero, c.nombre cli F
    JOIN productos p ON p.id = d.producto_id JOIN ventas v ON v.id = d.venta_id JOIN clientes c ON c.id = v.cliente_id`);
 assert.deepEqual({ ...detB }, { nombre: 'Bocina 6x9', cantidad: 2, numero: 'V-000001', cli: 'Juan' });
 assert.equal((await uno(B, 'SELECT SUM(monto) m FROM pagos p JOIN ventas v ON v.id = p.venta_id WHERE v.numero = ?', ['V-000002'])).m, 200);
+assert.equal((await uno(B, "SELECT cliente_nombre n FROM ventas WHERE numero = 'V-000001'")).n, 'Cliente ambulante X', 'el nombre del cliente ambulante viaja con la venta');
 assert.equal((await uno(B, 'SELECT vence FROM cuentas_cobrar')).vence, '2030-01-31');
 assert.equal((await uno(B, 'SELECT COUNT(*) n FROM categorias')).n, 6, 'categorías sin duplicar');
 assert.equal(await B.motor.pendientes(), 0, 'lo que baja no se marca como cambio propio');

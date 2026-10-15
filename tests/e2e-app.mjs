@@ -240,6 +240,8 @@ await bd.ejecutar("INSERT INTO clientes (nombre, tipo_doc, documento) VALUES ('E
 const cEmp = (await uno("SELECT id FROM clientes WHERE nombre = 'Empresa SRL'")).id;
 await bd.registrarVenta({ items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }] });                       // B02...01, ITBIS 18
 await bd.registrarVenta({ cliente_id: cEmp, items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }, { producto_id: pEx, cantidad: 1, precio_unitario: 100 }] }); // B01...10, ITBIS 18
+await assert.rejects(() => bd.registrarVenta({ cliente_id: cEmp, metodo_pago: 'credito', dias_credito: 15, items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }] }), /no tiene crédito autorizado/, 'sin crédito autorizado por Contabilidad no se fía');
+await bd.ejecutar("UPDATE clientes SET condicion = 'credito', dias_credito = 15 WHERE id = ?", [cEmp]);
 await bd.registrarVenta({ cliente_id: cEmp, metodo_pago: 'credito', dias_credito: 15, items: [{ producto_id: pGr, cantidad: 2, precio_unitario: 118 }] }); // B01...11, ITBIS 36
 await bd.registrarVenta({ items: [{ producto_id: pEx, cantidad: 1, precio_unitario: 100 }] });                       // B02...02, ITBIS 0
 await bd.registrarVenta({ items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }], metodo_pago: 'tarjeta' }); // sin secuencia: sin NCF

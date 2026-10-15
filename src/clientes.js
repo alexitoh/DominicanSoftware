@@ -4,6 +4,7 @@ import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
 import { hoyISO } from './fechas.js';
+import { tienePermiso } from './auth.js';
 import { buscarRNC } from './dgii.js';
 import { TIPOS_NCF, NOMBRE_COMPROBANTE, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
@@ -38,6 +39,13 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
   const documento = h('input', { class: 'campo', inputmode: 'text', autocomplete: 'off', placeholder: 'RNC, cédula o DNI', value: c?.documento ? formatearDocumento(c.tipo_doc, c.documento) : '', 'aria-label': 'Número de documento' });
   const limite = h('input', { class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: 'Sin límite', value: c?.limite_credito > 0 ? c.limite_credito : '', 'aria-label': 'Límite de crédito' });
   const condicion = campoCondicion(c);
+  // El crédito (condición, días y límite) solo lo define Contabilidad
+  const puedeCredito = tienePermiso('contabilidad');
+  if (!puedeCredito) {
+    for (const x of [...condicion.el.querySelectorAll('select'), ...condicion.el.querySelectorAll('input')]) x.disabled = true;
+    limite.disabled = true;
+  }
+  const avisoCredito = puedeCredito ? null : h('p', { class: 'ayuda' }, 'El crédito (condición, días y límite) solo lo configura Contabilidad. Sin crédito autorizado, este cliente paga de contado.');
   // Comprobante que se le da a este cliente: automático (según su RNC y su régimen en la DGII) o uno fijo
   let regimenDgii = c?.regimen_dgii ?? null;
   let reglas = REGLAS_COMPROBANTE_BASE;
@@ -143,6 +151,7 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       campo('Notas', notas),
       condicion.el,
       campo('Límite de crédito (0 o vacío = sin límite)', limite),
+      avisoCredito,
       error,
       h('div', { class: 'acciones' },
         nuevo ? null : h('button', { class: 'btn peligro', onClick: quitar }, 'Quitar cliente'),

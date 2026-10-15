@@ -85,7 +85,7 @@ export async function vistaVentas(raiz) {
     return h('button', { class: 'fila inventario', onClick: () => detalle(v.id) },
       h('span', { class: 'datos' },
         h('strong', {}, v.numero, anulada ? h('span', { class: 'anulada' }, ' (anulada)') : null),
-        h('small', {}, v.cliente || 'Cliente general'),
+        h('small', {}, v.cliente || v.cliente_nombre || 'Cliente general'),
         h('small', {}, `${v.fecha.slice(0, 16)}, ${METODOS[v.metodo_pago] || v.metodo_pago}`),
         credito ? h('small', { class: debe > 0.005 ? 'deuda' : 'pagada' }, debe > 0.005 ? `Debe ${dinero(debe)}` : 'Pagada') : null),
       h('span', { class: `precio${anulada ? ' tachado' : ''}` }, dinero(v.total)));
@@ -127,7 +127,7 @@ export async function vistaVentas(raiz) {
 
     cerrar = hoja(v.numero,
       h('div', { class: 'cuerpo' },
-        h('p', { class: 'ayuda' }, `${v.fecha.slice(0, 16)}, ${v.cliente || 'Cliente general'}, ${METODOS[v.metodo_pago] || v.metodo_pago}`),
+        h('p', { class: 'ayuda' }, `${v.fecha.slice(0, 16)}, ${v.cliente || v.cliente_nombre || 'Cliente general'}, ${METODOS[v.metodo_pago] || v.metodo_pago}`),
         v.ncf ? h('p', { class: 'ayuda' }, `${NOMBRE_COMPROBANTE[v.ncf.slice(0, 3)] || 'Comprobante'}, NCF ${v.ncf}`) : null,
         v.vendedor ? h('p', { class: 'ayuda' }, `Atendió: ${v.vendedor}`) : null,
         anulada ? h('p', { class: 'error' }, 'Esta venta está anulada.') : null,
@@ -196,6 +196,7 @@ export async function vistaVentas(raiz) {
     const clientesInfo = new Map();
     // Cliente: barra de búsqueda con sugerencias (por nombre, teléfono o RNC). `cliente.value` es el id elegido ('' = cliente general).
     let clienteSel = '';
+    let ambulante = ''; // nombre suelto de un cliente de consumo que no está en el sistema (no se guarda como cliente)
     const cliente = {
       get value() { return clienteSel; },
       set value(id) { seleccionarCliente(id); },
@@ -209,7 +210,7 @@ export async function vistaVentas(raiz) {
       onKeydown: (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
-        const primero = sugerencias.querySelector('button[data-id]');
+        const primero = sugerencias.querySelector('button[data-id]') || sugerencias.querySelector('button[data-ambulante]');
         if (primero) primero.click();
       },
     });
@@ -272,7 +273,7 @@ export async function vistaVentas(raiz) {
     async function escribiendoCliente() {
       const texto = buscaCliente.value.trim();
       const mio = ++tokenBusqueda;
-      if (clienteSel) { clienteSel = ''; rncRapido.value = ''; datosPendientes.replaceChildren(); tipoNcf.value = 'auto'; pintarTotales(); }
+      if (clienteSel || ambulante) { clienteSel = ''; ambulante = ''; rncRapido.value = ''; datosPendientes.replaceChildren(); tipoNcf.value = 'auto'; pintarTotales(); }
       estatusRnc.textContent = '';
       if (!texto) { sugerencias.replaceChildren(); return; }
       const num = limpiarDocumento(texto);
@@ -284,18 +285,35 @@ export async function vistaVentas(raiz) {
           WHERE nombre LIKE ? OR telefono LIKE ? OR documento LIKE ?
           ORDER BY (nombre LIKE ?) DESC, nombre LIMIT 8`, [like, like, likeNum, `${texto}%`]);
       if (mio !== tokenBusqueda) return; // llegó una búsqueda más reciente
-      sugerencias.replaceChildren(...(filas.length
-        ? filas.map((c) => h('button', { class: 'resultado', 'data-id': String(c.id), onClick: () => seleccionarCliente(c.id) },
-            h('span', { class: 'datos' }, h('strong', {}, c.nombre),
-              h('small', {}, [c.documento ? formatearDocumento(c.tipo_doc || 'rnc', c.documento) : '', c.telefono || ''].filter(Boolean).join(' · ') || 'Sin documento')),
-            ))
-        : [h('p', { class: 'vacio' }, 'No hay clientes con esa búsqueda. Escribe un RNC completo o toca "Nuevo".')]));
+      const lista = filas.map((c) => h('button', { class: 'resultado', 'data-id': String(c.id), onClick: () => seleccionarCliente(c.id) },
+        h('span', { class: 'datos' }, h('strong', {}, c.nombre),
+          h('small', {}, [c.documento ? formatearDocumento(c.tipo_doc || 'rnc', c.documento) : '', c.telefono || ''].filter(Boolean).join(' · ') || 'Sin documento'))));
+      // Nombre suelto: cliente de consumo que pasa una sola vez y no hace falta guardar
+      if (/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(texto)) {
+        lista.push(h('button', { class: 'resultado', 'data-ambulante': '1', onClick: () => usarAmbulante(texto) },
+          h('span', { class: 'datos' }, h('strong', {}, `Usar "${texto}" como cliente de consumo`), h('small', {}, 'Cliente ambulante: solo se anota el nombre en la factura, no se guarda en Clientes'))));
+      }
+      sugerencias.replaceChildren(...lista);
+    }
+
+    function usarAmbulante(texto) {
+      clienteSel = ''; ambulante = texto.trim().slice(0, 80);
+      tokenBusqueda++;
+      buscaCliente.value = ambulante;
+      rncRapido.value = '';
+      sugerencias.replaceChildren();
+      datosPendientes.replaceChildren();
+      tipoNcf.value = 'auto';
+      estatusRnc.className = 'ayuda';
+      estatusRnc.textContent = 'Cliente de consumo (ambulante): se anota solo el nombre en la factura. No se guarda en Clientes.';
+      pintarTotales();
     }
 
     // Elige un cliente (o ninguno): rellena la barra y el RNC, y el comprobante se ajusta solo
     function seleccionarCliente(id) {
       const c = clientesInfo.get(String(id));
       clienteSel = c ? String(id) : '';
+      ambulante = '';
       tokenBusqueda++;
       buscaCliente.value = c ? c.nombre : '';
       rncRapido.value = c?.documento ? formatearDocumento(c.tipo_doc || 'rnc', c.documento) : '';
@@ -354,6 +372,8 @@ export async function vistaVentas(raiz) {
       cs.forEach((c) => clientesInfo.set(String(c.id), c));
     }
 
+    const tieneCredito = (c) => c?.condicion === 'credito' && c.dias_credito != null;
+
     // Días que tendrá el cliente para pagar una venta a crédito (30 si no tiene condición definida)
     const diasCredito = () => {
       const c = clientesInfo.get(cliente.value);
@@ -361,7 +381,9 @@ export async function vistaVentas(raiz) {
     };
     function pintarAvisoCredito() {
       const c = clientesInfo.get(cliente.value);
+      if (metodo.value === 'credito' && !c) { avisoCredito.className = 'error'; avisoCredito.textContent = 'Para vender a crédito elige un cliente que tenga crédito autorizado.'; return; }
       if (metodo.value !== 'credito' || !c) { avisoCredito.textContent = ''; avisoCredito.className = 'ayuda'; return; }
+      if (!tieneCredito(c)) { avisoCredito.className = 'error'; avisoCredito.textContent = `${c.nombre} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes (condición Crédito y días permitidos). Cobra de contado.`; return; }
       const d = new Date();
       d.setDate(d.getDate() + diasCredito());
       const fecha = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
@@ -549,10 +571,11 @@ export async function vistaVentas(raiz) {
       const esCredito = metodo.value === 'credito';
       const total = redondear(sub - dto + itbisDe(sub, dto));
       const ini = esCredito ? Math.max(parseFloat(inicial.value) || 0, 0) : 0;
-      if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente.'; cliente.focus(); return; }
+      if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente con crédito autorizado.'; cliente.focus(); return; }
+      if (esCredito && !tieneCredito(clientesInfo.get(cliente.value))) { error.textContent = `${clientesInfo.get(cliente.value)?.nombre || 'Este cliente'} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes; mientras tanto cobra de contado.`; return; }
       if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return; }
 
-      if (buscaCliente.value.trim() && !cliente.value) { error.textContent = 'Elige un cliente de la lista, o borra la búsqueda para facturar a Cliente general.'; buscaCliente.focus(); return; }
+      if (buscaCliente.value.trim() && !cliente.value && ambulante !== buscaCliente.value.trim()) { error.textContent = 'Elige un cliente de la lista, usa el nombre como cliente de consumo, o borra la búsqueda para facturar a Cliente general.'; buscaCliente.focus(); return; }
       if (faltanDatos(clientesInfo.get(cliente.value))) { error.textContent = 'Completa el teléfono y la dirección del cliente antes de continuar.'; datosPendientes.querySelector('input')?.focus(); return; }
 
       // Comprobantes de crédito fiscal: el RNC del cliente debe estar ACTIVO en la DGII (si no se puede consultar, se deja pasar)
@@ -571,6 +594,7 @@ export async function vistaVentas(raiz) {
         const numero = await registrarVenta({
           tipo_ncf: cfgF.modo === 'no' ? 'ninguno' : (tipoNcf.value || 'auto'),
           cliente_id: cliente.value ? Number(cliente.value) : null,
+          cliente_nombre: cliente.value ? '' : ambulante,
           items: [...carrito.values()].map((l) => ({
             producto_id: l.p.id, cantidad: l.cantidad, precio_unitario: l.precio, descuento: 0,
             garantia_meses: l.garantia, serie: l.serie,
@@ -642,6 +666,7 @@ export async function vistaVentas(raiz) {
     // Llena el carrito con los productos y servicios de una cotización
     async function aplicarPrecarga() {
       if (precarga.cliente_id) cliente.value = String(precarga.cliente_id);
+      else if (precarga.cliente_nombre && /[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(precarga.cliente_nombre)) usarAmbulante(precarga.cliente_nombre);
       if (precarga.descuento > 0) descuento.value = String(precarga.descuento);
       const avisos = [];
       for (const it of precarga.items) {
@@ -670,7 +695,7 @@ export async function vistaVentas(raiz) {
     const det = await consultar('SELECT * FROM cotizacion_detalle WHERE cotizacion_id = ? ORDER BY id', [id]);
     const productos = det.filter((d) => d.producto_id);
     await nuevaVenta({
-      cotizacion_id: id, cliente_id: c.cliente_id, descuento: c.descuento, items: productos,
+      cotizacion_id: id, cliente_id: c.cliente_id, cliente_nombre: c.cliente_nombre, descuento: c.descuento, items: productos,
       servicios: det.filter((d) => !d.producto_id),
     });
   }

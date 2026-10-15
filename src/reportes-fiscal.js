@@ -139,7 +139,7 @@ export async function vistaImpuestos(raiz) {
       h('p', { class: 'ayuda' }, 'Antes de subir el archivo a la Oficina Virtual, pásalo por la herramienta de pre-validación de la DGII y revísalo con tu contador.'),
       d.sinNcf.length ? h('section', { class: 'seccion' }, h('h2', {}, 'Ventas sin NCF'),
         h('div', { class: 'lista' }, d.sinNcf.slice(0, 50).map((v) => h('button', { class: 'fila inventario', onClick: () => asignar(v, pintar) },
-          h('span', { class: 'datos' }, h('strong', {}, `${v.numero} · ${v.cliente || 'Cliente general'}`), h('small', {}, `${dd(v.fecha)} · toca para asignar NCF`)),
+          h('span', { class: 'datos' }, h('strong', {}, `${v.numero} · ${v.cliente || v.cliente_nombre || 'Cliente general'}`), h('small', {}, `${dd(v.fecha)} · toca para asignar NCF`)),
           h('span', { class: 'precio' }, dinero(v.total)))))) : null);
   }
   mes.addEventListener('change', pintar);
