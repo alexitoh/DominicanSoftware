@@ -9,7 +9,7 @@ import { imprimirContado, abrirImpresoras } from './impresion.js';
 import { sincronizarAhora } from './nube-app.js';
 import { usuarioActual } from './auth.js';
 
-const CATEGORIAS = [
+export const CATEGORIAS = [
   'Alquiler', 'Luz y agua', 'Internet y teléfono', 'Transporte', 'Sueldos', 'Pago a proveedor', 'Mantenimiento', 'Otros',
 ];
 const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque' };

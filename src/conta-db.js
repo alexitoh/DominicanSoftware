@@ -164,7 +164,9 @@ export async function cargarFuentes() {
   const cuentaDe = new Map(bancos.map((b) => [b.id, b.cuenta_id ?? rolBanco]));
   const movs = await q('SELECT * FROM banco_movs');
   const bancoMovs = movs.map((m) => ({ ...m, cuenta_banco_id: cuentaDe.get(m.banco_id), cuenta_destino_id: cuentaDe.get(m.banco_destino_id) }));
-  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, hoy: hoy() };
+  const cajasCh = new Map((await q('SELECT id, nombre FROM cajas_chicas')).map((c) => [c.id, c.nombre]));
+  const cajaChicaMovs = (await q('SELECT * FROM caja_chica_movs')).map((m) => ({ ...m, caja_nombre: cajasCh.get(m.caja_chica_id) || '', cuenta_banco_id: m.banco_id ? cuentaDe.get(m.banco_id) : null }));
+  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, hoy: hoy() };
 }
 
 // Libro completo hasta una fecha (por defecto hoy). Respeta la fecha de inicio contable.
@@ -327,6 +329,132 @@ export async function deshacerConciliacion(id) {
     { statement: 'DELETE FROM conciliaciones WHERE conciliacion_id = ?', values: [id] },
     { statement: 'DELETE FROM conciliaciones_banco WHERE id = ?', values: [id] },
   ]);
+}
+
+// ---------- Caja chica ----------
+// Fondo fijo con custodio. Saldo = fondos + reposiciones - desembolsos. Los desembolsos se gastan al momento (contra la cuenta Caja chica);
+// la reposición devuelve al fondo lo gastado, desde la Caja general o un banco. Los desembolsos con NCF entran al 606.
+export const TIPOS_CAJA_CHICA = { fondo: 'Fondo', desembolso: 'Desembolso', reposicion: 'Reposición' };
+
+async function nuevoNumeroCajaChica() { return numeroDocumento('CC', 'siguiente_numero_cajachica'); }
+
+export async function listarCajasChicas() {
+  const cajas = await consultar('SELECT * FROM cajas_chicas ORDER BY activa DESC, nombre COLLATE NOCASE');
+  const out = [];
+  for (const c of cajas) {
+    const [r] = await consultar(
+      `SELECT COALESCE(SUM(CASE WHEN tipo = 'fondo' THEN monto END), 0) AS fondo,
+              COALESCE(SUM(CASE WHEN tipo = 'reposicion' THEN monto END), 0) AS repuesto,
+              COALESCE(SUM(CASE WHEN tipo = 'desembolso' THEN monto END), 0) AS gastado,
+              COALESCE(SUM(CASE WHEN tipo = 'desembolso' AND reposicion_numero IS NULL THEN monto END), 0) AS por_reponer,
+              COALESCE(SUM(CASE WHEN tipo = 'desembolso' AND reposicion_numero IS NULL THEN 1 END), 0) AS n_por_reponer
+         FROM caja_chica_movs WHERE caja_chica_id = ? AND estado = 'vigente'`, [c.id]);
+    out.push({ ...c, fondo: r2(r.fondo), saldo: r2(r.fondo + r.repuesto - r.gastado), por_reponer: r2(r.por_reponer), n_por_reponer: r.n_por_reponer });
+  }
+  return out;
+}
+
+async function cajaChicaPorId(id) {
+  const [c] = (await listarCajasChicas()).filter((x) => x.id === id);
+  if (!c) throw new Error('La caja chica no existe.');
+  return c;
+}
+
+async function movimientoFondo({ caja_chica_id, tipo, fecha, monto, banco_id = null, concepto }) {
+  await exigirPeriodoAbierto(fecha);
+  const numero = await nuevoNumeroCajaChica();
+  await transaccion([{
+    statement: 'INSERT INTO caja_chica_movs (numero, caja_chica_id, fecha, tipo, concepto, monto, banco_id) VALUES (?,?,?,?,?,?,?)',
+    values: [numero, caja_chica_id, fecha, tipo, concepto, monto, banco_id || null],
+  }, contador('siguiente_numero_cajachica')]);
+  return numero;
+}
+
+// Crear (con su fondo inicial) o editar los datos de una caja chica
+export async function guardarCajaChica({ id = null, nombre, custodio = '', notas = '', activa = 1, fondo = 0, banco_id = null, fecha = hoy() }) {
+  nombre = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!nombre) throw new Error('Escribe el nombre de la caja chica.');
+  const [dup] = await consultar('SELECT id FROM cajas_chicas WHERE lower(nombre) = lower(?) AND id <> ?', [nombre, id || 0]);
+  if (dup) throw new Error('Ya existe una caja chica con ese nombre.');
+  if (id) {
+    await ejecutar('UPDATE cajas_chicas SET nombre = ?, custodio = ?, notas = ?, activa = ? WHERE id = ?', [nombre, custodio.trim() || null, notas.trim() || null, activa ? 1 : 0, id]);
+    return id;
+  }
+  fondo = redondear(fondo || 0);
+  if (!(fondo > 0)) throw new Error('Escribe el monto del fondo (mayor que cero).');
+  await exigirPeriodoAbierto(fecha);
+  await ejecutar('INSERT INTO cajas_chicas (nombre, custodio, notas, activa) VALUES (?,?,?,1)', [nombre, custodio.trim() || null, notas.trim() || null]);
+  const [{ nid }] = await consultar('SELECT id AS nid FROM cajas_chicas WHERE nombre = ?', [nombre]);
+  await movimientoFondo({ caja_chica_id: nid, tipo: 'fondo', fecha, monto: fondo, banco_id, concepto: 'Fondo inicial' });
+  return nid;
+}
+
+export async function aumentarFondo({ caja_chica_id, monto, banco_id = null, fecha = hoy() }) {
+  await cajaChicaPorId(caja_chica_id);
+  monto = redondear(monto || 0);
+  if (!(monto > 0)) throw new Error('Escribe cuánto aumenta el fondo.');
+  return movimientoFondo({ caja_chica_id, tipo: 'fondo', fecha, monto, banco_id, concepto: 'Aumento del fondo' });
+}
+
+export async function registrarDesembolso({ caja_chica_id, fecha, concepto, categoria = '', beneficiario = '', documento = '', comprobante = '', ncf = '', itbis = 0, monto }) {
+  const c = await cajaChicaPorId(caja_chica_id);
+  if (!c.activa) throw new Error('Esta caja chica está desactivada.');
+  if (!fecha) throw new Error('Elige la fecha.');
+  if (!String(concepto || '').trim()) throw new Error('Escribe el concepto del desembolso.');
+  monto = redondear(monto || 0); itbis = redondear(itbis || 0);
+  if (!(monto > 0)) throw new Error('El monto debe ser mayor que cero.');
+  if (itbis < 0 || itbis > monto) throw new Error('El ITBIS no puede ser mayor que el monto.');
+  if (monto > c.saldo + 0.004) throw new Error(`El fondo solo tiene ${c.saldo} disponible. Pide una reposición o aumenta el fondo.`);
+  await exigirPeriodoAbierto(fecha);
+  const numero = await nuevoNumeroCajaChica();
+  await transaccion([{
+    statement: `INSERT INTO caja_chica_movs (numero, caja_chica_id, fecha, tipo, concepto, categoria, beneficiario, documento, comprobante, ncf, itbis, monto)
+                VALUES (?,?,?,'desembolso',?,?,?,?,?,?,?,?)`,
+    values: [numero, caja_chica_id, fecha, concepto.trim(), categoria.trim() || 'Otros', beneficiario.trim() || null, documento.trim() || null, comprobante.trim() || null,
+      String(ncf || '').trim().toUpperCase() || null, itbis, monto],
+  }, contador('siguiente_numero_cajachica')]);
+  return numero;
+}
+
+export const desembolsosPorReponer = (caja_chica_id) => consultar(
+  "SELECT * FROM caja_chica_movs WHERE caja_chica_id = ? AND tipo = 'desembolso' AND estado = 'vigente' AND reposicion_numero IS NULL ORDER BY fecha, id", [caja_chica_id]);
+
+// Reposición: devuelve al fondo lo desembolsado (todos los pendientes o los elegidos) y los marca como repuestos
+export async function reponerCajaChica({ caja_chica_id, fecha = hoy(), banco_id = null, ids = null }) {
+  await cajaChicaPorId(caja_chica_id);
+  let pend = await desembolsosPorReponer(caja_chica_id);
+  if (ids) pend = pend.filter((d) => ids.includes(d.id));
+  if (!pend.length) throw new Error('No hay desembolsos pendientes de reponer.');
+  if (pend.some((d) => d.fecha > fecha)) throw new Error('La fecha de la reposición no puede ser anterior a un desembolso que repone.');
+  await exigirPeriodoAbierto(fecha);
+  const monto = redondear(pend.reduce((s, d) => s + d.monto, 0));
+  const numero = await nuevoNumeroCajaChica();
+  await transaccion([
+    { statement: "INSERT INTO caja_chica_movs (numero, caja_chica_id, fecha, tipo, concepto, monto, banco_id) VALUES (?,?,?,'reposicion',?,?,?)",
+      values: [numero, caja_chica_id, fecha, `Reposición de ${pend.length} ${pend.length === 1 ? 'desembolso' : 'desembolsos'}`, monto, banco_id || null] },
+    ...pend.map((d) => ({ statement: 'UPDATE caja_chica_movs SET reposicion_numero = ? WHERE id = ?', values: [numero, d.id] })),
+    contador('siguiente_numero_cajachica'),
+  ]);
+  return { numero, monto, cantidad: pend.length };
+}
+
+export async function anularMovCajaChica(id) {
+  const [m] = await consultar('SELECT * FROM caja_chica_movs WHERE id = ?', [id]);
+  if (!m) throw new Error('El movimiento no existe.');
+  if (m.estado !== 'vigente') throw new Error('El movimiento ya está anulado.');
+  await exigirPeriodoAbierto(m.fecha);
+  const c = await cajaChicaPorId(m.caja_chica_id);
+  if (m.tipo === 'desembolso' && m.reposicion_numero) throw new Error(`Ya fue repuesto en ${m.reposicion_numero}. Anula primero esa reposición.`);
+  if ((m.tipo === 'fondo' || m.tipo === 'reposicion') && c.saldo - m.monto < -0.004) throw new Error('No se puede anular: el fondo quedaría en negativo.');
+  const set = [{ statement: "UPDATE caja_chica_movs SET estado = 'anulado' WHERE id = ?", values: [id] }];
+  if (m.tipo === 'reposicion') set.push({ statement: 'UPDATE caja_chica_movs SET reposicion_numero = NULL WHERE reposicion_numero = ? AND caja_chica_id = ?', values: [m.numero, m.caja_chica_id] });
+  await transaccion(set);
+}
+
+export function movimientosCajaChica(caja_chica_id, { desde = '0000-00-00', hasta = '9999-12-31', todos = false } = {}) {
+  return consultar(
+    `SELECT * FROM caja_chica_movs WHERE caja_chica_id = ? AND fecha BETWEEN ? AND ? ${todos ? '' : "AND estado = 'vigente'"} ORDER BY fecha DESC, id DESC`,
+    [caja_chica_id, desde, hasta]);
 }
 
 // ---------- Activos fijos ----------

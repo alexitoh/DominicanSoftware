@@ -243,3 +243,11 @@ Ocho secciones: **Activo Fijo**, **Depreciación**, **Reportes AF**, **Retiro**,
 - **Tipo de Depreciación:** línea recta (cuotas iguales según la vida útil) o saldo decreciente (% anual sobre el valor en libros, sin bajar del residual). Vienen de ejemplo línea recta y saldo decreciente 5 %, 25 % y 15 % (categorías de la DGII); se editan y se crean otros.
 - **Tipo de Activo Fijo:** trae vida útil, % de valor residual y tipo de depreciación por defecto (los terrenos no se deprecian). Al registrar un activo eliges el tipo y esos valores se copian al activo; cambiar el tipo después no reescribe activos viejos.
 - **Tasa de Inflación:** una tasa por año. "Ajustar activos" propone subir el valor en libros de cada activo por esa tasa al 31 de diciembre; es una revalorización (la diferencia va a Superávit por revalorización) y no se aplica dos veces el mismo año. Confirma la tasa y el tratamiento fiscal con tu contador.
+
+## Caja chica (Contabilidad → Caja chica)
+Cuatro secciones: **Caja Chica**, **Desembolso**, **Reporte Caja Chica** y **Reposición**.
+- **Caja Chica:** crea uno o varios fondos fijos con su custodio y su fondo inicial (sale de la Caja general o de un banco). Puedes aumentar el fondo después.
+- **Desembolso:** cada gasto menor se registra con vale: concepto, categoría, a quién se pagó (RNC/cédula), número de vale, NCF e ITBIS. No deja gastar más de lo disponible. Con NCF entra al reporte 606 y su ITBIS cuenta como pagado.
+- **Reposición:** repone lo desembolsado (todos los pendientes o los que marques) para volver al fondo completo; el dinero sale de la Caja general o de un banco. Anular una reposición deja sus desembolsos pendientes otra vez.
+- **Reporte Caja Chica:** por período: fondo, desembolsado, ITBIS, repuesto, disponible, total por categoría y todos los movimientos (con CSV).
+Contabilidad: cuenta nueva **1102 Caja chica**. El fondo y la reposición mueven dinero entre Caja chica y la Caja general o el banco; cada desembolso se registra como gasto contra Caja chica (y suma a los reportes de gastos).

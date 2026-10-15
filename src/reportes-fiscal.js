@@ -36,7 +36,11 @@ export async function datosImpuestos(mes) {
        FROM compras c LEFT JOIN proveedores p ON p.id = c.proveedor_id
       WHERE c.estado = 'completada' AND ${cm('c.fecha')} ORDER BY c.fecha, c.id`);
   const gastos = await consultar(
-    `SELECT id, fecha, concepto, monto AS total, itbis, ncf, documento, metodo FROM gastos WHERE ${cm('fecha')} ORDER BY fecha, id`);
+    `SELECT id, fecha, concepto, monto AS total, itbis, ncf, documento, metodo FROM gastos WHERE ${cm('fecha')}
+     UNION ALL
+     SELECT id, fecha, COALESCE(concepto, 'Caja chica') AS concepto, monto AS total, itbis, ncf, documento, 'efectivo' AS metodo FROM caja_chica_movs
+      WHERE tipo = 'desembolso' AND estado = 'vigente' AND ${cm('fecha')}
+     ORDER BY fecha, id`);
 
   const cobrado = redondear(ventas.reduce((s, v) => s + v.itbis, 0));
   const pagado = redondear(compras.reduce((s, c) => s + c.itbis, 0) + gastos.reduce((s, g) => s + g.itbis, 0));
@@ -177,7 +181,9 @@ export async function datosNegocio(periodo, rango) {
     `SELECT COALESCE(SUM(d.cantidad * d.costo_unitario), 0) AS costo
        FROM venta_detalle d JOIN ventas v ON v.id = d.venta_id WHERE v.estado = 'completada' AND ${cv}`);
   const gastosCat = await consultar(
-    `SELECT COALESCE(categoria, 'Sin categoría') AS categoria, SUM(monto - itbis) AS total FROM gastos
+    `SELECT COALESCE(categoria, 'Sin categoría') AS categoria, SUM(monto - itbis) AS total FROM (
+       SELECT categoria, monto, itbis, fecha FROM gastos
+       UNION ALL SELECT categoria, monto, itbis, fecha FROM caja_chica_movs WHERE tipo = 'desembolso' AND estado = 'vigente')
       WHERE ${condicionFecha(periodo, 'fecha', rango)} GROUP BY categoria ORDER BY total DESC`);
   const ingresos = redondear(t.total - t.itbis);
   const costo = redondear(cs.costo);

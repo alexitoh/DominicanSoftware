@@ -107,6 +107,11 @@ export const TABLAS = [
     refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }],
   },
   { t: 'conciliaciones', cols: ['ref', 'fecha'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'conciliacion_id', tabla: 'conciliaciones_banco' }] },
+  { t: 'cajas_chicas', cols: ['nombre', 'custodio', 'notas', 'activa'], unicos: ['nombre'] },
+  {
+    t: 'caja_chica_movs', cols: ['numero', 'fecha', 'tipo', 'concepto', 'categoria', 'beneficiario', 'documento', 'comprobante', 'ncf', 'itbis', 'monto', 'reposicion_numero', 'estado'],
+    refs: [{ col: 'caja_chica_id', tabla: 'cajas_chicas' }, { col: 'banco_id', tabla: 'cuentas_bancarias' }], unicos: ['numero'],
+  },
   { t: 'dep_tipos', cols: ['nombre', 'metodo', 'tasa_anual', 'notas', 'activo'], unicos: ['nombre'] },
   { t: 'activos_tipos', cols: ['nombre', 'vida_meses', 'residual_pct', 'deprecia', 'notas', 'activo'], refs: [{ col: 'dep_tipo_id', tabla: 'dep_tipos' }], unicos: ['nombre'] },
   { t: 'tasas_inflacion', cols: ['anio', 'tasa', 'fuente'], unicos: ['anio'] },

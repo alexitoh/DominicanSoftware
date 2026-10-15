@@ -53,7 +53,9 @@ export async function datosReporte(periodo, rango) {
       WHERE v.estado = 'completada' AND ${cv}
       GROUP BY d.producto_id ORDER BY cantidad DESC, ingreso DESC LIMIT 10`);
   const gastosCat = await consultar(
-    `SELECT COALESCE(categoria, 'Sin categoría') AS categoria, SUM(monto) AS total FROM gastos
+    `SELECT COALESCE(categoria, 'Sin categoría') AS categoria, SUM(monto) AS total FROM (
+       SELECT categoria, monto, fecha FROM gastos
+       UNION ALL SELECT categoria, monto, fecha FROM caja_chica_movs WHERE tipo = 'desembolso' AND estado = 'vigente')
       WHERE ${condicionFecha(periodo, 'fecha', rango)} GROUP BY categoria ORDER BY total DESC`);
   const [porCobrar] = await consultar(
     `SELECT COALESCE(SUM(v.total - (SELECT COALESCE(SUM(monto), 0) FROM pagos WHERE venta_id = v.id)), 0) AS total

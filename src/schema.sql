@@ -448,6 +448,34 @@ CREATE TABLE IF NOT EXISTS banco_movs (
   estado TEXT NOT NULL DEFAULT 'vigente'
 );
 
+-- Caja chica: fondos fijos con custodio. El saldo sale de sus movimientos (fondo + reposiciones - desembolsos).
+CREATE TABLE IF NOT EXISTS cajas_chicas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  custodio TEXT,
+  notas TEXT,
+  activa INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS caja_chica_movs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT NOT NULL UNIQUE,
+  caja_chica_id INTEGER NOT NULL REFERENCES cajas_chicas(id),
+  fecha TEXT NOT NULL,
+  tipo TEXT NOT NULL,                  -- fondo | desembolso | reposicion
+  concepto TEXT,
+  categoria TEXT,
+  beneficiario TEXT,
+  documento TEXT,                      -- RNC o cédula de quien recibió el pago
+  comprobante TEXT,                    -- número del vale o recibo
+  ncf TEXT,
+  itbis REAL NOT NULL DEFAULT 0,
+  monto REAL NOT NULL,
+  banco_id INTEGER REFERENCES cuentas_bancarias(id), -- fondo y reposición: de dónde sale el dinero (vacío = Caja general)
+  reposicion_numero TEXT,              -- en un desembolso: la reposición que ya lo repuso
+  estado TEXT NOT NULL DEFAULT 'vigente'
+);
+
 -- Conciliación bancaria terminada: guarda las cifras del cierre a una fecha de corte
 CREATE TABLE IF NOT EXISTS conciliaciones_banco (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -596,6 +624,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('1', 'ACTIVOS', 'activo', 1, NULL, NULL, 1),
   ('11', 'Activos corrientes', 'activo', 1, NULL, NULL, 1),
   ('1101', 'Caja general', 'activo', 0, 'caja', NULL, 1),
+  ('1102', 'Caja chica', 'activo', 0, 'caja_chica', NULL, 1),
   ('1110', 'Bancos', 'activo', 0, 'banco', NULL, 1),
   ('1201', 'Cuentas por cobrar clientes', 'activo', 0, 'cxc', NULL, 1),
   ('1210', 'ITBIS pagado por adelantado', 'activo', 0, 'itbis_adelantado', NULL, 1),
@@ -641,6 +670,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
 INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('siguiente_numero_asiento', '1'),
   ('siguiente_numero_bancomov', '1'),
+  ('siguiente_numero_cajachica', '1'),
   ('siguiente_numero_nomina', '1'),
   ('conta_inicio', ''),
   ('nom_afp_emp', '2.87'), ('nom_sfs_emp', '3.04'),

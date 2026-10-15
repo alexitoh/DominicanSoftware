@@ -184,6 +184,16 @@ export function asientosAutomaticos(f, { inicio = '', hasta = '9999-12-31' } = {
     if (n.pagada) add('pagonomina', n.numero, n.fecha_pago || n.fecha, `Pago de nómina ${n.periodo}`, [{ rol: 'sueldos_pagar', debe: t.neto }, { rol: rolMetodo(n.metodo_pago), haber: t.neto }]);
   }
 
+  // Caja chica: fondo y reposición (contra Caja general o un banco) y desembolsos (gasto contra la caja chica)
+  for (const m of f.cajaChicaMovs || []) {
+    if (m.estado !== 'vigente') continue;
+    const origen = m.cuenta_banco_id ? { cuenta_id: m.cuenta_banco_id } : { rol: 'caja' };
+    if (m.tipo === 'fondo') add('cajachica', m.numero, m.fecha, `Fondo de caja chica: ${m.caja_nombre}`, [{ rol: 'caja_chica', debe: m.monto }, { ...origen, haber: m.monto }]);
+    else if (m.tipo === 'reposicion') add('cajachica', m.numero, m.fecha, `Reposición de caja chica: ${m.caja_nombre}`, [{ rol: 'caja_chica', debe: m.monto }, { ...origen, haber: m.monto }]);
+    else if (m.tipo === 'desembolso') add('cajachica', m.numero, m.fecha, `Caja chica: ${m.concepto || 'desembolso'}`, [
+      { categoria: m.categoria || 'Otros', debe: r2(m.monto - (m.itbis || 0)), detalle: m.beneficiario }, { rol: 'itbis_adelantado', debe: m.itbis || 0 }, { rol: 'caja_chica', haber: m.monto }]);
+  }
+
   // Movimientos de banco (cada uno usa la cuenta contable de su cuenta bancaria)
   for (const m of f.bancoMovs || []) {
     if (m.estado !== 'vigente') continue;

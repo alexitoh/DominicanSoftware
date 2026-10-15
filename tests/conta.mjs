@@ -379,5 +379,56 @@ const libI = await cd.libroContable({ hasta: '2029-06-30' });
 assert.equal(cm.balanceGeneral(libI.cuentas, libI.lineas, '2029-06-30').cuadra, true);
 ok('tipos de depreciación y de activo (saldo decreciente, terrenos sin depreciar, uso protegido) y ajuste por inflación con el balance cuadrando');
 
+// ---- caja chica: fondo, desembolsos, reposición, anulaciones y contabilidad ----
+assert.ok(C['1102'], 'el catálogo trae la cuenta Caja chica');
+await assert.rejects(() => cd.guardarCajaChica({ nombre: 'Oficina', fondo: 0 }), /fondo/);
+const ccId = await cd.guardarCajaChica({ nombre: 'Oficina', custodio: 'María', fondo: 5000, fecha: '2029-02-01' });
+await assert.rejects(() => cd.guardarCajaChica({ nombre: 'oficina', fondo: 100 }), /Ya existe/);
+assert.equal((await cd.listarCajasChicas())[0].saldo, 5000);
+await assert.rejects(() => cd.registrarDesembolso({ caja_chica_id: ccId, fecha: '2029-02-02', concepto: 'x', monto: 9000 }), /solo tiene/);
+await assert.rejects(() => cd.registrarDesembolso({ caja_chica_id: ccId, fecha: '2029-02-02', concepto: '', monto: 10 }), /concepto/);
+await assert.rejects(() => cd.registrarDesembolso({ caja_chica_id: ccId, fecha: '2029-02-02', concepto: 'x', monto: 100, itbis: 200 }), /ITBIS/);
+const n1 = await cd.registrarDesembolso({ caja_chica_id: ccId, fecha: '2029-02-03', concepto: 'Café y azúcar', categoria: 'Otros', beneficiario: 'Colmado Pepe', comprobante: 'V-1', ncf: 'b1300000001', itbis: 18, monto: 118 });
+const n2 = await cd.registrarDesembolso({ caja_chica_id: ccId, fecha: '2029-02-04', concepto: 'Taxi', categoria: 'Transporte', monto: 400 });
+let cch = (await cd.listarCajasChicas())[0];
+assert.deepEqual([cch.saldo, cch.por_reponer, cch.n_por_reponer], [4482, 518, 2]);
+const movs1 = await cd.movimientosCajaChica(ccId);
+assert.equal(movs1.find((m) => m.numero === n1).ncf, 'B1300000001', 'el NCF se guarda en mayúsculas');
+// contabilidad: el gasto sale contra Caja chica, con ITBIS aparte
+const libCC = await cd.libroContable({ hasta: '2029-12-31' });
+const lcc = (cuenta, campo) => r2(libCC.lineas.filter((l) => l.origen === 'cajachica' && l.cuenta_id === C[cuenta].id).reduce((s, l) => s + l[campo], 0));
+assert.equal(lcc('1102', 'debe'), 5000); assert.equal(lcc('1102', 'haber'), 518);
+assert.equal(lcc('1210', 'debe'), 18, 'el ITBIS del desembolso queda como ITBIS pagado');
+assert.equal(lcc('1101', 'haber'), 5000, 'el fondo sale de la Caja general');
+assert.equal(cm.balanceGeneral(libCC.cuentas, libCC.lineas, '2029-12-31').cuadra, true);
+// anular un desembolso devuelve el dinero al fondo
+await cd.anularMovCajaChica((await cd.movimientosCajaChica(ccId)).find((m) => m.numero === n2).id);
+cch = (await cd.listarCajasChicas())[0];
+assert.deepEqual([cch.saldo, cch.por_reponer], [4882, 118]);
+// reposición
+await assert.rejects(() => cd.reponerCajaChica({ caja_chica_id: ccId, fecha: '2029-02-01' }), /anterior a un desembolso/);
+const rep = await cd.reponerCajaChica({ caja_chica_id: ccId, fecha: '2029-02-10' });
+assert.equal(rep.monto, 118); assert.equal(rep.cantidad, 1);
+cch = (await cd.listarCajasChicas())[0];
+assert.deepEqual([cch.saldo, cch.por_reponer, cch.n_por_reponer], [5000, 0, 0], 'la reposición deja el fondo completo');
+await assert.rejects(() => cd.reponerCajaChica({ caja_chica_id: ccId, fecha: '2029-02-11' }), /No hay desembolsos pendientes/);
+await assert.rejects(async () => cd.anularMovCajaChica((await cd.movimientosCajaChica(ccId)).find((m) => m.numero === n1).id), /ya fue repuesto|Ya fue repuesto/);
+const libRep = await cd.libroContable({ hasta: '2029-12-31' });
+assert.equal(cm.balanceGeneral(libRep.cuentas, libRep.lineas, '2029-12-31').cuadra, true);
+// anular la reposición deja el desembolso pendiente otra vez
+await cd.anularMovCajaChica((await cd.movimientosCajaChica(ccId)).find((m) => m.tipo === 'reposicion').id);
+cch = (await cd.listarCajasChicas())[0];
+assert.deepEqual([cch.saldo, cch.n_por_reponer], [4882, 1]);
+// reposición desde un banco y aumento de fondo
+await cd.reponerCajaChica({ caja_chica_id: ccId, fecha: '2029-02-12', banco_id: bp.id });
+await cd.aumentarFondo({ caja_chica_id: ccId, monto: 1000, fecha: '2029-02-13' });
+cch = (await cd.listarCajasChicas())[0];
+assert.deepEqual([cch.fondo, cch.saldo], [6000, 6000]);
+await cd.registrarDesembolso({ caja_chica_id: ccId, fecha: '2029-02-14', concepto: 'Compra grande', monto: 5500 });
+await assert.rejects(async () => cd.anularMovCajaChica((await cd.movimientosCajaChica(ccId)).find((m) => m.concepto === 'Aumento del fondo').id), /negativo/, 'no se anula un fondo si el saldo quedaría en negativo');
+const libB2 = await cd.libroContable({ hasta: '2029-12-31' });
+assert.equal(cm.balanceGeneral(libB2.cuentas, libB2.lineas, '2029-12-31').cuadra, true);
+ok('caja chica: fondo, desembolsos con ITBIS y NCF, reposición (caja o banco), anulaciones y balance cuadrando');
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

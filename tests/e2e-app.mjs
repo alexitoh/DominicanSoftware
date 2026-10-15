@@ -278,6 +278,16 @@ assert.equal(imp.filas606.find((f) => f[3] === 'B0100000123')[0], '101000001', '
 const txt = itb.textoDGII('607', '131234567', mesAct.replace('-', ''), imp.filas607);
 assert.equal(txt.split('\r\n')[0], `607|131234567|${mesAct.replace('-', '')}|5`);
 assert.equal(itb.nombreArchivoDGII('607', '13-12345-67', '202601'), 'DGII_F_607_131234567_202601.TXT');
+// los desembolsos de caja chica con NCF entran al 606 y su ITBIS cuenta como pagado
+await bd.ejecutar("INSERT INTO cajas_chicas (nombre) VALUES ('Oficina')");
+const fechaHoyCC = (await uno("SELECT date('now','localtime') AS d")).d;
+await bd.ejecutar("INSERT INTO caja_chica_movs (numero, caja_chica_id, fecha, tipo, concepto, categoria, documento, ncf, itbis, monto) VALUES ('CC-T1', (SELECT id FROM cajas_chicas WHERE nombre = 'Oficina'), ?, 'desembolso', 'Café', 'Otros', '131-00000-5', 'B1300000005', 18, 118)", [fechaHoyCC]);
+await bd.ejecutar("INSERT INTO caja_chica_movs (numero, caja_chica_id, fecha, tipo, concepto, categoria, itbis, monto, estado) VALUES ('CC-T2', (SELECT id FROM cajas_chicas WHERE nombre = 'Oficina'), ?, 'desembolso', 'Anulado', 'Otros', 0, 50, 'anulado')", [fechaHoyCC]);
+const impCC = await rf.datosImpuestos(mesAct);
+assert.equal(impCC.filas606.length, 3, 'el desembolso con NCF entra al 606 y el anulado no');
+assert.equal(impCC.pagado, 45, 'ITBIS pagado: 27 + 18 de la caja chica');
+assert.ok(impCC.filas606.some((f) => f[3] === 'B1300000005'));
+await bd.ejecutar("DELETE FROM caja_chica_movs"); await bd.ejecutar("DELETE FROM cajas_chicas");
 assert.ok(itb.csv(['a', 'b'], [['x,y', 'z']]).includes('"x,y"'));
 // negocio y P&L
 const neg = await rf.datosNegocio('mes', null);

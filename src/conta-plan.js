@@ -12,7 +12,7 @@ export const TIPOS_CUENTA = {
 };
 
 export const ROLES = {
-  caja: 'Caja (efectivo)', banco: 'Banco (tarjeta, transferencia, cheque)', cxc: 'Cuentas por cobrar', inventario: 'Inventario',
+  caja: 'Caja (efectivo)', caja_chica: 'Caja chica (fondo fijo)', banco: 'Banco (tarjeta, transferencia, cheque)', cxc: 'Cuentas por cobrar', inventario: 'Inventario',
   itbis_adelantado: 'ITBIS pagado (a favor)', activo_fijo: 'Activos fijos (costo)', dep_acumulada: 'Depreciación acumulada',
   cxp: 'Cuentas por pagar', itbis_pagar: 'ITBIS cobrado (por pagar)', tss_pagar: 'TSS por pagar', isr_pagar: 'ISR retenido por pagar',
   sueldos_pagar: 'Sueldos por pagar', otros_pagar: 'Otras retenciones por pagar',
@@ -27,6 +27,7 @@ export const PLAN_BASE = [
   ['1', 'ACTIVOS', 'activo', 1],
   ['11', 'Activos corrientes', 'activo', 1],
   ['1101', 'Caja general', 'activo', 0, 'caja'],
+  ['1102', 'Caja chica', 'activo', 0, 'caja_chica'],
   ['1110', 'Bancos', 'activo', 0, 'banco'],
   ['1201', 'Cuentas por cobrar clientes', 'activo', 0, 'cxc'],
   ['1210', 'ITBIS pagado por adelantado', 'activo', 0, 'itbis_adelantado'],

@@ -39,6 +39,7 @@ const { vistaContabilidad } = await import('../src/contabilidad.js');
 const { vistaAsientos, vistaCuentas } = await import('../src/conta-ui-asientos.js');
 const { vistaBancos } = await import('../src/conta-ui-bancos.js');
 const { vistaActivos, vistaNomina } = await import('../src/conta-ui-activos.js');
+const { vistaCajaChica } = await import('../src/conta-ui-cajachica.js');
 const { vistaReportes } = await import('../src/conta-ui-reportes.js');
 await bd.initDB();
 let n = 0; const ok = (t) => { n++; console.log(`  ✔ ${t}`); };
@@ -67,7 +68,7 @@ await cd.guardarPresupuesto(2026, C['6201'].id, Array(12).fill(1000));
 const raiz = new Nodo('div');
 await vistaContabilidad(raiz); await pausa();
 const tabs = raiz.todos((x) => x.tag === 'button' && x.attrs.role === 'tab');
-assert.equal(tabs.length, 12);
+assert.equal(tabs.length, 13);
 for (const t of tabs) {
   await pulsar(t);
   const cuerpo = textoDe(raiz);
@@ -133,6 +134,22 @@ for (const [seccion, texto] of [['Depreciación', 'Depreciación de'], ['Reporte
   await pulsar(tab); await pausa();
   assert.ok(textoDe(rac).includes(texto), `la sección ${seccion} debe mostrar "${texto}"`);
   if (/Inflación|Tipo de/.test(seccion)) await pulsar(boton(rac, texto)); // abre el formulario de alta
+}
+// Caja chica: sus cuatro secciones abren y el flujo crear caja -> desembolso -> reposición funciona desde la interfaz
+const rcc = new Nodo('div'); await vistaCajaChica(rcc); await pausa();
+for (const [seccion, texto] of [['Desembolso', 'Primero crea una caja chica'], ['Reporte Caja Chica', 'Primero crea una caja chica'], ['Reposición', 'Primero crea una caja chica'], ['Caja Chica', 'Nueva caja chica']]) {
+  const tab = rcc.todos((x) => x.tag === 'button' && x.attrs.role === 'tab' && x.texto.includes(seccion))[0];
+  assert.ok(tab, 'falta la sección ' + seccion);
+  await pulsar(tab); await pausa();
+  assert.ok(textoDe(rcc).includes(texto), `la sección ${seccion} debe mostrar "${texto}"`);
+}
+await pulsar(boton(rcc, 'Nueva caja chica'));
+await cd.guardarCajaChica({ nombre: 'Taller', custodio: 'Luis', fondo: 2000, fecha: '2026-03-01' });
+await cd.registrarDesembolso({ caja_chica_id: (await cd.listarCajasChicas())[0].id, fecha: '2026-03-02', concepto: 'Tornillos', monto: 150 });
+for (const [seccion, texto] of [['Desembolso', 'Registrar desembolso'], ['Reposición', 'Hacer reposición'], ['Reporte Caja Chica', 'Desembolsos por categoría'], ['Caja Chica', 'Taller']]) {
+  const tab = rcc.todos((x) => x.tag === 'button' && x.attrs.role === 'tab' && x.texto.includes(seccion))[0];
+  await pulsar(tab); await pausa();
+  assert.ok(textoDe(rcc).includes(texto), `con una caja creada, ${seccion} debe mostrar "${texto}"`);
 }
 const rn = new Nodo('div'); await vistaNomina(rn); await pausa();
 await pulsar(boton(rn, 'Nueva nómina')); await pulsar(boton(rn, 'Parámetros')); await pulsar(boton(rn, 'Nuevo empleado'));
