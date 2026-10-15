@@ -680,6 +680,42 @@ assert.ok(JSON.stringify(hist).includes('Cambió identificador'), 'queda en la b
 }
 ok('las secuencias de NCF son del negocio: cada factura pide su número al servidor, sin repetir ni saltar, y un negocio nuevo no hereda las de otro');
 
+// ---------- 11c. Auditoría por negocio en el panel del propietario ----------
+{
+  const nid = hogar.negocio.uid; const cuenta = hogar.cuenta?.uid || lh.cuenta.uid;
+  const ins = (tabla, uid, datos) => db6.prepare('INSERT INTO registros (negocio, tabla, uid, datos, borrado, actualizado, version, origen) VALUES (?,?,?,?,0,?,?,?)')
+    .run(nid, tabla, uid, JSON.stringify(datos), Date.now(), siguienteVersion(db6), 'disp');
+  ins('bitacora', 'b1', { fecha: '2026-10-10 09:00:00', usuario: 'admin', accion: 'Inicio de sesión', detalle: '', usuario_id: cuenta });
+  ins('bitacora', 'b2', { fecha: '2026-10-11 10:30:00', usuario: 'admin', accion: 'Producto modificado', detalle: 'Amplificador: precio 1400 → 1500', usuario_id: cuenta });
+  ins('bitacora', 'b3', { fecha: '2026-10-12 11:00:00', usuario: 'otro', accion: 'Ajuste de inventario', detalle: 'Bocina: -2 (Uso interno)', usuario_id: null });
+  ins('ventas', 'v1', { numero: 'V-A000001', fecha: '2026-10-11 12:00:00', total: 1500, ncf: 'B0200000001', estado: 'completada', usuario_id: cuenta });
+  ins('compras', 'c1', { numero: 'C-000001', fecha: '2026-10-12 08:00:00', total: 900, referencia: 'F1', estado: 'anulada', usuario_id: cuenta });
+  const aud = (c) => p6(`/api/propietario/negocios/${nid}/auditoria`, c, T6, 'POST');
+  const [, todo] = await aud({});
+  assert.ok(todo.total >= 5, `Se esperaban al menos 5 movimientos y hay ${todo.total}`);
+  const propios = todo.eventos.filter((e) => e.fuente !== 'servidor');
+  assert.deepEqual(propios.slice(0, 2).map((e) => e.accion), ['Ajuste de inventario', 'Compra registrada'], 'los más recientes primero');
+  assert.match(propios[1].detalle, /anulada/);
+  assert.ok(todo.eventos.some((e) => e.fuente === 'servidor' && e.accion === 'Cambió secuencia NCF'), 'incluye lo que se cambió desde el servidor');
+  const venta = todo.eventos.find((e) => e.accion === 'Venta registrada');
+  assert.match(venta.usuario, /@admin/, 'el usuario se identifica por la cuenta');
+  assert.match(venta.detalle, /V-A000001.*B0200000001/);
+  const [, soloAdmin] = await aud({ usuario: 'admin' });
+  assert.ok(soloAdmin.eventos.every((e) => /admin/i.test(e.usuario)) && soloAdmin.eventos.length >= 4);
+  assert.ok(!soloAdmin.eventos.some((e) => e.accion === 'Ajuste de inventario'), 'lo de otro usuario no aparece');
+  const [, rango] = await aud({ desde: '2026-10-11', hasta: '2026-10-11' });
+  assert.deepEqual(rango.eventos.map((e) => e.accion).sort(), ['Producto modificado', 'Venta registrada']);
+  const [, buscado] = await aud({ q: 'amplificador' });
+  assert.equal(buscado.eventos.length, 1);
+  const [, pag] = await aud({ limite: 2, desplazar: 2 });
+  assert.equal(pag.eventos.length, 2); assert.equal(pag.total, todo.total);
+  const [st] = await p6(`/api/propietario/negocios/${nid}/auditoria`, {}, null, 'POST');
+  assert.equal(st, 401, 'sin clave de propietario no hay acceso');
+  const [, ncfAud] = await aud({ q: 'secuencia' });
+  assert.ok(ncfAud.eventos.every((e) => e.fuente === 'servidor'), 'los cambios de secuencia hechos en el servidor también constan');
+}
+ok('el propietario audita cada negocio: quién hizo qué, con filtros por usuario, fecha y texto');
+
 srv6.close();
 ok('mismo usuario y correo en negocios distintos; el RNC (o número asignado) identifica el negocio; solo el propietario lo cambia');
 

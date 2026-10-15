@@ -1,7 +1,7 @@
 // main.js - arranque, navegación, ajustes y respaldo
 import './style.css';
 import { Capacitor } from '@capacitor/core';
-import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo, leerSecuenciasNCF, guardarSecuenciaNCF, leerReglasComprobante, guardarReglasComprobante } from './database.js';
+import { initDB, consultar, ejecutar, crearRespaldo, restaurarRespaldo, leerSecuenciasNCF, guardarSecuenciaNCF, leerReglasComprobante, guardarReglasComprobante, anotar } from './database.js';
 import { TIPOS_NCF, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { validarDocumento } from './fiscal.js';
 import { estadoPadron, actualizarPadron, subirPadron } from './dgii.js';
@@ -304,6 +304,7 @@ async function vistaAjustes(raiz) {
       await guardarReglasComprobante(filasReglas.map((f) => ({ texto: f.texto.value, tipo: f.tipo.value })));
     } catch (e) { errorFiscal.textContent = e.message; return; }
     for (const [k, v] of [['negocio_rnc', doc.numero || ''], ['itbis_modo', activoFact.checked ? 'adicional' : 'no'], ['itbis_tasa', String(tasa)]]) await guardarConfig(k, v);
+    await anotar('Cambió los datos fiscales', `Facturación ${activoFact.checked ? 'encendida' : 'apagada'}, ITBIS ${tasa}%`);
     toast(activoFact.checked ? 'Facturación con comprobante encendida' : 'Facturación con comprobante apagada');
   }
 

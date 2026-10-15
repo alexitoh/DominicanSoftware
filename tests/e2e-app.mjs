@@ -372,6 +372,18 @@ ok('el dispositivo descarga los avisos y los marca como leídos');
 }
 ok('las secuencias de NCF son del negocio: cada factura pide su número al servidor, sin internet no se emite ninguna factura y los números perdidos quedan anulados');
 
+// ---- la bitácora registra quién hizo qué ----
+{
+  if (!(await bd.cajaAbierta())) await bd.abrirCaja(100);
+  await bd.registrarGasto({ concepto: 'Gasolina', monto: 40 });
+  await bd.anotar('Producto modificado', 'Bocina: precio 100 → 120');
+  const log = (await bd.consultar('SELECT usuario, accion, detalle FROM bitacora')).map((x) => `${x.accion}|${x.detalle}|${x.usuario}`);
+  assert.ok(log.some((x) => x.startsWith('Gasto registrado|Gasolina 40')), 'gasto');
+  assert.ok(log.some((x) => /^Producto modificado\|Bocina: precio 100 → 120\|\w+/.test(x)), 'con el usuario que lo hizo');
+  assert.ok(await bd.consultar('SELECT 1 FROM bitacora WHERE usuario IS NOT NULL LIMIT 1').then((r) => r.length), 'queda el nombre de usuario');
+}
+ok('la bitácora anota caja, gastos y cambios con el usuario que los hizo');
+
 servidor.close();
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

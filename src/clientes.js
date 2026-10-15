@@ -1,5 +1,5 @@
 // clientes.js - lista, detalle con deuda y formulario de clientes
-import { consultar, ejecutar, redondear, leerReglasComprobante } from './database.js';
+import { consultar, ejecutar, redondear, leerReglasComprobante, anotar } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
@@ -103,6 +103,7 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       } else {
         await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=?, limite_credito=?, tipo_comprobante=?, regimen_dgii=? WHERE id=?', [...valores, id]);
       }
+      await anotar(nuevo ? 'Cliente creado' : 'Cliente modificado', nombre.value.trim());
       cerrar();
       toast(nuevo ? 'Cliente guardado' : 'Cambios guardados');
       await alGuardar(id);
@@ -122,6 +123,7 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     await ejecutar('DELETE FROM cliente_direcciones WHERE cliente_id = ?', [c.id]);
     await ejecutar('DELETE FROM cliente_contactos WHERE cliente_id = ?', [c.id]);
     await ejecutar('DELETE FROM clientes WHERE id = ?', [c.id]);
+    await anotar('Cliente quitado', c.nombre);
     cerrar();
     toast('Cliente quitado');
     await alGuardar(null);

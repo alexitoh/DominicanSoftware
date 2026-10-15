@@ -1,5 +1,5 @@
 // proveedores.js - lista y formulario de proveedores
-import { consultar, ejecutar } from './database.js';
+import { consultar, ejecutar, anotar } from './database.js';
 import { TIPOS_DOC, validarDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { campoCondicion, textoCondicion } from './condicion.js';
@@ -39,6 +39,7 @@ export function formularioProveedor(p = null, alGuardar = () => {}) {
       } else {
         await ejecutar('UPDATE proveedores SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=? WHERE id=?', [...valores, id]);
       }
+      await anotar(nuevo ? 'Proveedor creado' : 'Proveedor modificado', n);
       cerrar();
       toast(nuevo ? 'Proveedor guardado' : 'Cambios guardados');
       await alGuardar(id);
@@ -56,6 +57,7 @@ export function formularioProveedor(p = null, alGuardar = () => {}) {
     const ok = await confirmar('Quitar proveedor', `Se eliminará a "${p.nombre}".`, 'Quitar proveedor');
     if (!ok) return;
     await ejecutar('DELETE FROM proveedores WHERE id = ?', [p.id]);
+    await anotar('Proveedor quitado', p.nombre);
     cerrar();
     toast('Proveedor quitado');
     await alGuardar(null);

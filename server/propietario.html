@@ -186,6 +186,7 @@ function tarjeta(n) {
   } else {
     ac.push(el('button', { class: 'btn p chico', onclick: () => pago(n) }, 'Registrar pago'));
     ac.push(el('button', { class: 'btn chico', onclick: () => detalle(n) }, 'Detalle'));
+    ac.push(el('button', { class: 'btn chico', onclick: () => auditoria(n) }, 'Auditoría'));
     ac.push(el('button', { class: 'btn chico', onclick: () => redactar(n) }, 'Enviar mensaje'));
     if (n.estado === 'suspendido') ac.push(el('button', { class: 'btn chico', onclick: () => confirmarAccion(n, 'reactivar', `¿Reactivar "${n.nombre}"?`) }, 'Reactivar'));
     else ac.push(el('button', { class: 'btn m chico', onclick: () => confirmarAccion(n, 'suspender', `¿Suspender "${n.nombre}"? Sus usuarios no podrán entrar ni sincronizar, pero sus datos se conservan.`) }, 'Suspender'));
@@ -327,6 +328,63 @@ async function detalle(n) {
     el('h3', { class: 'sec' }, 'Datos guardados'),
     el('p', { class: 'ayuda' }, d.tablas.map((t) => `${t.tabla}: ${t.n}`).join(' · ') || 'Sin datos todavía.'), err],
   [btnCerrar()], true);
+}
+
+// Quién hizo qué dentro de un negocio
+async function auditoria(n) {
+  const err = el('p', { class: 'error' });
+  const usuario = el('select', {}, el('option', { value: '' }, 'Todos los usuarios'));
+  const desde = el('input', { type: 'date', 'aria-label': 'Desde' });
+  const hasta = el('input', { type: 'date', 'aria-label': 'Hasta' });
+  const texto = el('input', { placeholder: 'Buscar (producto, número, acción…)', 'aria-label': 'Buscar' });
+  const lista = el('div');
+  const resumen = el('p', { class: 'ayuda' });
+  const mas = el('button', { class: 'btn chico', onclick: () => cargar(true) }, 'Cargar más');
+  let filas = [];
+  let total = 0;
+  const cuerpo = (salto) => ({ usuario: usuario.value, desde: desde.value, hasta: hasta.value, q: texto.value, limite: 100, desplazar: salto });
+  const pintar = () => {
+    lista.replaceChildren(...(filas.length ? filas.map((e) => el('div', { class: 'fila' },
+      el('span', {}, `${e.accion}${e.detalle ? ' · ' + e.detalle : ''}`, el('small', {}, `${fecha(e.fecha)} · ${e.usuario}${e.fuente === 'servidor' ? ' · desde el panel' : ''}`))))
+      : [el('p', { class: 'ayuda' }, 'Sin movimientos con esos filtros.')]));
+    resumen.textContent = total ? `Mostrando ${filas.length} de ${total} movimientos.` : '';
+    mas.style.display = filas.length < total ? '' : 'none';
+  };
+  async function cargar(agregar = false) {
+    err.textContent = '';
+    try {
+      const r = await api('POST', `/api/propietario/negocios/${n.uid}/auditoria`, cuerpo(agregar ? filas.length : 0));
+      filas = agregar ? [...filas, ...r.eventos] : r.eventos;
+      total = r.total;
+      if (usuario.options.length === 1) for (const u of r.usuarios) usuario.append(el('option', { value: u.usuario }, `${u.nombre} (@${u.usuario})`));
+      pintar();
+    } catch (e) { err.textContent = e.message; }
+  }
+  async function descargar() {
+    err.textContent = '';
+    try {
+      const r = await api('POST', `/api/propietario/negocios/${n.uid}/auditoria`, { ...cuerpo(0), limite: 500 });
+      let todos = r.eventos;
+      while (todos.length < r.total && todos.length < 5000) {
+        const s = await api('POST', `/api/propietario/negocios/${n.uid}/auditoria`, { ...cuerpo(todos.length), limite: 500 });
+        if (!s.eventos.length) break;
+        todos = [...todos, ...s.eventos];
+      }
+      const celda = (x) => '"' + String(x ?? '').replace(/"/g, '""') + '"';
+      const csv = '\ufeff' + [['Fecha', 'Usuario', 'Acción', 'Detalle', 'Origen'], ...todos.map((e) => [e.fecha, e.usuario, e.accion, e.detalle, e.fuente])].map((f) => f.map(celda).join(',')).join('\r\n');
+      const a = el('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), download: `auditoria-${n.nombre.replace(/[^\w]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.csv` });
+      document.body.append(a); a.click(); a.remove();
+    } catch (e) { err.textContent = e.message; }
+  }
+  for (const i of [usuario, desde, hasta]) i.addEventListener('change', () => cargar());
+  texto.addEventListener('keydown', (e) => { if (e.key === 'Enter') cargar(); });
+  modal(`Auditoría · ${n.nombre}`, [
+    el('p', { class: 'ayuda' }, 'Quién hizo qué en este negocio: accesos, ventas, compras, cobros, productos, inventario, caja, gastos, clientes y cambios fiscales. Las ventas, compras y cobros se toman de los documentos mismos.'),
+    usuario, el('div', { class: 'acciones', style: 'margin:.4rem 0' }, el('label', {}, 'Desde ', desde), el('label', {}, 'Hasta ', hasta)),
+    texto, el('div', { class: 'acciones', style: 'margin:.4rem 0' }, el('button', { class: 'btn p chico', onclick: () => cargar() }, 'Buscar'), el('button', { class: 'btn chico', onclick: descargar }, 'Descargar CSV')),
+    err, resumen, lista, mas],
+  [btnCerrar()], true);
+  await cargar();
 }
 
 function claveCuenta(u, n) {

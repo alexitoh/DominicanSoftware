@@ -1,5 +1,5 @@
 // productos.js - lista, búsqueda y formulario de productos
-import { consultar, ejecutar, transaccion, precioDesde, margenProducto } from './database.js';
+import { consultar, ejecutar, transaccion, precioDesde, margenProducto, anotar } from './database.js';
 import { botonEscaner } from './escaner.js';
 import { h, hoja, toast, dinero, confirmar, medidor } from './ui.js';
 
@@ -185,11 +185,17 @@ export async function vistaProductos(raiz) {
             });
           }
           await transaccion(set);
+          await anotar('Producto creado', `${nombreV} (${cod || 's/código'}) · costo ${costoV}, precio ${precioV}${inicialV > 0 ? `, stock inicial ${inicialV}` : ''}`);
         } else {
+          const cambios = [];
+          if (Number(p.costo) !== costoV) cambios.push(`costo ${p.costo} → ${costoV}`);
+          if (Number(p.precio) !== precioV) cambios.push(`precio ${p.precio} → ${precioV}`);
+          if ((p.nombre || '') !== nombreV) cambios.push(`nombre «${p.nombre}» → «${nombreV}»`);
           await ejecutar(
             `UPDATE productos SET codigo=?, nombre=?, categoria_id=?, marca=?, costo=?, precio=?, margen=?, stock_minimo=?, ubicacion=?, foto=?, itbis_exento=?
               WHERE id = ?`,
             [cod, nombreV, catId, mar, costoV, precioV, margenV, minimoV, ubi, foto, exento.checked ? 1 : 0, p.id]);
+          await anotar('Producto modificado', `${nombreV}${cambios.length ? `: ${cambios.join('; ')}` : ''}`);
         }
         cerrar();
         toast(nuevo ? 'Producto guardado' : 'Cambios guardados');
@@ -208,6 +214,7 @@ export async function vistaProductos(raiz) {
       if (!ok) return;
       // Se libera el código para poder reutilizarlo en otro producto
       await ejecutar('UPDATE productos SET activo = 0, codigo = NULL WHERE id = ?', [p.id]);
+      await anotar('Producto quitado', `${p.nombre} (${p.codigo || 's/código'})`);
       cerrar();
       toast('Producto quitado');
       await pintar();

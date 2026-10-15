@@ -463,6 +463,48 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       };
     },
 
+    // Auditoría de un negocio: quién hizo qué. Junta la bitácora de sus equipos con lo que dejan registrado las ventas, compras,
+    // cotizaciones y cobros (que guardan al usuario que las hizo) y los cambios hechos desde este panel.
+    'POST /api/propietario/negocios/:uid/auditoria': (req, b, p) => {
+      autenticarPropietario(req);
+      const n = db.prepare('SELECT uid, nombre FROM negocios WHERE uid = ?').get(p.uid);
+      if (!n) falla(404, 'El negocio no existe.');
+      const fechaOk = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(String(x || '')) ? String(x) : '');
+      const desde = fechaOk(b.desde); const hasta = fechaOk(b.hasta);
+      const limite = Math.min(Math.max(parseInt(b.limite, 10) || 100, 1), 500);
+      const salto = Math.max(parseInt(b.desplazar, 10) || 0, 0);
+      const cuentas = db.prepare('SELECT uid, nombre, usuario FROM cuentas WHERE negocio = ?').all(n.uid);
+      const porUid = new Map(cuentas.map((c) => [c.uid, c]));
+      const quien = (uidCuenta, texto) => { const c = porUid.get(uidCuenta); return c ? `${c.nombre} (@${c.usuario})` : (texto ? `@${texto}` : 'Desconocido'); };
+      const consulta = (tabla) => db.prepare(
+        `SELECT datos FROM registros WHERE negocio = ? AND tabla = ? AND borrado = 0
+            AND (? = '' OR substr(json_extract(datos, '$.fecha'), 1, 10) >= ?) AND (? = '' OR substr(json_extract(datos, '$.fecha'), 1, 10) <= ?)
+          ORDER BY json_extract(datos, '$.fecha') DESC LIMIT 5000`).all(n.uid, tabla, desde, desde, hasta, hasta).map((f) => JSON.parse(f.datos));
+      const dinero = (x) => Number(x || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const eventos = [];
+      for (const d of consulta('bitacora')) eventos.push({ fecha: d.fecha, usuario: quien(d.usuario_id, d.usuario), accion: d.accion, detalle: d.detalle || '', fuente: 'bitácora' });
+      for (const d of consulta('ventas')) eventos.push({ fecha: d.fecha, usuario: quien(d.usuario_id), accion: 'Venta registrada', detalle: `${d.numero} · ${dinero(d.total)}${d.ncf ? ` · NCF ${d.ncf}` : ''}${d.estado === 'anulada' ? ' · (hoy anulada)' : ''}`, fuente: 'ventas' });
+      for (const d of consulta('compras')) eventos.push({ fecha: d.fecha, usuario: quien(d.usuario_id), accion: 'Compra registrada', detalle: `${d.numero} · ${dinero(d.total)}${d.referencia ? ` · ref. ${d.referencia}` : ''}${d.estado === 'anulada' ? ' · (hoy anulada)' : ''}`, fuente: 'compras' });
+      for (const d of consulta('cotizaciones')) eventos.push({ fecha: d.fecha, usuario: quien(d.usuario_id), accion: 'Cotización creada', detalle: `${d.numero} · ${dinero(d.total)}`, fuente: 'cotizaciones' });
+      for (const d of consulta('recibos')) eventos.push({ fecha: d.fecha, usuario: quien(d.usuario_id), accion: 'Cobro registrado', detalle: `${d.numero} · ${dinero(d.total)}${d.estado === 'anulado' ? ' · (hoy anulado)' : ''}`, fuente: 'recibos' });
+      for (const a of db.prepare("SELECT fecha, accion, detalle FROM auditoria WHERE negocio_nombre = ? AND accion IN ('Cambió secuencia NCF', 'Anuló comprobante sin factura') ORDER BY id DESC LIMIT 500").all(n.nombre)) {
+        const dia = String(a.fecha || '').slice(0, 10);
+        if ((desde && dia < desde) || (hasta && dia > hasta)) continue;
+        const m = /\(([^()]+)\)\s*$/.exec(a.detalle || '');
+        eventos.push({ fecha: String(a.fecha || '').replace('T', ' ').slice(0, 19), usuario: m ? `@${m[1]}` : 'Sistema', accion: a.accion, detalle: (a.detalle || '').replace(/\s*\([^()]+\)\s*$/, ''), fuente: 'servidor' });
+      }
+      const usuario = String(b.usuario || '').trim().toLowerCase();
+      const q = String(b.q || '').trim().toLowerCase();
+      const filtrados = eventos
+        .filter((e) => (!usuario || e.usuario.toLowerCase().includes(usuario)) && (!q || `${e.accion} ${e.detalle}`.toLowerCase().includes(q)))
+        .sort((x, y) => String(y.fecha).localeCompare(String(x.fecha)));
+      return {
+        total: filtrados.length,
+        eventos: filtrados.slice(salto, salto + limite),
+        usuarios: cuentas.map((c) => ({ usuario: c.usuario, nombre: c.nombre })),
+      };
+    },
+
     'PATCH /api/propietario/negocios/:uid': (req, b, p) => {
       autenticarPropietario(req);
       const n = db.prepare('SELECT * FROM negocios WHERE uid = ?').get(p.uid);

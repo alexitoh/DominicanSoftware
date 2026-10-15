@@ -1,5 +1,5 @@
 // inventario.js - existencias, alertas de reposición y movimientos de stock
-import { consultar, transaccion, precioDesde, margenProducto } from './database.js';
+import { consultar, transaccion, precioDesde, margenProducto, anotar } from './database.js';
 import { botonEscaner } from './escaner.js';
 import { h, hoja, toast, dinero, medidor } from './ui.js';
 
@@ -143,6 +143,8 @@ export async function vistaInventario(raiz) {
       }
       try {
         await transaccion(set);
+        await anotar(tipo === 'entrada' ? 'Entrada de inventario' : tipo === 'salida' ? 'Salida de inventario' : 'Ajuste de inventario',
+          `${p.nombre}: ${soloCosto ? 'solo costo' : `${delta > 0 ? '+' : ''}${delta} (${razon})`}${precioNuevo != null ? `; precio → ${precioNuevo}` : ''}`);
         cerrar();
         toast(precioNuevo != null ? `Costo actualizado. Nuevo precio de venta: ${dinero(precioNuevo)}` : 'Movimiento registrado');
         await recargar();

@@ -458,6 +458,7 @@ export async function anularRecibo(reciboId) {
     { statement: "UPDATE recibos SET estado = 'anulado' WHERE id = ?", values: [reciboId] },
     { statement: 'DELETE FROM pagos WHERE recibo_id = ?', values: [reciboId] },
   ]);
+  await anotar('Recibo anulado', (await consultar('SELECT numero FROM recibos WHERE id = ?', [reciboId]))[0]?.numero || '');
 }
 
 // ---------- Compras a proveedores ----------
@@ -608,6 +609,7 @@ export async function abrirCaja(efectivoInicial) {
   if (!(efectivoInicial >= 0)) throw new Error('Escribe cuánto efectivo hay para empezar (puede ser 0).');
   if (await cajaAbierta()) throw new Error('Ya hay una caja abierta.');
   await ejecutar('INSERT INTO caja (efectivo_inicial) VALUES (?)', [redondear(efectivoInicial)]);
+  await anotar('Caja abierta', `Efectivo inicial ${redondear(efectivoInicial)}`);
 }
 
 // Resumen de un turno de caja: desde su apertura hasta "hasta" (por defecto, el cierre o ahora)
@@ -659,6 +661,7 @@ export async function registrarGasto({ concepto, categoria = null, monto, metodo
   await ejecutar(
     'INSERT INTO gastos (caja_id, concepto, categoria, monto, metodo, nota, itbis, ncf, documento) VALUES (?,?,?,?,?,?,?,?,?)',
     [caja.id, concepto.trim(), categoria, redondear(monto), metodo, nota, redondear(itbis), ncf ? String(ncf).trim().toUpperCase() : null, documento ? limpiarDocumento(documento) : null]);
+  await anotar('Gasto registrado', `${concepto.trim()} ${redondear(monto)}${ncf ? ` (${String(ncf).toUpperCase()})` : ''}`);
 }
 
 export async function eliminarGasto(id) {
@@ -666,7 +669,9 @@ export async function eliminarGasto(id) {
     'SELECT g.id, c.estado FROM gastos g LEFT JOIN caja c ON c.id = g.caja_id WHERE g.id = ?', [id]);
   if (!g) throw new Error('El gasto no existe');
   if (g.estado === 'cerrada') throw new Error('No se puede eliminar un gasto de una caja ya cerrada.');
+  const [gd] = await consultar('SELECT concepto, monto FROM gastos WHERE id = ?', [id]);
   await ejecutar('DELETE FROM gastos WHERE id = ?', [id]);
+  await anotar('Gasto eliminado', `${gd?.concepto || ''} ${gd?.monto ?? ''}`.trim());
 }
 
 export async function cerrarCaja({ cajaId, contado, notas = '' }) {
@@ -679,6 +684,7 @@ export async function cerrarCaja({ cajaId, contado, notas = '' }) {
     `UPDATE caja SET estado = 'cerrada', fecha_cierre = ?, efectivo_esperado = ?, efectivo_contado = ?, diferencia = ?, notas = ?
       WHERE id = ?`,
     [ahora, r.esperado, redondear(contado), redondear(contado - r.esperado), notas || null, cajaId]);
+  await anotar('Caja cerrada', `Esperado ${r.esperado}, contado ${redondear(contado)}, diferencia ${redondear(contado - r.esperado)}`);
 }
 
 // ---------- Anulación ----------
@@ -837,6 +843,14 @@ async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
 }
 
 const claveAleatoria = () => (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`).replace(/-/g, '');
+
+// Anota en la bitácora (quién hizo qué). Nunca interrumpe la operación que se está registrando.
+export async function anotar(accion, detalle = '') {
+  try {
+    await ejecutar('INSERT INTO bitacora (usuario_id, usuario, accion, detalle) VALUES (?, (SELECT usuario FROM usuarios WHERE id = ?), ?, ?)',
+      [usuarioActualId, usuarioActualId, accion, String(detalle || '').slice(0, 300)]);
+  } catch { /* la bitácora no debe frenar el trabajo */ }
+}
 
 // Un comprobante que el sistema entregó y la factura no se guardó: queda anulado, anotado en la bitácora y listo para el formato 608
 export async function registrarNcfAnulado({ ncf, motivo = 'La factura no se pudo guardar', origen = 'sistema' }) {
