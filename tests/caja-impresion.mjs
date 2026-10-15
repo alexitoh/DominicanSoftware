@@ -132,6 +132,19 @@ await assert.rejects(() => bd.cobrarPendiente(p2.id, { metodo_pago: 'efectivo' }
 assert.equal((await bd.listarPendientes()).length, 0);
 ok('una venta cancelada no se puede cobrar y sale de la lista');
 
+// 6. El cajero no ve el cuadre ni cierra la caja; Contabilidad sí
+const { vistaCuadreCaja } = await import('../src/caja.js');
+const rc = new Nodo('div'); document.body.append(rc);
+await vistaCaja(rc); await pausa();
+for (const t of ['esperado', 'Cerrar caja', 'Cierres anteriores', 'Cuadre de caja']) assert.ok(!rc.texto.includes(t), 'el cajero no debe ver: ' + t);
+assert.ok(rc.texto.includes('Registrar gasto'));
+const rq = new Nodo('div'); document.body.append(rq);
+await vistaCuadreCaja(rq); await pausa();
+assert.ok(rq.texto.includes('Efectivo esperado en caja') && rq.texto.includes('Cerrar caja'));
+const cerrar = rq.todos((x) => x.tag === 'button' && x.texto.includes('Cerrar caja'))[0];
+assert.ok(cerrar);
+ok('el cajero no ve el cuadre ni el cierre; la vista de Contabilidad muestra el cuadre y el botón de cerrar caja');
+
 if (process.env.VOLCAR_IMPRESIONES) { const fs = await import('node:fs'); impresiones.forEach((h, i) => fs.writeFileSync(`${process.env.VOLCAR_IMPRESIONES}/impresion-${i}.html`, h)); }
 console.log(`\n${n} comprobaciones correctas`);
 process.exit(0);

@@ -50,8 +50,8 @@ La restauración del respaldo conviene probarla también en el celular con la AP
 ## Compras y caja
 
 10. Proveedores: crea un proveedor. En Compras, registra una compra con margen de ganancia y revisa que cambien el costo y el precio del producto.
-11. Caja: abre la caja con el efectivo inicial, haz una venta en efectivo y registra un gasto. El "efectivo esperado" debe ser inicial + ventas en efectivo - gastos.
-12. Cierra la caja contando el efectivo: muestra si sobra o falta dinero y guarda el cierre en el historial.
+11. Caja: el cajero abre la caja con el efectivo inicial, cobra y registra gastos, pero NO ve el cuadre ni cierra la caja. En Contabilidad → "Cuadre de caja" (solo con permiso de Contabilidad) se ve el "efectivo esperado" = inicial + ventas en efectivo - gastos.
+12. En Contabilidad → "Cuadre de caja" → Cerrar caja: cuenta el efectivo, muestra si sobra o falta dinero y guarda el cierre en el historial de cierres. Avisa si quedan ventas por cobrar en caja.
 
 ## Reportes
 

@@ -28,11 +28,7 @@ export async function vistaCaja(raiz) {
   async function pintar() {
     const caja = await cajaAbierta();
     cajaActual = caja;
-    const historial = await consultar("SELECT * FROM caja WHERE estado = 'cerrada' ORDER BY id DESC LIMIT 30");
-    cuerpo.replaceChildren(
-      porCobrar,
-      caja ? await bloqueAbierta(caja) : bloqueCerrada(historial[0]),
-      seccionHistorial(historial));
+    cuerpo.replaceChildren(porCobrar, caja ? await bloqueAbierta(caja) : bloqueCerrada());
     await pintarPorCobrar();
   }
 
@@ -94,9 +90,8 @@ export async function vistaCaja(raiz) {
   }, 6000);
 
   // ---------- Caja cerrada: abrir ----------
-  function bloqueCerrada(ultimo) {
+  function bloqueCerrada() {
     const inicial = numero();
-    inicial.value = ultimo?.efectivo_contado ?? 0;
     inicial.setAttribute('aria-label', 'Efectivo inicial');
     const error = h('p', { class: 'error', role: 'alert' });
     const boton = h('button', { class: 'btn primario', onClick: abrir }, 'Abrir caja');
@@ -118,35 +113,21 @@ export async function vistaCaja(raiz) {
 
     return h('section', { class: 'seccion' },
       h('h2', {}, 'La caja está cerrada'),
-      h('p', { class: 'ayuda' }, 'Ábrela al empezar el día con el efectivo que tienes en el cajón. Los gastos se registran con la caja abierta.'),
+      h('p', { class: 'ayuda' }, 'Ábrela al empezar el día con el efectivo que tienes en el cajón. Los gastos se registran con la caja abierta. El cuadre y el cierre de caja los hace Contabilidad.'),
       campo('Efectivo inicial', inicial),
       error,
       boton);
   }
 
   // ---------- Caja abierta: resumen, gastos y cierre ----------
+  // El cajero NO ve el cuadre (efectivo esperado, ventas, diferencias) ni cierra la caja: eso es de Contabilidad
   async function bloqueAbierta(caja) {
-    const r = await resumenCaja(caja);
     const gastos = await consultar('SELECT * FROM gastos WHERE caja_id = ? ORDER BY id DESC', [caja.id]);
-    const fueraDeCaja = `Fuera del cajón: tarjeta ${dinero(r.tarjeta)}, transferencia ${dinero(r.transferencia)}${r.cheque > 0 ? `, cheques ${dinero(r.cheque)}` : ''}.`
-      + (r.gastos_otros > 0 ? ` Gastos pagados sin efectivo: ${dinero(r.gastos_otros)}.` : '')
-      + (r.proveedores_otros > 0 ? ` Pagos a proveedores sin efectivo: ${dinero(r.proveedores_otros)}.` : '');
-
     return h('div', {},
       h('section', { class: 'seccion' },
         h('h2', {}, 'Caja abierta'),
-        h('p', { class: 'ayuda' }, `Desde ${caja.fecha_apertura.slice(0, 16)}`),
-        h('div', { class: 'totales' },
-          renglon('Efectivo inicial', dinero(r.inicial)),
-          renglon('Ventas en efectivo', dinero(r.ventas_efectivo)),
-          renglon('Cobros de crédito en efectivo', dinero(r.cobros_efectivo)),
-          renglon('Gastos en efectivo', `- ${dinero(r.gastos_efectivo)}`),
-          renglon('Pagos a proveedores en efectivo', `- ${dinero(r.proveedores_efectivo)}`),
-          renglon('Efectivo esperado en caja', dinero(r.esperado), 'gran')),
-        h('p', { class: 'ayuda' }, fueraDeCaja),
-        h('div', { class: 'acciones' },
-          h('button', { class: 'btn', onClick: () => formularioGasto() }, 'Registrar gasto'),
-          h('button', { class: 'btn primario', onClick: () => formularioCierre(caja, r) }, 'Cerrar caja'))),
+        h('p', { class: 'ayuda' }, `Desde ${caja.fecha_apertura.slice(0, 16)}. El cuadre y el cierre de caja los hace Contabilidad.`),
+        h('div', { class: 'acciones' }, h('button', { class: 'btn', onClick: () => formularioGasto() }, 'Registrar gasto'))),
       h('section', { class: 'seccion' },
         h('h2', {}, 'Gastos de este turno'),
         gastos.length
@@ -232,7 +213,55 @@ export async function vistaCaja(raiz) {
         h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: quitar }, 'Eliminar gasto'))));
   }
 
-  function formularioCierre(caja, r) {
+  raiz.replaceChildren(h('header', { class: 'barra' }, h('h1', {}, 'Caja'), h('button', { class: 'btn claro', onClick: () => abrirImpresoras() }, 'Impresoras')), cuerpo);
+  await pintar();
+}
+
+// ---------- Cuadre y cierre de caja (pestaña de Contabilidad) ----------
+// Aquí sí se ve el efectivo esperado y las diferencias. Solo entra quien tiene el permiso de Contabilidad.
+export async function vistaCuadreCaja(raiz) {
+  const cuerpo = h('div');
+  raiz.replaceChildren(cuerpo);
+
+  async function pintar() {
+    const caja = await cajaAbierta();
+    const historial = await consultar("SELECT * FROM caja WHERE estado = 'cerrada' ORDER BY id DESC LIMIT 30");
+    cuerpo.replaceChildren(caja ? await bloqueCuadre(caja) : h('section', { class: 'seccion' },
+      h('h2', {}, 'No hay una caja abierta'),
+      h('p', { class: 'ayuda' }, 'Cuando el cajero abra la caja, aquí verás su cuadre y podrás cerrarla.')), seccionHistorial(historial));
+  }
+
+  async function bloqueCuadre(caja) {
+    const r = await resumenCaja(caja);
+    const pendientes = await listarPendientes();
+    const gastos = await consultar('SELECT * FROM gastos WHERE caja_id = ? ORDER BY id DESC', [caja.id]);
+    const fueraDeCaja = `Fuera del cajón: tarjeta ${dinero(r.tarjeta)}, transferencia ${dinero(r.transferencia)}${r.cheque > 0 ? `, cheques ${dinero(r.cheque)}` : ''}.`
+      + (r.gastos_otros > 0 ? ` Gastos pagados sin efectivo: ${dinero(r.gastos_otros)}.` : '')
+      + (r.proveedores_otros > 0 ? ` Pagos a proveedores sin efectivo: ${dinero(r.proveedores_otros)}.` : '');
+    return h('div', {},
+      h('section', { class: 'seccion' },
+        h('h2', {}, 'Cuadre de caja'),
+        h('p', { class: 'ayuda' }, `Caja abierta desde ${caja.fecha_apertura.slice(0, 16)}`),
+        h('div', { class: 'totales' },
+          renglon('Efectivo inicial', dinero(r.inicial)),
+          renglon('Ventas en efectivo', dinero(r.ventas_efectivo)),
+          renglon('Cobros de crédito en efectivo', dinero(r.cobros_efectivo)),
+          renglon('Gastos en efectivo', `- ${dinero(r.gastos_efectivo)}`),
+          renglon('Pagos a proveedores en efectivo', `- ${dinero(r.proveedores_efectivo)}`),
+          renglon('Efectivo esperado en caja', dinero(r.esperado), 'gran')),
+        h('p', { class: 'ayuda' }, fueraDeCaja),
+        pendientes.length ? h('p', { class: 'error' }, `Hay ${pendientes.length} ${pendientes.length === 1 ? 'venta' : 'ventas'} por cobrar en caja que no están incluidas en este cuadre.`) : null,
+        h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: () => formularioCierre(caja, r, pendientes.length) }, 'Cerrar caja'))),
+      h('section', { class: 'seccion' },
+        h('h2', {}, 'Gastos de este turno'),
+        gastos.length
+          ? h('div', { class: 'lista' }, gastos.map((g) => h('div', { class: 'fila inventario' },
+              h('span', { class: 'datos' }, h('strong', {}, g.concepto), h('small', {}, [g.categoria, METODOS[g.metodo] || g.metodo, g.fecha.slice(11, 16)].filter(Boolean).join(', '))),
+              h('span', { class: 'precio' }, dinero(g.monto)))))
+          : h('p', { class: 'ayuda' }, 'No hay gastos en este turno.')));
+  }
+
+  function formularioCierre(caja, r, porCobrar = 0) {
     let cerrar = () => {};
     const contado = numero();
     contado.setAttribute('aria-label', 'Efectivo contado');
@@ -268,6 +297,7 @@ export async function vistaCaja(raiz) {
     cerrar = hoja('Cerrar caja',
       h('div', { class: 'cuerpo' },
         h('div', { class: 'totales' }, renglon('Efectivo esperado', dinero(r.esperado), 'gran')),
+        porCobrar ? h('p', { class: 'error' }, `Atención: hay ${porCobrar} por cobrar en caja. Si cierras ahora se cobrarán en el turno siguiente.`) : null,
         campo('Efectivo contado en el cajón', contado),
         diferencia,
         campo('Nota', nota),
@@ -294,6 +324,5 @@ export async function vistaCaja(raiz) {
         : h('p', { class: 'ayuda' }, 'Aún no hay cierres de caja.'));
   }
 
-  raiz.replaceChildren(h('header', { class: 'barra' }, h('h1', {}, 'Caja'), h('button', { class: 'btn claro', onClick: () => abrirImpresoras() }, 'Impresoras')), cuerpo);
   await pintar();
 }

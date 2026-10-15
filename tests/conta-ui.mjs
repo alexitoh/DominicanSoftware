@@ -67,7 +67,7 @@ await cd.guardarPresupuesto(2026, C['6201'].id, Array(12).fill(1000));
 const raiz = new Nodo('div');
 await vistaContabilidad(raiz); await pausa();
 const tabs = raiz.todos((x) => x.tag === 'button' && x.attrs.role === 'tab');
-assert.equal(tabs.length, 9);
+assert.equal(tabs.length, 10);
 for (const t of tabs) {
   await pulsar(t);
   const cuerpo = textoDe(raiz);

@@ -10,6 +10,7 @@ import { vistaAsientos, vistaCuentas } from './conta-ui-asientos.js';
 import { vistaBancos } from './conta-ui-bancos.js';
 import { vistaActivos, vistaNomina } from './conta-ui-activos.js';
 import { vistaReportes } from './conta-ui-reportes.js';
+import { vistaCuadreCaja } from './caja.js';
 import { campo, numero, fechaInput, texto, selectCuentas, tabla, vacio, limpiar } from './conta-ui-comun.js';
 
 const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -114,7 +115,7 @@ async function vistaAjustes(raiz) {
 }
 
 const TABS = [
-  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaAsientos], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos],
+  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaAsientos], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cuadre', 'Cuadre de caja', vistaCuadreCaja],
   ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['presupuesto', 'Presupuesto', vistaPresupuesto], ['ajustes', 'Ajustes', vistaAjustes],
 ];
 let tabActual = 'resumen';
