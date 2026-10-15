@@ -143,6 +143,8 @@ export const margenProducto = (p) => (p.margen != null ? p.margen : margenDesde(
 // metodo_pago 'credito' = venta fiada: exige cliente y admite un pago inicial
 export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null, tipo_ncf = 'auto' }) {
   if (!items.length && !servicios.length) throw new Error('Agrega al menos un producto o servicio.');
+  // Con la nube conectada no se factura sin internet (ni con comprobante ni sin él): así no se cruzan números entre equipos
+  if (reservaNCF?.activo()) await reservaNCF.exigirConexion();
   for (const sv of servicios) {
     if (!String(sv.descripcion || '').trim()) throw new Error('Todos los servicios necesitan una descripción.');
     if (!(sv.cantidad > 0)) throw new Error('La cantidad de un servicio debe ser mayor que cero.');
@@ -195,71 +197,80 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
   const ncf = cfgF.modo === 'no' || (tipo_ncf === 'ninguno' && cfgF.modo !== 'adicional') ? null
     : await siguienteNCF(cliente_id, tipo_ncf === 'ninguno' ? 'auto' : tipo_ncf, cfgF.modo === 'adicional');
 
-  const numero = await numeroDocumento('V', 'siguiente_numero_venta');
+  try {
+    const numero = await numeroDocumento('V', 'siguiente_numero_venta');
 
-  // 2. Guardar todo en una sola transacción
-  const set = [
-    {
-      statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId, itbis, ncf?.ncf ?? null],
-    },
-  ];
-  for (const it of items) {
-    set.push({
-      statement: `INSERT INTO venta_detalle (venta_id, producto_id, cantidad, precio_unitario, costo_unitario, descuento)
-                  VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, ?, ?, ?, ?)`,
-      values: [numero, it.producto_id, it.cantidad, it.precio_unitario, it.costo_unitario, it.descuento || 0],
-    });
-    set.push({
-      statement: 'UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?',
-      values: [it.cantidad, it.producto_id],
-    });
-    set.push({
-      statement: `INSERT INTO movimientos_inventario (producto_id, tipo, cantidad, motivo, referencia_id)
-                  VALUES (?, 'salida', ?, 'venta', (SELECT id FROM ventas WHERE numero = ?))`,
-      values: [it.producto_id, -it.cantidad, numero],
-    });
-  }
-  for (const sv of servicios) {
-    set.push({
-      statement: `INSERT INTO venta_servicios (venta_id, descripcion, cantidad, precio_unitario)
-                  VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, ?, ?)`,
-      values: [numero, String(sv.descripcion).trim(), sv.cantidad, sv.precio_unitario],
-    });
-  }
-  for (const it of items) {
-    const meses = parseInt(it.garantia_meses, 10);
-    if (meses > 0) {
+    // 2. Guardar todo en una sola transacción
+    const set = [
+      {
+        statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId, itbis, ncf?.ncf ?? null],
+      },
+    ];
+    for (const it of items) {
       set.push({
-        statement: `INSERT INTO garantias (venta_id, producto_id, cliente_id, serie, meses, inicio, vence)
-                    VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, ?, ?, ?,
-                            date('now','localtime'), date('now','localtime', '+' || ? || ' months'))`,
-        values: [numero, it.producto_id, cliente_id, (it.serie || '').trim() || null, meses, meses],
+        statement: `INSERT INTO venta_detalle (venta_id, producto_id, cantidad, precio_unitario, costo_unitario, descuento)
+                    VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, ?, ?, ?, ?)`,
+        values: [numero, it.producto_id, it.cantidad, it.precio_unitario, it.costo_unitario, it.descuento || 0],
+      });
+      set.push({
+        statement: 'UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?',
+        values: [it.cantidad, it.producto_id],
+      });
+      set.push({
+        statement: `INSERT INTO movimientos_inventario (producto_id, tipo, cantidad, motivo, referencia_id)
+                    VALUES (?, 'salida', ?, 'venta', (SELECT id FROM ventas WHERE numero = ?))`,
+        values: [it.producto_id, -it.cantidad, numero],
       });
     }
-  }
-  if (metodo_pago === 'credito' && dias_credito != null && dias_credito >= 0) {
+    for (const sv of servicios) {
+      set.push({
+        statement: `INSERT INTO venta_servicios (venta_id, descripcion, cantidad, precio_unitario)
+                    VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, ?, ?)`,
+        values: [numero, String(sv.descripcion).trim(), sv.cantidad, sv.precio_unitario],
+      });
+    }
+    for (const it of items) {
+      const meses = parseInt(it.garantia_meses, 10);
+      if (meses > 0) {
+        set.push({
+          statement: `INSERT INTO garantias (venta_id, producto_id, cliente_id, serie, meses, inicio, vence)
+                      VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, ?, ?, ?,
+                              date('now','localtime'), date('now','localtime', '+' || ? || ' months'))`,
+          values: [numero, it.producto_id, cliente_id, (it.serie || '').trim() || null, meses, meses],
+        });
+      }
+    }
+    if (metodo_pago === 'credito' && dias_credito != null && dias_credito >= 0) {
+      set.push({
+        statement: `INSERT INTO cuentas_cobrar (venta_id, vence)
+                    VALUES ((SELECT id FROM ventas WHERE numero = ?), date('now','localtime', '+' || ? || ' days'))`,
+        values: [numero, Math.round(dias_credito)],
+      });
+    }
+    if (metodo_pago === 'credito' && inicial > 0) {
+      set.push({
+        statement: `INSERT INTO pagos (venta_id, monto, metodo, nota)
+                    VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, 'efectivo', 'Inicial')`,
+        values: [numero, redondear(inicial)],
+      });
+    }
     set.push({
-      statement: `INSERT INTO cuentas_cobrar (venta_id, vence)
-                  VALUES ((SELECT id FROM ventas WHERE numero = ?), date('now','localtime', '+' || ? || ' days'))`,
-      values: [numero, Math.round(dias_credito)],
+      statement: "UPDATE config SET valor = CAST(valor AS INTEGER) + 1 WHERE clave = 'siguiente_numero_venta'",
+      values: [],
     });
-  }
-  if (metodo_pago === 'credito' && inicial > 0) {
-    set.push({
-      statement: `INSERT INTO pagos (venta_id, monto, metodo, nota)
-                  VALUES ((SELECT id FROM ventas WHERE numero = ?), ?, 'efectivo', 'Inicial')`,
-      values: [numero, redondear(inicial)],
-    });
-  }
-  set.push({
-    statement: "UPDATE config SET valor = CAST(valor AS INTEGER) + 1 WHERE clave = 'siguiente_numero_venta'",
-    values: [],
-  });
 
-  await transaccion(set);
-  return numero;
+    await transaccion(set);
+    return numero;
+  } catch (e) {
+    // El número de comprobante ya se había entregado y la factura no se guardó: ese número queda anulado y hay que repetir la factura
+    if (ncf?.clave && reservaNCF) {
+      await reservaNCF.anular(ncf.clave, 'La factura no se pudo guardar').catch(() => {});
+      throw new Error(`No se pudo guardar la factura (${e.message || e}). El comprobante ${ncf.ncf} quedó anulado: vuelve a realizar la factura.`);
+    }
+    throw e;
+  }
 }
 
 // ---------- Cotizaciones ----------
@@ -753,6 +764,17 @@ export async function leerSecuenciasNCF() {
   }));
 }
 
+// En un equipo conectado a la nube las secuencias son del negocio (viven en el servidor) y cada factura pide su número ahí: hace falta internet.
+// nube-app.js registra este enlace; sin nube (o sin enlace) se usan las secuencias de este dispositivo.
+let reservaNCF = null; // { activo(), exigirConexion(), pedir(candidatos, clave) → {tipo, numero}, anular(clave, motivo) }
+export const configurarReservaNCF = (r) => { reservaNCF = r; };
+
+// Vacía lo que este equipo tenía de un tipo (cuando esos números pasan a administrarse desde el servidor)
+export async function limpiarSecuenciaLocalNCF(tipo) {
+  if (!TIPOS_NCF[tipo]) return;
+  for (const k of [`ncf_${tipo}_sig`, `ncf_${tipo}_hasta`]) await ejecutar('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', [k, '0']);
+}
+
 export async function guardarSecuenciaNCF(tipo, sig, hasta) {
   if (!TIPOS_NCF[tipo]) throw new Error('Tipo de NCF desconocido.');
   if (sig && hasta && sig > hasta) throw new Error('El número inicial no puede ser mayor que el final.');
@@ -779,30 +801,41 @@ export async function guardarReglasComprobante(reglas) {
 // Tipo de comprobante: 'auto' elige B01 (crédito fiscal) si el cliente tiene RNC y hay secuencia B01; si no, B02 (si no hay secuencia, la venta queda sin NCF).
 // Si se pide un tipo concreto, se exige que se pueda emitir: B01, B14 y B15 necesitan un cliente con RNC, y todos una secuencia autorizada con números disponibles.
 async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
-  const sec = await leerSecuenciasNCF();
+  const enNube = !!reservaNCF?.activo();
+  const sec = enNube ? null : await leerSecuenciasNCF();
+  // Con la nube no se sabe qué hay disponible hasta preguntarle al servidor: se arma la lista de preferencia y él elige
   const util = (t) => sec.find((s) => s.tipo === t && s.sig > 0 && s.sig <= s.hasta);
   let cli = null;
   if (clienteId) [cli] = await consultar('SELECT tipo_doc, documento, tipo_comprobante, regimen_dgii FROM clientes WHERE id = ?', [clienteId]);
   const tieneRnc = !!cli?.documento && limpiarDocumento(cli.documento).length === 9;
-  let tipo = null;
+  let candidatos; let ideal = null; let motivo = '';
   if (pedido && pedido !== 'auto') {
     if (!TIPOS_NCF[pedido]) throw new Error('Tipo de comprobante desconocido.');
     if (pedido !== 'B02' && !tieneRnc) throw new Error(`El comprobante ${pedido} (${TIPOS_NCF[pedido]}) necesita un cliente con RNC.`);
-    if (!util(pedido)) throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante.`);
-    tipo = pedido;
+    candidatos = [pedido];
   } else {
     // Automático: el tipo que le corresponde al cliente según su ficha, su RNC y su régimen en la DGII
-    const { tipo: ideal, motivo } = comprobanteDeCliente(cli, await leerReglasComprobante());
-    if (util(ideal)) tipo = ideal;
-    else if (obligatorio) throw new Error(`A este cliente le corresponde ${ideal} (${TIPOS_NCF[ideal]}; ${motivo}), pero no hay números disponibles. Registra la secuencia en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
-    else if (ideal !== 'B02' && util('B02')) tipo = 'B02';
+    ({ tipo: ideal, motivo } = comprobanteDeCliente(cli, await leerReglasComprobante()));
+    candidatos = !obligatorio && ideal !== 'B02' ? [ideal, 'B02'] : [ideal];
   }
-  if (!tipo) return null;
-  const s = util(tipo);
-  const ncf = formatearNCF(tipo, s.sig);
-  await ejecutar('UPDATE config SET valor = ? WHERE clave = ?', [String(s.sig + 1), `ncf_${tipo}_sig`]);
-  return { ncf, tipo };
+  let tipo = null; let numero = 0; let clave = null;
+  if (enNube) {
+    clave = claveAleatoria();
+    const r = await reservaNCF.pedir(candidatos, clave); // lanza un error claro si no hay internet
+    if (r?.tipo) { tipo = r.tipo; numero = r.numero; }
+  } else {
+    const t = candidatos.find(util);
+    if (t) { tipo = t; numero = util(t).sig; await ejecutar('UPDATE config SET valor = ? WHERE clave = ?', [String(numero + 1), `ncf_${t}_sig`]); }
+  }
+  if (!tipo) {
+    if (pedido && pedido !== 'auto') throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
+    if (obligatorio) throw new Error(`A este cliente le corresponde ${ideal} (${TIPOS_NCF[ideal]}; ${motivo}), pero no hay números disponibles. Registra la secuencia en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
+    return null;
+  }
+  return { ncf: formatearNCF(tipo, numero), tipo, clave };
 }
+
+const claveAleatoria = () => (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`).replace(/-/g, '');
 
 export async function asignarNCFVenta(ventaId, ncf) {
   const v = String(ncf || '').trim().toUpperCase();

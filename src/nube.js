@@ -54,6 +54,11 @@ export function crearCliente({ base = () => '', token = () => null, fetchFn = (.
     consultarRNCRegistro: (n) => llamar('GET', `/api/rnc-registro/${encodeURIComponent(n)}`, undefined, { conToken: false, tiempo: 12000 }),
     estadoPadron: () => llamar('GET', '/api/rnc-estado'),
     actualizarPadron: () => llamar('POST', '/api/rnc-actualizar', {}, { tiempo: 240000 }),
+    // Secuencias de NCF del negocio (viven en el servidor)
+    ncf: () => llamar('GET', '/api/ncf', undefined, { tiempo: 12000 }),
+    guardarNcf: (tipo, b) => llamar('PUT', `/api/ncf/${encodeURIComponent(tipo)}`, b, { tiempo: 12000 }),
+    siguienteNcf: (b) => llamar('POST', '/api/ncf/siguiente', b, { tiempo: 10000 }),
+    anularNcf: (b) => llamar('POST', '/api/ncf/anular', b, { tiempo: 10000 }),
     sync: (b) => llamar('POST', '/api/sync', b, { tiempo: 60000 }),
   };
 }

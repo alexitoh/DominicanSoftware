@@ -4,7 +4,7 @@
 import { consultar, ejecutar, transaccion, setUsuarioActual } from './database.js';
 import {
   vinculado, nube, ErrorNube, sesionNube, haySesionNube, aplicarMiembros, guardarVerificador, adoptarRespuesta,
-  conectarDispositivo, dispositivo, negocioParaAcceso,
+  conectarDispositivo, dispositivo, negocioParaAcceso, subirSecuenciasLocales,
 } from './nube-app.js';
 import {
   hashClave, verificarClave, generarCodigoRecuperacion, normalizarCodigo, normalizarUsuario,
@@ -160,6 +160,7 @@ export async function registrarNegocioNube({ negocio, nombre, usuario, correo, c
   if (r.pendiente) return { codigo: r.codigoRecuperacion, pendiente: true, ...datosId };
   await adoptarRespuesta(r, clave);
   await conectarDispositivo(r, 'subir', alProgreso);
+  await subirSecuenciasLocales(); // las secuencias de NCF de este equipo pasan a ser del negocio
   return { codigo: r.codigoRecuperacion, pendiente: false, ...datosId };
 }
 

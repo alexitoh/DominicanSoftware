@@ -355,3 +355,6 @@ textarea.campo { resize: vertical; }
 
 /* Identificador del negocio (RNC o número asignado) */
 .identificador { display: flex; flex-direction: column; gap: .4rem; }
+
+.negocio-fijo { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; flex-wrap: wrap; padding: .55rem .75rem; border-radius: 10px; background: #eef3f8; color: #1b2b3f; font-size: .95rem; }
+.negocio-fijo span { font-variant-numeric: tabular-nums; color: #44556b; }

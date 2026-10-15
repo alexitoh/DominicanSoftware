@@ -1,5 +1,7 @@
 // nube-app.js - une la app con la nube: vínculo del dispositivo, usuarios espejo y sincronización automática.
-import { consultar, lote, onEscritura, sincronizacionLista } from './database.js';
+import {
+  consultar, lote, onEscritura, sincronizacionLista, configurarReservaNCF, leerSecuenciasNCF, limpiarSecuenciaLocalNCF,
+} from './database.js';
 import { nube, ErrorNube, sesionNube, guardarSesionNube, idDispositivo, urlServidor, servidorDisponible } from './nube.js';
 import { crearMotor } from './sync-nucleo.js';
 import { toast } from './ui.js';
@@ -90,11 +92,40 @@ export async function adoptarRespuesta(r, clave) {
   return { nuevoVinculo: !vinculo };
 }
 
+// Las secuencias de NCF autorizadas (ncf_<tipo>_sig / _hasta) son de cada negocio y viven en este dispositivo.
+// Al cambiar de negocio se guardan aparte (por negocio) y se devuelven si el equipo vuelve a ese negocio: así un negocio nuevo
+// no hereda los números del anterior ni se repiten comprobantes al regresar.
+const BORRAR_NCF = "DELETE FROM config WHERE clave GLOB 'ncf_*_sig' OR clave GLOB 'ncf_*_hasta'";
+async function guardarSecuenciasDe(uidNegocio) {
+  const filas = await consultar("SELECT clave, valor FROM config WHERE clave GLOB 'ncf_*_sig' OR clave GLOB 'ncf_*_hasta'");
+  const sets = [];
+  if (uidNegocio && filas.length) {
+    sets.push({
+      statement: 'INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)',
+      values: [`respaldo_ncf_${uidNegocio}`, JSON.stringify(Object.fromEntries(filas.map((f) => [f.clave, f.valor])))],
+    });
+  }
+  sets.push({ statement: BORRAR_NCF, values: [] });
+  await lote(sets);
+}
+async function restaurarSecuenciasDe(uidNegocio) {
+  const [f] = await consultar('SELECT valor FROM config WHERE clave = ?', [`respaldo_ncf_${uidNegocio}`]);
+  if (!f) return;
+  let datos = {};
+  try { datos = JSON.parse(f.valor) || {}; } catch { /* respaldo dañado: se ignora */ }
+  await lote([
+    { statement: BORRAR_NCF, values: [] },
+    ...Object.entries(datos).filter(([k]) => /^ncf_.+_(sig|hasta)$/.test(k)).map(([k, v]) => ({ statement: 'INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', values: [k, String(v)] })),
+    { statement: 'DELETE FROM config WHERE clave = ?', values: [`respaldo_ncf_${uidNegocio}`] },
+  ]);
+}
+
 // modo: 'subir' (los datos de este dispositivo pasan a la nube) | 'combinar' | 'reemplazar' (se queda con lo de la nube)
 export async function conectarDispositivo(r, modo, alProgreso) {
   await motor.vincular({
     dispositivo: idDispositivo(), codigo: r.dispositivo?.codigo || '', negocio: r.negocio.uid, negocioNombre: r.negocio.nombre, epoca: r.negocio.epoca || 0, negocioId: r.negocio.identificador || null,
   });
+  await restaurarSecuenciasDe(r.negocio.uid); // si este equipo ya había trabajado con ese negocio, recupera sus secuencias
   if (modo === 'reemplazar') await motor.reemplazarLocal();
   else await motor.marcarTodo();
   await cargarVinculo();
@@ -112,12 +143,73 @@ export async function desconectarDispositivo() {
 
 // Deja este dispositivo como nuevo (sin negocio, usuarios ni datos) para crear otro negocio o entrar con otra cuenta
 export async function vaciarDispositivo() {
+  const negocioAnterior = vinculo?.negocio || null;
   await motor.desvincular();
   guardarSesionNube(null);
   vinculo = null;
   await motor.reemplazarLocal();
+  await guardarSecuenciasDe(negocioAnterior);
   await lote([{ statement: 'DELETE FROM usuarios', values: [] }]);
   avisar({ fase: 'local', pendientes: 0, ultimo: null });
+}
+
+// ---------- Secuencias de NCF del negocio ----------
+// Son del negocio y viven en el servidor: cada factura con comprobante le pide el siguiente número en ese momento (hace falta internet).
+// Así dos equipos nunca repiten un número y no se reservan números que luego se pierdan.
+const SIN_INTERNET_FACTURA = 'Por falta de conexión a internet el sistema no pudo realizar esta factura. Conéctate e intenta de nuevo.';
+const K_NCF_PENDIENTES = 'caraudio_ncf_por_anular';
+const leerPendientesNCF = () => { try { const v = JSON.parse(localStorage.getItem(K_NCF_PENDIENTES) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+const guardarPendientesNCF = (v) => { try { localStorage.setItem(K_NCF_PENDIENTES, JSON.stringify(v.slice(-200))); } catch { /* sin almacenamiento: se pierde el aviso, no la venta */ } };
+const pausaCorta = (ms) => new Promise((r) => setTimeout(r, ms));
+const sinConexion = (e) => e instanceof ErrorNube && e.sinConexion;
+
+// Pedidos de número que se cortaron sin saber si el servidor llegó a entregarlo, o facturas que no se guardaron: se anulan en cuanto hay internet.
+async function anularPendientesNCF() {
+  const lista = leerPendientesNCF();
+  if (!lista.length) return;
+  const quedan = [];
+  for (const p of lista) {
+    try { await nube.anularNcf({ clave: p.clave, motivo: p.motivo }); } catch (e) { if (sinConexion(e)) quedan.push(p); }
+  }
+  guardarPendientesNCF(quedan);
+}
+const marcarParaAnular = (clave, motivo) => guardarPendientesNCF([...leerPendientesNCF(), { clave, motivo }]);
+
+configurarReservaNCF({
+  activo: () => vinculado() && haySesionNube(),
+  // Sin internet un equipo conectado a la nube no emite ninguna factura (solo consulta): se comprueba antes de empezar
+  exigirConexion: async () => {
+    try { await nube.salud(); } catch { throw new Error(SIN_INTERNET_FACTURA); }
+    await anularPendientesNCF().catch(() => {});
+  },
+  pedir: async (candidatos, clave) => {
+    let ultimo;
+    for (let i = 0; i < 3; i++) { // con la misma clave el servidor devuelve el mismo número si el primer intento sí llegó
+      try { return await nube.siguienteNcf({ candidatos, clave, dispositivo: idDispositivo() }); } catch (e) {
+        if (!sinConexion(e)) throw e;
+        ultimo = e; await pausaCorta(300);
+      }
+    }
+    // No sabemos si el servidor llegó a entregar un número: si lo hizo, se anula cuando vuelva el internet
+    marcarParaAnular(clave, 'Se cortó la conexión antes de guardar la factura');
+    throw new Error(SIN_INTERNET_FACTURA, { cause: ultimo });
+  },
+  anular: async (clave, motivo) => {
+    try { await nube.anularNcf({ clave, motivo }); } catch { marcarParaAnular(clave, motivo); }
+  },
+});
+
+// Las secuencias que este equipo tenía solo para sí pasan a ser del negocio. Devuelve los tipos migrados.
+export async function subirSecuenciasLocales() {
+  const migrados = [];
+  let servidor;
+  try { servidor = (await nube.ncf()).secuencias; } catch { return migrados; }
+  for (const s of await leerSecuenciasNCF()) {
+    if (!(s.sig > 0 && s.hasta >= s.sig)) continue;
+    if (servidor.find((x) => x.tipo === s.tipo)?.hasta > 0) continue; // el negocio ya tiene la suya: lo de este equipo queda como su bloque
+    try { await nube.guardarNcf(s.tipo, { siguiente: s.sig, hasta: s.hasta }); await limpiarSecuenciaLocalNCF(s.tipo); migrados.push(s.tipo); } catch { /* sin permiso o sin internet: se queda como estaba */ }
+  }
+  return migrados;
 }
 
 // ---------- Estado visible ----------

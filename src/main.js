@@ -12,7 +12,8 @@ import { tienePermiso, usuarioActual, registrarBitacora } from './auth.js';
 import { vistaUsuarios, abrirMiCuenta } from './usuarios.js';
 import { indicadorNube, seccionNube } from './nube-ui.js';
 import { campanaAvisos, bannerPago } from './avisos-ui.js';
-import { cargarVinculo, vinculado, iniciarSincronizacionAutomatica } from './nube-app.js';
+import { cargarVinculo, vinculado, iniciarSincronizacionAutomatica, haySesionNube, subirSecuenciasLocales } from './nube-app.js';
+import { nube } from './nube.js';
 import { vistaVentas } from './ventas.js';
 import { vistaProductos } from './productos.js';
 import { vistaInventario } from './inventario.js';
@@ -250,10 +251,21 @@ async function vistaAjustes(raiz) {
   const rncNegocio = h('input', { class: 'campo', value: cfg.negocio_rnc ?? '', inputmode: 'numeric', placeholder: '9 números', autocomplete: 'off' });
   const activoFact = h('input', { type: 'checkbox', checked: cfg.itbis_modo === 'adicional' || cfg.itbis_modo === 'incluido', 'aria-label': 'Facturación con comprobante' });
   const tasaItbis = h('input', { class: 'campo', type: 'number', min: '0', step: '0.01', value: cfg.itbis_tasa || '18', inputmode: 'decimal' });
-  const secuencias = await leerSecuenciasNCF();
+  // Con la nube conectada las secuencias son del negocio y viven en el servidor; sin nube, de este dispositivo
+  let ncfServidor = null; let ncfAviso = '';
+  const ncfNube = vinculado() && haySesionNube();
+  if (ncfNube) {
+    try { await subirSecuenciasLocales(); ncfServidor = await nube.ncf(); } catch { ncfAviso = 'Sin conexión con el servidor: las secuencias del negocio no se pueden ver ni cambiar ahora.'; }
+  }
+  const adminNcf = usuarioActual()?.rol === 'admin';
+  const secuencias = ncfNube
+    ? (ncfServidor?.secuencias || []).map((x) => ({ tipo: x.tipo, sig: x.siguiente, hasta: x.hasta }))
+    : await leerSecuenciasNCF();
+  const anuladosNcf = (ncfServidor?.anulados || []).map((x) => `${x.tipo}${String(x.numero).padStart(8, '0')}`);
+  const bloqueadoNcf = ncfNube && (!ncfServidor || !adminNcf);
   const camposNcf = secuencias.map((s) => ({
-    s, sig: h('input', { class: 'campo', type: 'number', min: '0', value: s.sig || '', placeholder: 'Próximo', inputmode: 'numeric' }),
-    hasta: h('input', { class: 'campo', type: 'number', min: '0', value: s.hasta || '', placeholder: 'Último', inputmode: 'numeric' }),
+    s, sig: h('input', { class: 'campo', type: 'number', min: '0', value: s.sig || '', placeholder: 'Próximo', inputmode: 'numeric', disabled: bloqueadoNcf }),
+    hasta: h('input', { class: 'campo', type: 'number', min: '0', value: s.hasta || '', placeholder: 'Último', inputmode: 'numeric', disabled: bloqueadoNcf }),
   }));
   // Reglas: si el régimen/categoría que la DGII tiene para el cliente contiene un texto, se le da ese comprobante
   const reglasLista = await leerReglasComprobante();
@@ -276,7 +288,19 @@ async function vistaAjustes(raiz) {
     const tasa = parseFloat(tasaItbis.value);
     if (!(tasa > 0 && tasa < 100)) { errorFiscal.textContent = 'La tasa de ITBIS no es válida.'; return; }
     try {
-      for (const c of camposNcf) await guardarSecuenciaNCF(c.s.tipo, parseInt(c.sig.value, 10) || 0, parseInt(c.hasta.value, 10) || 0);
+      if (ncfNube) {
+        if (!bloqueadoNcf) {
+          for (const c of camposNcf) {
+            const sig = parseInt(c.sig.value, 10) || 0; const hasta = parseInt(c.hasta.value, 10) || 0;
+            if (sig === (c.s.sig || 0) && hasta === (c.s.hasta || 0)) continue;
+            if (c.s.sig > 0 && sig > 0 && sig < c.s.sig && !(await confirmar('Bajar el próximo número', `${c.s.tipo}: pasaste de ${c.s.sig} a ${sig}. Si ya se emitieron comprobantes en ese rango, se repetirían.`, 'Continuar'))) return;
+            const r = await nube.guardarNcf(c.s.tipo, { siguiente: sig, hasta });
+            c.s.sig = r.siguiente; c.s.hasta = r.hasta;
+          }
+        }
+      } else {
+        for (const c of camposNcf) await guardarSecuenciaNCF(c.s.tipo, parseInt(c.sig.value, 10) || 0, parseInt(c.hasta.value, 10) || 0);
+      }
       await guardarReglasComprobante(filasReglas.map((f) => ({ texto: f.texto.value, tipo: f.tipo.value })));
     } catch (e) { errorFiscal.textContent = e.message; return; }
     for (const [k, v] of [['negocio_rnc', doc.numero || ''], ['itbis_modo', activoFact.checked ? 'adicional' : 'no'], ['itbis_tasa', String(tasa)]]) await guardarConfig(k, v);
@@ -326,7 +350,11 @@ async function vistaAjustes(raiz) {
         h('label', { class: 'btn primario' }, 'Elegir logo', archivoLogo))),
     h('section', { class: 'seccion' },
       h('h2', {}, 'Facturación con comprobante (DGII)'),
-      h('p', { class: 'ayuda' }, 'Encendida: toda venta sale con comprobante fiscal (NCF) y el ITBIS se suma al precio de venta. Al facturar eliges el tipo; si el cliente no tiene RNC se le da una factura de consumo (B02). Apagada: se factura sin comprobante ni ITBIS. Escribe abajo los rangos de NCF que la DGII te autorizó; si usas varios dispositivos, dale a cada uno un rango distinto.'),
+      h('p', { class: 'ayuda' }, 'Encendida: toda venta sale con comprobante fiscal (NCF) y el ITBIS se suma al precio de venta. Al facturar eliges el tipo; si el cliente no tiene RNC se le da una factura de consumo (B02). Apagada: se factura sin comprobante ni ITBIS. Escribe abajo los rangos de NCF que la DGII te autorizó.'),
+      h('p', { class: 'ayuda' }, ncfNube ? 'Las secuencias son de este negocio y se guardan en el servidor: todos los equipos del negocio usan la misma y cada factura pide su número al servidor, así no se repite ninguno. Sin internet el equipo no puede facturar (solo consultar).' : 'Sin la nube conectada, las secuencias son de este dispositivo.'),
+      ncfAviso ? h('p', { class: 'error', role: 'status' }, ncfAviso) : null,
+      anuladosNcf.length ? h('p', { class: 'ayuda' }, 'Comprobantes anulados porque la factura no se llegó a guardar (úsalos para el formato 608): ' + anuladosNcf.join(' · ')) : null,
+      ncfNube && ncfServidor && !adminNcf ? h('p', { class: 'ayuda' }, 'Solo el administrador puede cambiar las secuencias.') : null,
       h('label', { class: 'etiqueta fila-check' }, activoFact, ' Facturar con comprobante e ITBIS'),
       h('label', { class: 'etiqueta' }, 'RNC del negocio', rncNegocio),
       cfg.negocio_categoria ? h('p', { class: 'ayuda' }, `Categoría / régimen en la DGII: ${cfg.negocio_categoria}`) : null,

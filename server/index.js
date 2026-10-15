@@ -16,6 +16,7 @@ const ROLES = ['admin', 'gerente', 'vendedor', 'cajero', 'almacen'];
 const PERMISOS = ['ventas', 'productos', 'inventario', 'compras', 'caja', 'cuentas', 'clientes', 'proveedores', 'garantias', 'reportes', 'contabilidad', 'ajustes', 'anular'];
 const MAX_CUERPO = 12 * 1024 * 1024;
 const LIMITE_PAGINA = 500;
+const TIPOS_NCF = ['B01', 'B02', 'B14', 'B15'];
 
 class ErrorHttp extends Error {
   constructor(estado, mensaje) { super(mensaje); this.estado = estado; }
@@ -178,6 +179,73 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       try { return { cantidad: await descargarPadron(db, { url: urlPadron, fetchFn: fetchPadron }) }; }
       catch (e) { falla(502, `No se pudo bajar el listado de la DGII (${e.message}). Descarga DGII_RNC.zip desde dgii.gov.do y súbelo con "Subir archivo".`); }
     },
+    // ---------- Secuencias de NCF del negocio ----------
+    // La autorización de la DGII es del negocio: se guarda aquí y cada factura pide el siguiente número al servidor (hace falta internet).
+    'GET /api/ncf': (req) => {
+      const ctx = autenticar(req);
+      const filas = db.prepare('SELECT tipo, siguiente, hasta FROM ncf_secuencias WHERE negocio = ?').all(ctx.negocio.uid);
+      const secuencias = TIPOS_NCF.map((tipo) => {
+        const f = filas.find((x) => x.tipo === tipo) || { siguiente: 0, hasta: 0 };
+        return { tipo, siguiente: f.siguiente, hasta: f.hasta, disponibles: f.siguiente > 0 && f.hasta >= f.siguiente ? f.hasta - f.siguiente + 1 : 0 };
+      });
+      const anulados = db.prepare("SELECT tipo, numero, motivo, fecha FROM ncf_emitidos WHERE negocio = ? AND estado = 'anulado' ORDER BY id DESC LIMIT 30").all(ctx.negocio.uid);
+      return { secuencias, anulados };
+    },
+
+    'PUT /api/ncf/:tipo': (req, b, p) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      if (!TIPOS_NCF.includes(p.tipo)) falla(400, 'Tipo de comprobante desconocido.');
+      const siguiente = Number.isInteger(Number(b.siguiente)) ? Number(b.siguiente) : NaN;
+      const hasta = Number.isInteger(Number(b.hasta)) ? Number(b.hasta) : NaN;
+      if (!(siguiente >= 0 && hasta >= 0 && siguiente <= 99999999 && hasta <= 99999999)) falla(400, 'Los números de la secuencia no son válidos.');
+      if ((siguiente === 0) !== (hasta === 0)) falla(400, 'Escribe el próximo número y el último autorizado (o deja los dos vacíos).');
+      if (siguiente > hasta) falla(400, 'El próximo número no puede ser mayor que el último autorizado.');
+      const antes = db.prepare('SELECT siguiente, hasta FROM ncf_secuencias WHERE negocio = ? AND tipo = ?').get(ctx.negocio.uid, p.tipo);
+      db.prepare(`INSERT INTO ncf_secuencias (negocio, tipo, siguiente, hasta, actualizado) VALUES (?, ?, ?, ?, datetime('now'))
+                  ON CONFLICT(negocio, tipo) DO UPDATE SET siguiente = excluded.siguiente, hasta = excluded.hasta, actualizado = excluded.actualizado`)
+        .run(ctx.negocio.uid, p.tipo, siguiente, hasta);
+      auditar('Cambió secuencia NCF', ctx.negocio.nombre, `${p.tipo}: ${antes ? `${antes.siguiente}-${antes.hasta}` : 'sin secuencia'} → ${siguiente}-${hasta} (${ctx.cuenta.usuario})`);
+      const retrocede = !!antes && antes.siguiente > 0 && siguiente > 0 && siguiente < antes.siguiente;
+      return { tipo: p.tipo, siguiente, hasta, aviso: retrocede ? 'Bajaste el próximo número: si ya se emitieron comprobantes en ese rango, se repetirían.' : '' };
+    },
+
+    // Entrega el siguiente número de comprobante en el momento de facturar. Es atómico: dos equipos nunca reciben el mismo.
+    // `candidatos` va en orden de preferencia (por ejemplo ['B01', 'B02']); se usa el primero que tenga números disponibles.
+    // `clave` identifica el pedido: si el equipo lo repite (se cortó el internet antes de recibir la respuesta) recibe el mismo número.
+    'POST /api/ncf/siguiente': (req, b) => {
+      const ctx = autenticar(req);
+      const candidatos = Array.isArray(b.candidatos) ? b.candidatos.filter((t) => TIPOS_NCF.includes(t)).slice(0, TIPOS_NCF.length) : [];
+      if (!candidatos.length) falla(400, 'Indica el tipo de comprobante.');
+      const clave = String(b.clave || '').slice(0, 64);
+      if (clave.length < 8) falla(400, 'Falta la clave del pedido.');
+      return transaccion(db, () => {
+        const previo = db.prepare('SELECT tipo, numero, estado FROM ncf_emitidos WHERE negocio = ? AND clave = ?').get(ctx.negocio.uid, clave);
+        if (previo) return { tipo: previo.tipo, numero: previo.numero, quedan: 0, repetido: true, anulado: previo.estado === 'anulado' };
+        const equipo = db.prepare('SELECT codigo FROM dispositivos WHERE negocio = ? AND uid = ?').get(ctx.negocio.uid, String(b.dispositivo || ''))?.codigo || null;
+        for (const tipo of candidatos) {
+          const f = db.prepare('SELECT siguiente, hasta FROM ncf_secuencias WHERE negocio = ? AND tipo = ?').get(ctx.negocio.uid, tipo);
+          if (!f || !(f.siguiente > 0 && f.hasta >= f.siguiente)) continue;
+          db.prepare("UPDATE ncf_secuencias SET siguiente = siguiente + 1, actualizado = datetime('now') WHERE negocio = ? AND tipo = ?").run(ctx.negocio.uid, tipo);
+          db.prepare('INSERT INTO ncf_emitidos (negocio, clave, tipo, numero, equipo) VALUES (?, ?, ?, ?, ?)').run(ctx.negocio.uid, clave, tipo, f.siguiente, equipo);
+          return { tipo, numero: f.siguiente, quedan: f.hasta - f.siguiente };
+        }
+        return { tipo: null, numero: 0, quedan: 0 };
+      });
+    },
+
+    // El equipo avisa que la factura no se guardó: el número entregado queda anulado (consta para el formato 608 de la DGII).
+    // Si el pedido nunca llegó a emitir un número, no pasa nada.
+    'POST /api/ncf/anular': (req, b) => {
+      const ctx = autenticar(req);
+      const clave = String(b.clave || '').slice(0, 64);
+      const fila = db.prepare("SELECT id, tipo, numero FROM ncf_emitidos WHERE negocio = ? AND clave = ? AND estado = 'emitido'").get(ctx.negocio.uid, clave);
+      if (!fila) return { anulado: false };
+      db.prepare("UPDATE ncf_emitidos SET estado = 'anulado', motivo = ? WHERE id = ?").run(String(b.motivo || 'La factura no se guardó').slice(0, 200), fila.id);
+      auditar('Anuló comprobante sin factura', ctx.negocio.nombre, `${fila.tipo}${String(fila.numero).padStart(8, '0')} (${ctx.cuenta.usuario})`);
+      return { anulado: true, tipo: fila.tipo, numero: fila.numero };
+    },
+
     'GET /api/salud': () => ({ ok: true, hora: new Date().toISOString() }),
 
     'POST /api/registro': (req, b) => {
@@ -467,6 +535,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
         generado: new Date().toISOString(), negocio: n,
         cuentas: db.prepare('SELECT uid, nombre, usuario, correo, rol, permisos, activo, creado FROM cuentas WHERE negocio = ?').all(p.uid),
         pagos: db.prepare('SELECT fecha, monto, meses, nota FROM pagos_lic WHERE negocio = ?').all(p.uid),
+        ncf: db.prepare('SELECT tipo, siguiente, hasta FROM ncf_secuencias WHERE negocio = ?').all(p.uid),
         registros: db.prepare('SELECT tabla, uid, datos, borrado, actualizado FROM registros WHERE negocio = ?').all(p.uid)
           .map((r) => ({ ...r, datos: r.datos ? JSON.parse(r.datos) : null })),
       };
@@ -499,6 +568,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       transaccion(db, () => {
         db.prepare('DELETE FROM registros WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM dispositivos WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM ncf_secuencias WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM ncf_emitidos WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM avisos_leidos WHERE cuenta IN (SELECT uid FROM cuentas WHERE negocio = ?)').run(n.uid);
         db.prepare('DELETE FROM avisos WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM cuentas WHERE negocio = ?').run(n.uid);
@@ -745,7 +816,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     const cabeceras = {
       'Access-Control-Allow-Origin': origenes,
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',

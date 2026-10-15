@@ -142,8 +142,12 @@ ok('recuperar la contraseña con el código funciona en la nube');
 // ---- otro negocio en el mismo dispositivo ----
 await na.sincronizarAhora();
 assert.equal(await na.motor.pendientes(), 0);
+// Secuencias de NCF autorizadas al primer negocio: no deben pasar al siguiente
+await bd.guardarSecuenciaNCF('B01', 4, 50);
+await bd.guardarSecuenciaNCF('B02', 1, 50);
 await auth.cerrarSesion();
 await na.vaciarDispositivo();
+assert.deepEqual((await bd.leerSecuenciasNCF()).map((s) => [s.sig, s.hasta]).flat().filter(Boolean), [], 'el negocio nuevo no hereda las secuencias de NCF');
 assert.equal(await auth.existenUsuarios(), false, 'sin usuarios: vuelve a la bienvenida');
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 0);
 assert.equal(na.vinculado(), false);
@@ -151,6 +155,7 @@ const nuevo = await auth.registrarNegocioNube({ negocio: 'Segundo Negocio', nomb
 assert.ok(nuevo.codigo);
 assert.equal(nuevo.identificador, '131234567'); assert.equal(nuevo.asignado, false);
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 0, 'no se mezcla con el negocio anterior');
+await bd.guardarSecuenciaNCF('B01', 900, 950); // las del segundo negocio
 await na.vaciarDispositivo();
 assert.equal(na.datosVinculo(), null);
 // En un equipo nuevo se pide el RNC del negocio; sin él (o mal escrito) no se entra
@@ -161,6 +166,8 @@ const volver = await auth.entrarConCuentaNube('dueno', 'recuperada88', 'reemplaz
 assert.ok(volver);
 assert.equal((await uno('SELECT COUNT(*) AS n FROM productos')).n, 1, 'los datos del primer negocio vuelven desde la nube');
 assert.equal(na.datosVinculo().negocio_id, idNegocio);
+const secVuelta = await bd.leerSecuenciasNCF();
+assert.deepEqual([secVuelta.find((s) => s.tipo === 'B01').sig, secVuelta.find((s) => s.tipo === 'B01').hasta], [4, 50], 'al volver al primer negocio recupera SUS secuencias, no las del segundo');
 // Ya vinculado, no se vuelve a pedir el RNC
 await auth.cerrarSesion();
 await auth.iniciarSesion('dueno', 'recuperada88');
@@ -221,9 +228,10 @@ assert.equal(itb.calcularItbis({ lineas: [{ neto: 118 }], tasa: 18, modo: 'no' }
 const mesAct = (await uno("SELECT strftime('%Y-%m', 'now', 'localtime') AS m")).m;
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo', 'incluido')");
 await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('negocio_rnc', '131234567')");
-await bd.guardarSecuenciaNCF('B02', 1, 2);
-await bd.guardarSecuenciaNCF('B01', 10, 11);
-await assert.rejects(() => bd.guardarSecuenciaNCF('B02', 9, 3), /no puede ser mayor/);
+const nubeNcf = (await import('../src/nube.js')).nube; // con la nube, las secuencias son del negocio y viven en el servidor
+await nubeNcf.guardarNcf('B02', { siguiente: 1, hasta: 2 });
+await nubeNcf.guardarNcf('B01', { siguiente: 10, hasta: 11 });
+await assert.rejects(() => nubeNcf.guardarNcf('B02', { siguiente: 9, hasta: 3 }), /mayor/);
 await bd.ejecutar("INSERT INTO productos (codigo, nombre, costo, precio, stock_actual, itbis_exento) VALUES ('EX-1', 'Libro exento', 20, 100, 50, 1)");
 await bd.ejecutar("INSERT INTO productos (codigo, nombre, costo, precio, stock_actual) VALUES ('GR-1', 'Cable gravado', 40, 118, 50)");
 const pEx = (await uno("SELECT id FROM productos WHERE codigo = 'EX-1'")).id;
@@ -292,6 +300,67 @@ await na.marcarAvisosLeidos();
 assert.equal(na.estadoAvisos().sinLeer, 0);
 assert.equal((await na.cargarAvisos()).sinLeer, 0, 'el servidor recuerda que ya se leyó');
 ok('el dispositivo descarga los avisos y los marca como leídos');
+
+// ---- secuencias de NCF del negocio: viven en el servidor y cada factura pide su número ----
+{
+  const { nube } = await import('../src/nube.js');
+  const fv = async (tipo) => (await bd.consultar("SELECT ncf FROM ventas WHERE ncf LIKE ? ORDER BY id", [`${tipo}%`])).map((x) => x.ncf);
+  await bd.guardarSecuenciaNCF('B14', 0, 0);
+  const antes = (await fv('B14')).length;
+  await nube.guardarNcf('B14', { siguiente: 100, hasta: 112 });
+  const venta14 = () => bd.registrarVenta({ cliente_id: cEmp, tipo_ncf: 'B14', items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }] });
+  await venta14();
+  assert.deepEqual((await fv('B14')).slice(antes), ['B1400000100'], 'la primera factura usa el primer número del negocio');
+  // Otro equipo del negocio factura en medio: recibe el siguiente, no el mismo
+  const otro = await nube.siguienteNcf({ candidatos: ['B14'], clave: 'otro-equipo-clave-1', dispositivo: 'otro-equipo-xxxx' });
+  assert.equal(otro.numero, 101);
+  await venta14();
+  assert.deepEqual((await fv('B14')).slice(antes), ['B1400000100', 'B1400000102'], 'el equipo no usó el 101 que tomó el otro');
+  // Sin internet no se factura con comprobante, y no se gasta ningún número ni queda venta a medias
+  const ventasAntes = (await uno('SELECT COUNT(*) AS n FROM ventas')).n;
+  const base = localStorage.getItem('caraudio_servidor');
+  localStorage.setItem('caraudio_servidor', 'http://127.0.0.1:1');
+  await assert.rejects(() => venta14(), /no pudo realizar esta factura/);
+  localStorage.setItem('caraudio_servidor', base);
+  assert.equal((await uno('SELECT COUNT(*) AS n FROM ventas')).n, ventasAntes, 'no se guardó la venta');
+  await venta14();
+  assert.equal((await fv('B14')).slice(antes).pop(), 'B1400000103', 'al volver el internet sigue la numeración sin saltos');
+  // Sin internet no se emite NINGUNA factura, ni siquiera sin comprobante (así no se cruzan números de documento)
+  await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo', 'no')");
+  localStorage.setItem('caraudio_servidor', 'http://127.0.0.1:1');
+  await assert.rejects(() => bd.registrarVenta({ items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }] }), /Por falta de conexión a internet el sistema no pudo realizar esta factura/);
+  localStorage.setItem('caraudio_servidor', base);
+  await bd.registrarVenta({ items: [{ producto_id: pGr, cantidad: 1, precio_unitario: 118 }] }); // con internet sí
+  await bd.ejecutar("INSERT OR REPLACE INTO config (clave, valor) VALUES ('itbis_modo', 'incluido')");
+  // Caso raro 1: el servidor entrega el número pero la respuesta nunca llega (se cae el internet). Se avisa y el número queda anulado
+  const fetchReal = globalThis.fetch;
+  globalThis.fetch = async (url, op) => { const r = await fetchReal(url, op); if (String(url).endsWith('/api/ncf/siguiente')) throw new TypeError('fetch failed'); return r; };
+  const ventasA = (await uno('SELECT COUNT(*) AS n FROM ventas')).n;
+  await assert.rejects(() => venta14(), /Por falta de conexión a internet el sistema no pudo realizar esta factura/);
+  globalThis.fetch = fetchReal;
+  assert.equal((await uno('SELECT COUNT(*) AS n FROM ventas')).n, ventasA, 'no quedó ninguna venta a medias');
+  await venta14(); // al volver el internet se anula el número perdido y esta factura sigue
+  const lista = await nube.ncf();
+  assert.deepEqual(lista.anulados.map((x) => `${x.tipo}${x.numero}`), ['B14104'], 'el comprobante perdido consta como anulado');
+  assert.equal((await fv('B14')).slice(antes).pop(), 'B1400000105', 'la factura siguiente usa el número que sigue');
+  // Caso raro 2: el número se entrega pero la factura no se puede guardar en el equipo. Se anula y se pide repetir
+  await bd.ejecutar("CREATE TRIGGER t_falla_venta BEFORE INSERT ON ventas BEGIN SELECT RAISE(ABORT, 'falla simulada'); END");
+  await assert.rejects(() => venta14(), /No se pudo guardar la factura.*B1400000106 quedó anulado.*vuelve a realizar la factura/);
+  await bd.ejecutar('DROP TRIGGER t_falla_venta');
+  assert.ok((await nube.ncf()).anulados.some((x) => x.numero === 106), 'el número 106 consta como anulado en el servidor');
+  await venta14();
+  assert.equal((await fv('B14')).slice(antes).pop(), 'B1400000107');
+  // Migración: lo que el equipo tenía solo para sí (modo anterior) pasa a ser del negocio
+  await bd.guardarSecuenciaNCF('B15', 700, 760);
+  const subidos = await na.subirSecuenciasLocales();
+  assert.deepEqual(subidos, ['B15']);
+  assert.equal((await nube.ncf()).secuencias.find((x) => x.tipo === 'B15').hasta, 760);
+  assert.equal((await bd.leerSecuenciasNCF()).find((x) => x.tipo === 'B15').sig, 0, 'el equipo ya no la guarda aparte');
+  await bd.guardarSecuenciaNCF('B15', 1, 5);
+  assert.deepEqual(await na.subirSecuenciasLocales(), [], 'la secuencia ya definida por el negocio no se pisa');
+  assert.equal((await nube.ncf()).secuencias.find((x) => x.tipo === 'B15').hasta, 760);
+}
+ok('las secuencias de NCF son del negocio: cada factura pide su número al servidor, sin internet no se emite ninguna factura y los números perdidos quedan anulados');
 
 servidor.close();
 console.log(`\n${n} grupos de pruebas correctos`);

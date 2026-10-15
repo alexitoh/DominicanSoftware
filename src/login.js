@@ -105,7 +105,16 @@ async function pantallaAcceso(terminar, sesionPendiente) {
     for (const i of [usuario.input, clave.input]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') entrar(); });
     marco(
       h('h1', {}, 'Iniciar sesión'),
-      sinCripto, usuario.el, clave.el,
+      sinCripto,
+      (() => {
+        // En un equipo vinculado el negocio ya quedó fijado: se muestra su RNC (o número asignado) y no se vuelve a pedir
+        const v = vinculado() ? datosVinculo() : null;
+        if (!v || !(v.negocio_id || v.negocio_nombre)) return null;
+        return h('div', { class: 'negocio-fijo', 'aria-label': 'Negocio de este equipo' },
+          v.negocio_nombre ? h('strong', {}, v.negocio_nombre) : null,
+          v.negocio_id ? h('span', {}, `RNC: ${v.negocio_id}`) : null);
+      })(),
+      usuario.el, clave.el,
       h('label', { class: 'casilla' }, recordar, 'Mantener la sesión iniciada'),
       aviso, boton,
       h('button', { class: 'enlace', onClick: () => pantallaRecuperar() }, '¿Olvidaste tu contraseña?'),

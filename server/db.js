@@ -78,6 +78,29 @@ export function abrirBase(ruta) {
     INSERT OR IGNORE INTO secuencia (id, v) VALUES (1, 0);
   `);
   db.exec(`
+    -- Secuencias de NCF autorizadas por la DGII: son del negocio (no del equipo). "siguiente" es el próximo número sin repartir.
+    CREATE TABLE IF NOT EXISTS ncf_secuencias (
+      negocio TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      siguiente INTEGER NOT NULL DEFAULT 0,
+      hasta INTEGER NOT NULL DEFAULT 0,
+      actualizado TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (negocio, tipo)
+    );
+    -- Cada comprobante entregado a un equipo. La clave evita entregar dos números si el equipo repite el pedido por un corte de internet,
+    -- y permite anular el número si la factura no llegó a guardarse.
+    CREATE TABLE IF NOT EXISTS ncf_emitidos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      negocio TEXT NOT NULL,
+      clave TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      numero INTEGER NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'emitido',
+      motivo TEXT,
+      equipo TEXT,
+      fecha TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (negocio, clave)
+    );
     CREATE TABLE IF NOT EXISTS pagos_lic (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       negocio TEXT NOT NULL,

@@ -600,6 +600,46 @@ const [, az] = await p6(rutaId(nUps), { asignar: true }, T6, 'PATCH');
 assert.match(az.identificador, /^9\d{8}$/); assert.equal(az.idTipo, 'asignado');
 const [, hist] = await p6('/api/propietario/historial', null, T6, 'GET');
 assert.ok(JSON.stringify(hist).includes('Cambió identificador'), 'queda en la bitácora del propietario');
+// ---------- 11b. Secuencias de NCF: del negocio, en el servidor, con bloques por equipo ----------
+{
+  const cH = crearCliente({ base: () => B6, token: () => lh.token });
+  const cU = crearCliente({ base: () => B6, token: () => lu.token });
+  assert.ok((await cH.ncf()).secuencias.every((x) => x.siguiente === 0 && x.disponibles === 0), 'un negocio nuevo no hereda secuencias');
+  await cH.guardarNcf('B01', { siguiente: 1, hasta: 12 });
+  assert.equal((await cH.ncf()).secuencias.find((x) => x.tipo === 'B01').disponibles, 12);
+  assert.equal((await cU.ncf()).secuencias.find((x) => x.tipo === 'B01').disponibles, 0, 'otro negocio no ve ni gasta esas secuencias');
+  await assert.rejects(() => cH.guardarNcf('B99', { siguiente: 1, hasta: 2 }), /desconocido/);
+  await assert.rejects(() => cH.guardarNcf('B01', { siguiente: 5, hasta: 2 }), /mayor/);
+  await assert.rejects(() => cH.guardarNcf('B01', { siguiente: 3, hasta: 0 }), /los dos vacíos/);
+  // Cada factura pide su número en el momento; dos equipos a la vez nunca reciben el mismo
+  let seq = 0; const sig = (c, cand = ['B01'], clave = `pedido-${++seq}-xxxxxxxx`) => c.siguienteNcf({ candidatos: cand, clave, dispositivo: 'hogar-dispositivo-1' });
+  const pedidos = await Promise.all(Array.from({ length: 10 }, (_, i) => sig(i % 2 ? cH : crearCliente({ base: () => B6, token: () => lh.token }))));
+  const nums = pedidos.map((r) => r.numero).sort((x, y) => x - y);
+  assert.deepEqual(nums, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'diez pedidos simultáneos: números consecutivos, sin repetir ni saltar');
+  assert.equal((await sig(cH)).numero, 11);
+  assert.deepEqual(await sig(cH), { tipo: 'B01', numero: 12, quedan: 0 });
+  assert.deepEqual(await sig(cH), { tipo: null, numero: 0, quedan: 0 }, 'agotada: no entrega nada');
+  // Preferencias: si el primero no tiene números se usa el siguiente de la lista
+  await cH.guardarNcf('B02', { siguiente: 50, hasta: 60 });
+  assert.deepEqual(await sig(cH, ['B01', 'B02']), { tipo: 'B02', numero: 50, quedan: 10 });
+  await assert.rejects(() => sig(cH, ['B77']), /Indica el tipo/);
+  // El mismo pedido repetido (se cortó el internet antes de la respuesta) devuelve el mismo número
+  const r1 = await sig(cH, ['B02'], 'clave-repetida-1'); const r2 = await sig(cH, ['B02'], 'clave-repetida-1');
+  assert.equal(r1.numero, 51); assert.equal(r2.numero, 51); assert.equal(r2.repetido, true);
+  assert.equal((await sig(cH, ['B02'])).numero, 52, 'y el siguiente pedido sigue sin saltos');
+  await assert.rejects(() => cH.siguienteNcf({ candidatos: ['B02'], dispositivo: 'x' }), /clave/);
+  // Anular un número entregado: consta y no se anula dos veces ni lo que nunca se emitió
+  assert.equal((await cH.anularNcf({ clave: 'clave-repetida-1', motivo: 'prueba' })).anulado, true);
+  assert.equal((await cH.anularNcf({ clave: 'clave-repetida-1' })).anulado, false);
+  assert.equal((await cH.anularNcf({ clave: 'nunca-existio-xx' })).anulado, false);
+  assert.deepEqual((await cH.ncf()).anulados.map((x) => `${x.tipo}${x.numero}`), ['B0251']);
+  assert.equal((await sig(cU, ['B01', 'B02'])).tipo, null, 'otro negocio no gasta los números de este');
+  // Bajar el próximo número avisa
+  const baja = await cH.guardarNcf('B01', { siguiente: 3, hasta: 20 });
+  assert.match(baja.aviso, /repetir/);
+}
+ok('las secuencias de NCF son del negocio: cada factura pide su número al servidor, sin repetir ni saltar, y un negocio nuevo no hereda las de otro');
+
 srv6.close();
 ok('mismo usuario y correo en negocios distintos; el RNC (o número asignado) identifica el negocio; solo el propietario lo cambia');
 
