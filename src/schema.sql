@@ -79,7 +79,41 @@ CREATE TABLE IF NOT EXISTS ventas (
   notas TEXT,
   itbis REAL NOT NULL DEFAULT 0,
   ncf TEXT,
-  cliente_nombre TEXT -- cliente ambulante de consumo (nombre suelto, sin ficha)
+  cliente_nombre TEXT, -- cliente ambulante de consumo (nombre suelto, sin ficha)
+  cajero_id INTEGER REFERENCES usuarios(id) -- quién cobró en caja (si la venta pasó por la cola de caja)
+);
+
+-- Ventas al contado que el vendedor envía a caja: el cliente paga allí y recién entonces nace la factura
+CREATE TABLE IF NOT EXISTS ventas_pendientes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  cliente_id INTEGER REFERENCES clientes(id),
+  cliente_nombre TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  tipo_ncf TEXT NOT NULL DEFAULT 'auto',
+  descuento REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  notas TEXT,
+  estado TEXT NOT NULL DEFAULT 'pendiente',   -- pendiente | cobrada | cancelada
+  venta_id INTEGER REFERENCES ventas(id)
+);
+CREATE TABLE IF NOT EXISTS ventas_pendientes_detalle (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pendiente_id INTEGER NOT NULL REFERENCES ventas_pendientes(id),
+  producto_id INTEGER NOT NULL REFERENCES productos(id),
+  cantidad INTEGER NOT NULL,
+  precio_unitario REAL NOT NULL,
+  descuento REAL NOT NULL DEFAULT 0,
+  garantia_meses INTEGER NOT NULL DEFAULT 0,
+  serie TEXT
+);
+CREATE TABLE IF NOT EXISTS ventas_pendientes_servicios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pendiente_id INTEGER NOT NULL REFERENCES ventas_pendientes(id),
+  descripcion TEXT NOT NULL,
+  cantidad REAL NOT NULL,
+  precio_unitario REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS venta_detalle (

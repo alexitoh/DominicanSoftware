@@ -100,7 +100,7 @@ ok('al poner un RNC nuevo el cliente se guarda solo y pide teléfono y direcció
 
 // 5. No deja cobrar hasta completarlos
 await hoja().todos((x) => x.tag === 'button' && x.className === 'resultado')[0].click(); await pausa();
-const cobrar = hoja().todos((x) => x.tag === 'button' && x.texto === 'Cobrar')[0];
+const cobrar = hoja().todos((x) => x.tag === 'button' && x.texto.includes('Enviar a caja'))[0];
 await cobrar.click(); await pausa();
 assert.match(hoja().texto, /Completa el teléfono y la dirección/);
 let [v0] = await bd.consultar('SELECT COUNT(*) AS n FROM ventas'); assert.equal(v0.n, 0);
@@ -139,12 +139,21 @@ assert.ok(ambBtn, 'se ofrece usar el nombre como cliente de consumo');
 await ambBtn.click(); await pausa();
 assert.match(hoja().texto, /Cliente de consumo \(ambulante\)/);
 assert.match(comprobante().options[0].textContent, /consumo \(B02\)/);
-await porAria('Método de pago').disparar('change');
 await cobrar.click(); await pausa();
-const [va] = await bd.consultar('SELECT * FROM ventas ORDER BY id DESC LIMIT 1');
-assert.equal(va.cliente_nombre, 'Pedro el del taller'); assert.equal(va.cliente_id, null);
+const [pend] = await bd.consultar("SELECT * FROM ventas_pendientes WHERE estado = 'pendiente' ORDER BY id DESC LIMIT 1");
+assert.equal(pend.cliente_nombre, 'Pedro el del taller'); assert.equal(pend.cliente_id, null);
+assert.equal((await bd.consultar('SELECT COUNT(*) AS n FROM ventas'))[0].n, 0, 'al enviar a caja todavía no hay factura ni NCF');
+assert.equal((await bd.consultar('SELECT stock_actual FROM productos WHERE nombre = ?', ['Bocina 6x9']))[0].stock_actual, 5, 'el inventario no se descuenta hasta cobrar');
+assert.match(document.body.todos((x) => x.attrs.role === 'dialog').pop().attrs['aria-label'], /Enviada a caja/);
+// El cajero cobra: nace la factura con el NCF y baja el inventario
+const numeroVenta = await bd.cobrarPendiente(pend.id, { metodo_pago: 'tarjeta' });
+const [va] = await bd.consultar('SELECT * FROM ventas WHERE numero = ?', [numeroVenta]);
+assert.equal(va.cliente_nombre, 'Pedro el del taller'); assert.equal(va.cliente_id, null); assert.equal(va.metodo_pago, 'tarjeta');
 assert.equal((await bd.consultar('SELECT COUNT(*) AS n FROM clientes'))[0].n, clientesAntes, 'no se crea ficha de cliente');
 assert.match(va.ncf, /^B02/);
+assert.equal((await bd.consultar('SELECT stock_actual FROM productos WHERE nombre = ?', ['Bocina 6x9']))[0].stock_actual, 4);
+assert.equal((await bd.consultar('SELECT estado, venta_id FROM ventas_pendientes WHERE id = ?', [pend.id]))[0].estado, 'cobrada');
+await assert.rejects(() => bd.cobrarPendiente(pend.id, { metodo_pago: 'efectivo' }), /ya fue cobrada/, 'no se cobra dos veces');
 ok('un nombre suelto se factura como cliente de consumo (B02) sin crear cliente');
 
 // 9. Crédito solo para clientes con crédito autorizado (condición Crédito y días)
@@ -156,7 +165,7 @@ await escribir(b2, 'Juan'); await sugerencias().todos((x) => x.tag === 'button' 
 const sel = porAria('Método de pago'); sel.value = 'credito'; await sel.disparar('change'); await pausa();
 assert.match(hoja().texto, /no tiene crédito autorizado/);
 await hoja().todos((x) => x.className === 'resultado' && !x.attrs['data-id'])[0].click(); await pausa();
-await hoja().todos((x) => x.tag === 'button' && x.texto === 'Cobrar')[0].click(); await pausa();
+await hoja().todos((x) => x.tag === 'button' && x.texto.includes('Facturar a crédito'))[0].click(); await pausa();
 assert.match(hoja().texto, /no tiene crédito autorizado/);
 assert.equal((await bd.consultar("SELECT COUNT(*) AS n FROM ventas WHERE metodo_pago = 'credito'"))[0].n, 0);
 // Contabilidad le da crédito y ya puede

@@ -59,6 +59,7 @@ export function crearCliente({ base = () => '', token = () => null, fetchFn = (.
     guardarNcf: (tipo, b) => llamar('PUT', `/api/ncf/${encodeURIComponent(tipo)}`, b, { tiempo: 12000 }),
     siguienteNcf: (b) => llamar('POST', '/api/ncf/siguiente', b, { tiempo: 10000 }),
     anularNcf: (b) => llamar('POST', '/api/ncf/anular', b, { tiempo: 10000 }),
+    reclamarCobro: (b) => llamar('POST', '/api/caja/reclamar', b, { tiempo: 10000 }),
     sync: (b) => llamar('POST', '/api/sync', b, { tiempo: 60000 }),
   };
 }

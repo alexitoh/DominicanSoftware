@@ -66,6 +66,7 @@ export async function initDB() {
     'ALTER TABLE ventas ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
     'ALTER TABLE ventas ADD COLUMN ncf TEXT',
     'ALTER TABLE ventas ADD COLUMN cliente_nombre TEXT',
+    'ALTER TABLE ventas ADD COLUMN cajero_id INTEGER',
     'ALTER TABLE compras ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
     'ALTER TABLE compras ADD COLUMN ncf TEXT',
     'ALTER TABLE gastos ADD COLUMN itbis REAL NOT NULL DEFAULT 0',
@@ -142,8 +143,13 @@ export const margenDesde = (costo, precio) => (costo > 0 ? redondear(((precio - 
 export const margenProducto = (p) => (p.margen != null ? p.margen : margenDesde(p.costo, p.precio));
 
 // metodo_pago 'credito' = venta fiada: exige cliente y admite un pago inicial
-export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null, tipo_ncf = 'auto', cliente_nombre = '' }) {
+export async function registrarVenta({ cliente_id = null, items, servicios = [], descuento = 0, metodo_pago = 'efectivo', notas = '', inicial = 0, dias_credito = null, tipo_ncf = 'auto', cliente_nombre = '', vendedor_id = null, pendiente_id = null }) {
   if (!items.length && !servicios.length) throw new Error('Agrega al menos un producto o servicio.');
+  if (pendiente_id) {
+    const [pp] = await consultar('SELECT estado FROM ventas_pendientes WHERE id = ?', [pendiente_id]);
+    if (!pp || pp.estado !== 'pendiente') throw new Error('Esta venta ya no está pendiente de cobro (ya fue cobrada o cancelada).');
+    if (metodo_pago === 'credito') throw new Error('Las ventas a crédito no se cobran en caja.');
+  }
   // Con la nube conectada no se factura sin internet (ni con comprobante ni sin él): así no se cruzan números entre equipos
   if (reservaNCF?.activo()) await reservaNCF.exigirConexion();
   for (const sv of servicios) {
@@ -211,10 +217,10 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     // 2. Guardar todo en una sola transacción
     const set = [
       {
-        statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf, cliente_nombre)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuarioActualId, itbis, ncf?.ncf ?? null,
-          cliente_id ? null : (String(cliente_nombre || '').trim().slice(0, 80) || null)],
+        statement: `INSERT INTO ventas (numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, usuario_id, itbis, ncf, cliente_nombre, cajero_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [numero, cliente_id, subtotal, descuento, total, metodo_pago, notas, vendedor_id || usuarioActualId, itbis, ncf?.ncf ?? null,
+          cliente_id ? null : (String(cliente_nombre || '').trim().slice(0, 80) || null), pendiente_id ? usuarioActualId : null],
       },
     ];
     for (const it of items) {
@@ -269,6 +275,12 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
       statement: "UPDATE config SET valor = CAST(valor AS INTEGER) + 1 WHERE clave = 'siguiente_numero_venta'",
       values: [],
     });
+    if (pendiente_id) {
+      set.push({
+        statement: "UPDATE ventas_pendientes SET estado = 'cobrada', venta_id = (SELECT id FROM ventas WHERE numero = ?) WHERE id = ? AND estado = 'pendiente'",
+        values: [numero, pendiente_id],
+      });
+    }
 
     await transaccion(set);
     return numero;
@@ -281,6 +293,109 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     }
     throw e;
   }
+}
+
+// ---------- Cola de caja ----------
+// El vendedor envía las ventas al contado a caja; el cliente paga allí y recién entonces nace la factura (con su NCF y el descuento de inventario).
+let reclamoCobro = null; // { activo(), reclamar(clave), cerrar(clave) }: evita que dos cajeros cobren la misma venta
+export const configurarReclamoCobro = (r) => { reclamoCobro = r; };
+
+export async function enviarACaja({ cliente_id = null, cliente_nombre = '', items, servicios = [], descuento = 0, tipo_ncf = 'auto', notas = '' }) {
+  if (!items.length && !servicios.length) throw new Error('Agrega al menos un producto o servicio.');
+  // Sin internet no se emite ninguna factura, y una venta para caja tampoco llegaría al cajero
+  if (reservaNCF?.activo()) await reservaNCF.exigirConexion();
+  for (const sv of servicios) {
+    if (!String(sv.descripcion || '').trim()) throw new Error('Todos los servicios necesitan una descripción.');
+    if (!(sv.cantidad > 0)) throw new Error('La cantidad de un servicio debe ser mayor que cero.');
+    if (!(sv.precio_unitario >= 0)) throw new Error('El precio de un servicio no puede ser negativo.');
+  }
+  for (const it of items) {
+    const [p] = await consultar('SELECT nombre, stock_actual FROM productos WHERE id = ?', [it.producto_id]);
+    if (!p) throw new Error('Producto no existe');
+    if (p.stock_actual < it.cantidad) throw new Error(`Stock insuficiente: ${p.nombre} (quedan ${p.stock_actual})`);
+  }
+  const subtotal = redondear(items.reduce((s, i) => s + i.cantidad * i.precio_unitario - (i.descuento || 0), 0)
+    + servicios.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0));
+  if (descuento < 0 || descuento > subtotal + 0.005) throw new Error('El descuento no puede ser mayor que el subtotal.');
+  // El total que verá el cajero incluye el ITBIS cuando se suma al precio (igual que al facturar)
+  const cfgF = await configFiscal();
+  const exentos = new Map();
+  for (const it of items) exentos.set(it.producto_id, !!(await consultar('SELECT itbis_exento FROM productos WHERE id = ?', [it.producto_id]))[0]?.itbis_exento);
+  const itbis = calcularItbis({
+    lineas: [
+      ...items.map((i) => ({ neto: i.cantidad * i.precio_unitario - (i.descuento || 0), exento: exentos.get(i.producto_id) })),
+      ...servicios.map((s) => ({ neto: s.cantidad * s.precio_unitario, exento: false })),
+    ],
+    descuento, tasa: cfgF.tasa, modo: cfgF.modo,
+  });
+  const totalCaja = redondear(subtotal - descuento + (cfgF.modo === 'adicional' ? itbis : 0));
+  const numero = `T-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
+  const set = [{
+    statement: `INSERT INTO ventas_pendientes (numero, cliente_id, cliente_nombre, usuario_id, tipo_ncf, descuento, total, notas)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    values: [numero, cliente_id, cliente_id ? null : (String(cliente_nombre || '').trim().slice(0, 80) || null), usuarioActualId, tipo_ncf, descuento, totalCaja, notas || null],
+  }];
+  const padre = '(SELECT id FROM ventas_pendientes WHERE numero = ? ORDER BY id DESC LIMIT 1)';
+  for (const it of items) {
+    set.push({
+      statement: `INSERT INTO ventas_pendientes_detalle (pendiente_id, producto_id, cantidad, precio_unitario, descuento, garantia_meses, serie)
+                  VALUES (${padre}, ?, ?, ?, ?, ?, ?)`,
+      values: [numero, it.producto_id, it.cantidad, it.precio_unitario, it.descuento || 0, parseInt(it.garantia_meses, 10) || 0, (it.serie || '').trim() || null],
+    });
+  }
+  for (const sv of servicios) {
+    set.push({
+      statement: `INSERT INTO ventas_pendientes_servicios (pendiente_id, descripcion, cantidad, precio_unitario) VALUES (${padre}, ?, ?, ?)`,
+      values: [numero, String(sv.descripcion).trim(), sv.cantidad, sv.precio_unitario],
+    });
+  }
+  await transaccion(set);
+  await anotar('Venta enviada a caja', `${numero} por ${totalCaja}`);
+  return numero;
+}
+
+export const listarPendientes = () => consultar(
+  `SELECT p.*, COALESCE(c.nombre, p.cliente_nombre) AS cliente, u.nombre AS vendedor,
+          (SELECT COUNT(*) FROM ventas_pendientes_detalle d WHERE d.pendiente_id = p.id)
+          + (SELECT COUNT(*) FROM ventas_pendientes_servicios s WHERE s.pendiente_id = p.id) AS lineas
+     FROM ventas_pendientes p LEFT JOIN clientes c ON c.id = p.cliente_id LEFT JOIN usuarios u ON u.id = p.usuario_id
+    WHERE p.estado = 'pendiente' ORDER BY p.id`);
+
+export async function detallePendiente(id) {
+  const items = await consultar(
+    `SELECT d.*, pr.nombre, pr.stock_actual FROM ventas_pendientes_detalle d JOIN productos pr ON pr.id = d.producto_id WHERE d.pendiente_id = ? ORDER BY d.id`, [id]);
+  const servicios = await consultar('SELECT * FROM ventas_pendientes_servicios WHERE pendiente_id = ? ORDER BY id', [id]);
+  return { items, servicios };
+}
+
+export async function cancelarPendiente(id) {
+  const [p] = await consultar('SELECT numero, estado, total FROM ventas_pendientes WHERE id = ?', [id]);
+  if (!p) throw new Error('La venta no existe.');
+  if (p.estado !== 'pendiente') throw new Error(p.estado === 'cobrada' ? 'Esa venta ya fue cobrada.' : 'Esa venta ya estaba cancelada.');
+  await ejecutar("UPDATE ventas_pendientes SET estado = 'cancelada' WHERE id = ? AND estado = 'pendiente'", [id]);
+  await anotar('Venta de caja cancelada', `${p.numero} por ${redondear(p.total)}`);
+}
+
+// El cajero cobra: elige la forma de pago y se genera la factura con el vendedor original como quien vendió
+export async function cobrarPendiente(id, { metodo_pago }) {
+  if (!['efectivo', 'tarjeta', 'transferencia', 'cheque'].includes(metodo_pago)) throw new Error('Elige la forma de pago.');
+  const [p] = await consultar('SELECT * FROM ventas_pendientes WHERE id = ?', [id]);
+  if (!p) throw new Error('La venta no existe.');
+  if (p.estado !== 'pendiente') throw new Error(p.estado === 'cobrada' ? 'Esa venta ya fue cobrada.' : 'Esa venta fue cancelada.');
+  const { items, servicios } = await detallePendiente(id);
+  if (reclamoCobro?.activo()) {
+    const r = await reclamoCobro.reclamar(p.uid);
+    if (!r.ok) throw new Error(r.motivo === 'cobrada' ? 'Esta venta ya fue cobrada por otro cajero.' : 'Otro cajero está cobrando esta venta en este momento.');
+  }
+  const numero = await registrarVenta({
+    cliente_id: p.cliente_id, cliente_nombre: p.cliente_nombre || '', metodo_pago, tipo_ncf: p.tipo_ncf, descuento: p.descuento, notas: p.notas || '',
+    vendedor_id: p.usuario_id, pendiente_id: id,
+    items: items.map((l) => ({ producto_id: l.producto_id, cantidad: l.cantidad, precio_unitario: l.precio_unitario, descuento: l.descuento, garantia_meses: l.garantia_meses, serie: l.serie })),
+    servicios: servicios.map((s) => ({ descripcion: s.descripcion, cantidad: s.cantidad, precio_unitario: s.precio_unitario })),
+  });
+  if (reclamoCobro?.activo()) reclamoCobro.cerrar(p.uid).catch(() => {});
+  await anotar('Venta cobrada en caja', `${numero} (${p.numero}) ${metodo_pago}`);
+  return numero;
 }
 
 // ---------- Cotizaciones ----------

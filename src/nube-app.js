@@ -1,6 +1,6 @@
 // nube-app.js - une la app con la nube: vínculo del dispositivo, usuarios espejo y sincronización automática.
 import {
-  consultar, lote, onEscritura, sincronizacionLista, configurarReservaNCF, registrarNcfAnulado, leerSecuenciasNCF, limpiarSecuenciaLocalNCF,
+  consultar, lote, onEscritura, sincronizacionLista, configurarReservaNCF, configurarReclamoCobro, registrarNcfAnulado, leerSecuenciasNCF, limpiarSecuenciaLocalNCF,
 } from './database.js';
 import { nube, ErrorNube, sesionNube, guardarSesionNube, idDispositivo, urlServidor, servidorDisponible } from './nube.js';
 import { crearMotor } from './sync-nucleo.js';
@@ -201,6 +201,18 @@ configurarReservaNCF({
   anular: async (clave, motivo) => {
     try { await nube.anularNcf({ clave, motivo }); } catch { marcarParaAnular(clave, motivo); }
   },
+});
+
+// Cola de caja: el servidor reparte el derecho a cobrar cada venta, para que dos cajeros no la cobren a la vez
+configurarReclamoCobro({
+  activo: () => vinculado() && haySesionNube(),
+  reclamar: async (clave) => {
+    try { return await nube.reclamarCobro({ clave, dispositivo: idDispositivo() }); } catch (e) {
+      if (sinConexion(e)) throw new Error(SIN_INTERNET_FACTURA, { cause: e });
+      throw e;
+    }
+  },
+  cerrar: (clave) => nube.reclamarCobro({ clave, dispositivo: idDispositivo(), cerrar: true }),
 });
 
 // Las secuencias que este equipo tenía solo para sí pasan a ser del negocio. Devuelve los tipos migrados.

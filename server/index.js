@@ -246,6 +246,29 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       return { anulado: true, tipo: fila.tipo, numero: fila.numero };
     },
 
+    // Reclamo atómico del cobro de una venta enviada a caja. Si otro equipo ya la está cobrando (o ya la cobró) no se deja cobrar de nuevo.
+    // Un reclamo sin terminar vence a los 2 minutos para que no quede trabado si el equipo se apaga. `cerrar` lo marca como cobrado.
+    'POST /api/caja/reclamar': (req, b) => {
+      const ctx = autenticar(req);
+      const clave = String(b.clave || '').slice(0, 64);
+      if (clave.length < 8) falla(400, 'Falta la clave de la venta.');
+      const equipo = String(b.dispositivo || '').slice(0, 64);
+      return transaccion(db, () => {
+        const previo = db.prepare("SELECT equipo, estado, (julianday('now') - julianday(fecha)) * 86400 AS edad FROM cobros_reclamados WHERE negocio = ? AND clave = ?").get(ctx.negocio.uid, clave);
+        if (b.cerrar) {
+          if (previo && previo.equipo === equipo) db.prepare("UPDATE cobros_reclamados SET estado = 'cobrada' WHERE negocio = ? AND clave = ?").run(ctx.negocio.uid, clave);
+          return { ok: true };
+        }
+        if (!previo) { db.prepare('INSERT INTO cobros_reclamados (negocio, clave, equipo) VALUES (?, ?, ?)').run(ctx.negocio.uid, clave, equipo); return { ok: true }; }
+        if (previo.estado === 'cobrada') return { ok: false, motivo: 'cobrada' };
+        if (previo.equipo === equipo || previo.edad > 120) {
+          db.prepare("UPDATE cobros_reclamados SET equipo = ?, fecha = datetime('now') WHERE negocio = ? AND clave = ?").run(equipo, ctx.negocio.uid, clave);
+          return { ok: true };
+        }
+        return { ok: false, motivo: 'otro' };
+      });
+    },
+
     'GET /api/salud': () => ({ ok: true, hora: new Date().toISOString() }),
 
     'POST /api/registro': (req, b) => {
@@ -612,6 +635,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
         db.prepare('DELETE FROM dispositivos WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM ncf_secuencias WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM ncf_emitidos WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM cobros_reclamados WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM avisos_leidos WHERE cuenta IN (SELECT uid FROM cuentas WHERE negocio = ?)').run(n.uid);
         db.prepare('DELETE FROM avisos WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM cuentas WHERE negocio = ?').run(n.uid);

@@ -1,5 +1,5 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
-import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal, leerReglasComprobante, anotar } from './database.js';
+import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal, leerReglasComprobante, anotar, enviarACaja, listarPendientes, cancelarPendiente } from './database.js';
 import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis, comprobanteDeCliente } from './itbis.js';
 import { buscarRNC } from './dgii.js';
 import { limpiarDocumento, formatearDocumento } from './fiscal.js';
@@ -10,8 +10,11 @@ import { textoCondicion, DIAS_POR_DEFECTO } from './condicion.js';
 import { formularioAbono } from './cobros.js';
 import { compartirFactura } from './factura.js';
 import { botonEscaner } from './escaner.js';
-import { tienePermiso, registrarBitacora } from './auth.js';
+import { tienePermiso, registrarBitacora, usuarioActual } from './auth.js';
 import { vistaCotizaciones, formularioCotizacion } from './cotizaciones.js';
+import { panelCobro } from './caja-cobro.js';
+import { sincronizarAhora } from './nube-app.js';
+import { imprimirCredito, imprimirContado, imprimirVenta } from './impresion.js';
 
 const PERIODOS = {
   hoy: "date(v.fecha) = date('now','localtime')",
@@ -19,9 +22,8 @@ const PERIODOS = {
   todas: '1 = 1',
 };
 const METODOS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia', cheque: 'Cheque', credito: 'Crédito' };
-const OPCIONES_PAGO = [
-  ['efectivo', 'Efectivo'], ['tarjeta', 'Tarjeta'], ['transferencia', 'Transferencia'], ['cheque', 'Cheque'], ['credito', 'Crédito (fiado)'],
-];
+// El vendedor solo decide si es al contado (se cobra en caja, donde se elige la forma de pago) o a crédito
+const OPCIONES_PAGO = [['contado', 'Contado (se cobra en caja)'], ['credito', 'Crédito (fiado)']];
 const PAGADO = '(SELECT COALESCE(SUM(p.monto), 0) FROM pagos p WHERE p.venta_id = v.id)';
 
 async function compartir(ventaId) {
@@ -39,6 +41,7 @@ export async function vistaVentas(raiz) {
   const estado = { periodo: 'hoy', rango: rangoInicial() };
   const resumen = h('dl', { class: 'resumen' });
   const lista = h('div', { class: 'lista' });
+  const enCaja = h('div'); // ventas enviadas a caja que aún no se cobran
   const segmento = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Período' });
   const filaRango = selectorRango(estado.rango, () => pintar());
 
@@ -71,11 +74,26 @@ export async function vistaVentas(raiz) {
       `SELECT v.*, c.nombre AS cliente, ${PAGADO} AS pagado FROM ventas v
          LEFT JOIN clientes c ON c.id = v.cliente_id
         WHERE ${cond} ORDER BY v.id DESC LIMIT 500`);
+    await pintarEnCaja();
     lista.replaceChildren(...(filas.length
       ? filas.map(fila)
       : [h('p', { class: 'vacio' }, estado.periodo === 'todas'
           ? 'Aún no hay ventas. Toca "Nueva venta" para registrar la primera.'
           : 'No hay ventas en este período.')]));
+  }
+
+  // Ventas enviadas a caja que todavía esperan el pago (quien las envió puede cancelarlas)
+  async function pintarEnCaja() {
+    const pend = (await listarPendientes()).filter((p) => p.usuario_id === usuarioActual()?.id || tienePermiso('caja'));
+    enCaja.replaceChildren(...(pend.length ? [h('section', { class: 'seccion' },
+      h('h3', {}, `Esperando pago en caja (${pend.length})`),
+      ...pend.map((p) => h('div', { class: 'fila inventario' },
+        h('span', { class: 'datos' }, h('strong', {}, `${p.numero} · ${p.cliente || 'Cliente general'}`), h('small', {}, `${p.fecha.slice(11, 16)}${p.vendedor ? ` · ${p.vendedor}` : ''}`)),
+        h('span', { class: 'precio' }, dinero(p.total)),
+        h('button', { class: 'btn chico peligro', onClick: async () => {
+          if (!(await confirmar('Cancelar venta', `Se cancelará ${p.numero} por ${dinero(p.total)}.`, 'Cancelar venta'))) return;
+          try { await cancelarPendiente(p.id); toast('Venta cancelada'); await pintar(); } catch (e) { toast(e.message || 'No se pudo cancelar', 'error'); }
+        } }, 'Cancelar'))))] : []));
   }
 
   function fila(v) {
@@ -93,8 +111,8 @@ export async function vistaVentas(raiz) {
 
   async function detalle(id) {
     const [v] = await consultar(
-      `SELECT v.*, c.nombre AS cliente, u.nombre AS vendedor FROM ventas v
-         LEFT JOIN clientes c ON c.id = v.cliente_id LEFT JOIN usuarios u ON u.id = v.usuario_id WHERE v.id = ?`, [id]);
+      `SELECT v.*, c.nombre AS cliente, u.nombre AS vendedor, k.nombre AS cajero FROM ventas v
+         LEFT JOIN clientes c ON c.id = v.cliente_id LEFT JOIN usuarios u ON u.id = v.usuario_id LEFT JOIN usuarios k ON k.id = v.cajero_id WHERE v.id = ?`, [id]);
     const items = await consultar(
       `SELECT d.*, p.nombre FROM venta_detalle d JOIN productos p ON p.id = d.producto_id WHERE d.venta_id = ? ORDER BY d.id`, [id]);
     const servicios = await consultar('SELECT * FROM venta_servicios WHERE venta_id = ? ORDER BY id', [id]);
@@ -129,7 +147,7 @@ export async function vistaVentas(raiz) {
       h('div', { class: 'cuerpo' },
         h('p', { class: 'ayuda' }, `${v.fecha.slice(0, 16)}, ${v.cliente || v.cliente_nombre || 'Cliente general'}, ${METODOS[v.metodo_pago] || v.metodo_pago}`),
         v.ncf ? h('p', { class: 'ayuda' }, `${NOMBRE_COMPROBANTE[v.ncf.slice(0, 3)] || 'Comprobante'}, NCF ${v.ncf}`) : null,
-        v.vendedor ? h('p', { class: 'ayuda' }, `Atendió: ${v.vendedor}`) : null,
+        v.vendedor ? h('p', { class: 'ayuda' }, `Atendió: ${v.vendedor}${v.cajero ? ` · Cobró en caja: ${v.cajero}` : ''}`) : null,
         anulada ? h('p', { class: 'error' }, 'Esta venta está anulada.') : null,
         h('ul', { class: 'historial detalle' }, items.map((i) => h('li', {},
           h('strong', {}, `${i.cantidad}×`),
@@ -169,6 +187,7 @@ export async function vistaVentas(raiz) {
                   async () => { cerrar(); await pintar(); await detalle(id); }),
               }, 'Registrar abono')
             : null,
+          h('button', { class: 'btn', onClick: () => imprimirVenta(id) }, 'Imprimir'),
           h('button', { class: 'btn primario', onClick: () => compartir(id) }, 'Compartir factura'))));
   }
 
@@ -354,17 +373,14 @@ export async function vistaVentas(raiz) {
       class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01',
       placeholder: '0.00', 'aria-label': 'Descuento', onInput: () => pintarTotales(),
     });
-    const recibido = h('input', {
-      class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01',
-      placeholder: '0.00', 'aria-label': 'Efectivo recibido', onInput: () => pintarTotales(),
-    });
     const inicial = h('input', {
       class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01',
       placeholder: '0.00', 'aria-label': 'Pago inicial', onInput: () => pintarTotales(),
     });
-    const campoRecibido = h('label', { class: 'etiqueta' }, 'Efectivo recibido (opcional)', recibido);
     const campoInicial = h('label', { class: 'etiqueta' }, 'Pago inicial (opcional)', inicial);
-    const botonCobrar = h('button', { class: 'btn primario', onClick: () => cobrar() }, 'Cobrar');
+    const botonCobrar = h('button', { class: 'btn primario', onClick: () => accion('principal') }, 'Enviar a caja');
+    // Quien tiene permiso de Caja también puede cobrar directamente (por ejemplo el cajero que atiende en el mostrador)
+    const botonDirecto = h('button', { class: 'btn', onClick: () => accion('directo') }, 'Cobrar ahora');
 
     async function cargarClientes() {
       const cs = await consultar('SELECT id, nombre, telefono, direccion, tipo_doc, condicion, dias_credito, documento, tipo_comprobante, regimen_dgii FROM clientes ORDER BY nombre');
@@ -542,41 +558,39 @@ export async function vistaVentas(raiz) {
       const dto = descuentoAplicado(sub);
       const imp = itbisDe(sub, dto);
       const total = sub - dto + imp;
-      const rec = parseFloat(recibido.value) || 0;
       const esCredito = metodo.value === 'credito';
       const ini = Math.min(Math.max(parseFloat(inicial.value) || 0, 0), total);
-      campoRecibido.style.display = metodo.value === 'efectivo' ? '' : 'none';
       campoInicial.style.display = esCredito ? '' : 'none';
+      botonCobrar.textContent = esCredito ? 'Facturar a crédito' : 'Enviar a caja';
+      botonDirecto.style.display = !esCredito && tienePermiso('caja') ? '' : 'none';
       totales.replaceChildren(
         renglon('Subtotal', dinero(sub)),
         dto > 0 ? renglon('Descuento', `- ${dinero(dto)}`) : null,
         imp > 0 ? renglon(`ITBIS ${cfgF.tasa}%`, dinero(imp)) : null,
         renglon('Total', dinero(total), 'gran'),
-        metodo.value === 'efectivo' && rec > 0
-          ? renglon(rec >= total ? 'Cambio' : 'Falta', dinero(Math.abs(rec - total)))
-          : null,
         esCredito ? renglon('Pago inicial', dinero(ini)) : null,
         esCredito ? renglon('Queda pendiente', dinero(total - ini), 'deuda') : null);
     }
 
-    async function cobrar() {
+    // Valida todo antes de enviar. Devuelve los datos de la venta o null (el motivo queda en `error`).
+    async function validar() {
       error.textContent = '';
-      if (!carrito.size && !servicios.length) { error.textContent = 'Agrega al menos un producto o servicio.'; return; }
-      if (servicios.some((l) => !l.descripcion.trim())) { error.textContent = 'Escribe la descripción de cada servicio.'; return; }
-      if (servicios.some((l) => !(l.cantidad > 0))) { error.textContent = 'La cantidad de cada servicio debe ser mayor que cero.'; return; }
+      if (!carrito.size && !servicios.length) { error.textContent = 'Agrega al menos un producto o servicio.'; return null; }
+      if (servicios.some((l) => !l.descripcion.trim())) { error.textContent = 'Escribe la descripción de cada servicio.'; return null; }
+      if (servicios.some((l) => !(l.cantidad > 0))) { error.textContent = 'La cantidad de cada servicio debe ser mayor que cero.'; return null; }
       const sub = subtotal();
       const dto = Math.max(parseFloat(descuento.value) || 0, 0);
-      if (dto > sub) { error.textContent = 'El descuento no puede ser mayor que el subtotal.'; descuento.focus(); return; }
+      if (dto > sub) { error.textContent = 'El descuento no puede ser mayor que el subtotal.'; descuento.focus(); return null; }
 
       const esCredito = metodo.value === 'credito';
       const total = redondear(sub - dto + itbisDe(sub, dto));
       const ini = esCredito ? Math.max(parseFloat(inicial.value) || 0, 0) : 0;
-      if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente con crédito autorizado.'; cliente.focus(); return; }
-      if (esCredito && !tieneCredito(clientesInfo.get(cliente.value))) { error.textContent = `${clientesInfo.get(cliente.value)?.nombre || 'Este cliente'} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes; mientras tanto cobra de contado.`; return; }
-      if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return; }
+      if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente con crédito autorizado.'; cliente.focus(); return null; }
+      if (esCredito && !tieneCredito(clientesInfo.get(cliente.value))) { error.textContent = `${clientesInfo.get(cliente.value)?.nombre || 'Este cliente'} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes; mientras tanto cobra de contado.`; return null; }
+      if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return null; }
 
-      if (buscaCliente.value.trim() && !cliente.value && ambulante !== buscaCliente.value.trim()) { error.textContent = 'Elige un cliente de la lista, usa el nombre como cliente de consumo, o borra la búsqueda para facturar a Cliente general.'; buscaCliente.focus(); return; }
-      if (faltanDatos(clientesInfo.get(cliente.value))) { error.textContent = 'Completa el teléfono y la dirección del cliente antes de continuar.'; datosPendientes.querySelector('input')?.focus(); return; }
+      if (buscaCliente.value.trim() && !cliente.value && ambulante !== buscaCliente.value.trim()) { error.textContent = 'Elige un cliente de la lista, usa el nombre como cliente de consumo, o borra la búsqueda para facturar a Cliente general.'; buscaCliente.focus(); return null; }
+      if (faltanDatos(clientesInfo.get(cliente.value))) { error.textContent = 'Completa el teléfono y la dirección del cliente antes de continuar.'; datosPendientes.querySelector('input')?.focus(); return null; }
 
       // Comprobantes de crédito fiscal: el RNC del cliente debe estar ACTIVO en la DGII (si no se puede consultar, se deja pasar)
       if (cfgF.modo !== 'no' && cliente.value && tipoNcf.value !== 'B02' && tipoNcf.value !== 'ninguno') {
@@ -584,39 +598,75 @@ export async function vistaVentas(raiz) {
         if (cl?.documento && limpiarDocumento(cl.documento).length === 9) {
           const r = await buscarRNC(cl.documento);
           if (r.resultado === 'inactivo' || r.resultado === 'noEncontrado') {
-            error.textContent = `${r.mensaje} Cambia el comprobante a Consumo (B02) o elige otro cliente.`; return;
+            error.textContent = `${r.mensaje} Cambia el comprobante a Consumo (B02) o elige otro cliente.`; return null;
           }
         }
       }
+      return { dto, esCredito, ini, total };
+    }
 
-      botonCobrar.disabled = true;
+    const datosComunes = (dto) => ({
+      tipo_ncf: cfgF.modo === 'no' ? 'ninguno' : (tipoNcf.value || 'auto'),
+      cliente_id: cliente.value ? Number(cliente.value) : null,
+      cliente_nombre: cliente.value ? '' : ambulante,
+      items: [...carrito.values()].map((l) => ({
+        producto_id: l.p.id, cantidad: l.cantidad, precio_unitario: l.precio, descuento: 0,
+        garantia_meses: l.garantia, serie: l.serie,
+      })),
+      servicios: servicios.map((l) => ({ descripcion: l.descripcion, cantidad: l.cantidad, precio_unitario: l.precio })),
+      descuento: dto,
+    });
+
+    // Lo que se hace después de enviar o facturar: cotización, garantías recordadas
+    async function despues(ventaId) {
+      if (precarga?.cotizacion_id) {
+        await ejecutar("UPDATE cotizaciones SET estado = 'facturada', venta_id = ? WHERE id = ?", [ventaId, precarga.cotizacion_id]).catch(() => {});
+      }
+      for (const l of carrito.values()) {
+        await ejecutar('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', [`garantia_p${l.p.id}`, String(l.garantia || 0)]).catch(() => {});
+      }
+    }
+
+    // modo: 'principal' (crédito = factura directa; contado = envía a caja) | 'directo' (cobra aquí mismo quien tiene permiso de Caja)
+    async function accion(modo) {
+      const d = await validar();
+      if (!d) return;
+      botonCobrar.disabled = true; botonDirecto.disabled = true;
+      const libre = () => { botonCobrar.disabled = false; botonDirecto.disabled = false; };
       try {
-        const numero = await registrarVenta({
-          tipo_ncf: cfgF.modo === 'no' ? 'ninguno' : (tipoNcf.value || 'auto'),
-          cliente_id: cliente.value ? Number(cliente.value) : null,
-          cliente_nombre: cliente.value ? '' : ambulante,
-          items: [...carrito.values()].map((l) => ({
-            producto_id: l.p.id, cantidad: l.cantidad, precio_unitario: l.precio, descuento: 0,
-            garantia_meses: l.garantia, serie: l.serie,
-          })),
-          servicios: servicios.map((l) => ({ descripcion: l.descripcion, cantidad: l.cantidad, precio_unitario: l.precio })),
-          descuento: dto,
-          metodo_pago: metodo.value,
-          inicial: ini,
-          dias_credito: esCredito ? diasCredito() : null,
-        });
-        const [v] = await consultar('SELECT id, total FROM ventas WHERE numero = ?', [numero]);
-        if (precarga?.cotizacion_id) {
-          await ejecutar("UPDATE cotizaciones SET estado = 'facturada', venta_id = ? WHERE id = ?", [v.id, precarga.cotizacion_id]).catch(() => {});
+        if (d.esCredito) {
+          const numero = await registrarVenta({ ...datosComunes(d.dto), metodo_pago: 'credito', inicial: d.ini, dias_credito: diasCredito() });
+          const [v] = await consultar('SELECT id, total FROM ventas WHERE numero = ?', [numero]);
+          await despues(v.id);
+          cerrar();
+          await pintar();
+          exito(v, numero, redondear(v.total - d.ini));
+          imprimirCredito(v.id).catch(() => {}); // la factura a crédito sale del equipo del vendedor, en impresora normal
+        } else if (modo === 'directo') {
+          libre();
+          let cerrarCobro = () => {};
+          cerrarCobro = hoja('Cobrar ahora', h('div', { class: 'cuerpo' }, panelCobro({
+            total: d.total,
+            alCobrar: async ({ metodo: forma, recibido }) => {
+              const numero = await registrarVenta({ ...datosComunes(d.dto), metodo_pago: forma });
+              const [v] = await consultar('SELECT id, total FROM ventas WHERE numero = ?', [numero]);
+              await despues(v.id);
+              cerrarCobro(); cerrar();
+              await pintar();
+              toast(`Cobrado. Factura ${numero}`);
+              await imprimirContado(v.id, { recibido: recibido ?? null });
+            },
+          })));
+        } else {
+          const numero = await enviarACaja(datosComunes(d.dto));
+          sincronizarAhora().catch(() => {}); // llega al cajero sin esperar al reloj
+          await despues(null);
+          cerrar();
+          await pintar();
+          exitoCaja(numero, d.total);
         }
-        for (const l of carrito.values()) {
-          await ejecutar('INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)', [`garantia_p${l.p.id}`, String(l.garantia || 0)]).catch(() => {});
-        }
-        cerrar();
-        await pintar();
-        exito(v, numero, esCredito ? redondear(v.total - ini) : 0);
       } catch (e) {
-        botonCobrar.disabled = false;
+        libre();
         error.textContent = e.message || String(e);
       }
     }
@@ -651,11 +701,10 @@ export async function vistaVentas(raiz) {
           h('label', { class: 'etiqueta' }, 'Método de pago', metodo),
           h('label', { class: 'etiqueta' }, 'Descuento', descuento)),
         avisoCredito,
-        campoRecibido,
         campoInicial,
         totales,
         error,
-        h('div', { class: 'acciones' }, botonCobrar)));
+        h('div', { class: 'acciones' }, botonDirecto, botonCobrar)));
 
     await cargarClientes();
     if (precarga) await aplicarPrecarga();
@@ -700,6 +749,14 @@ export async function vistaVentas(raiz) {
     });
   }
 
+  function exitoCaja(numero, total) {
+    const cerrar = hoja('Enviada a caja',
+      h('div', { class: 'cuerpo' },
+        h('p', {}, `${numero} por ${dinero(total)}.`),
+        h('p', { class: 'ayuda' }, 'El cliente debe pasar por caja para pagar. Allí se genera la factura y se descuenta el inventario.'),
+        h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: () => cerrar() }, 'Listo'))));
+  }
+
   function exito(v, numero, pendiente) {
     const cerrar = hoja('Venta registrada',
       h('div', { class: 'cuerpo' },
@@ -707,11 +764,12 @@ export async function vistaVentas(raiz) {
         pendiente > 0.005 ? h('p', { class: 'deuda' }, `Queda pendiente ${dinero(pendiente)}. Puedes registrar abonos desde el detalle de la venta o desde Clientes.`) : null,
         h('div', { class: 'acciones' },
           h('button', { class: 'btn', onClick: () => cerrar() }, 'Listo'),
+          h('button', { class: 'btn', onClick: () => imprimirCredito(v.id) }, 'Imprimir'),
           h('button', { class: 'btn primario', onClick: () => compartir(v.id) }, 'Compartir factura'))));
   }
 
   // Pestañas: Ventas | Cotizaciones
-  const panelVentas = h('div', {}, resumen, h('div', { class: 'filtros' }, segmento, filaRango.el), lista);
+  const panelVentas = h('div', {}, resumen, enCaja, h('div', { class: 'filtros' }, segmento, filaRango.el), lista);
   const panelCot = h('div');
   const pestanas = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Sección' });
   const botonNuevo = h('button', { class: 'btn claro' });

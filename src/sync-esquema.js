@@ -23,7 +23,7 @@ export const TABLAS = [
   {
     t: 'ventas',
     cols: ['numero', 'fecha', 'subtotal', 'descuento', 'total', 'metodo_pago', 'estado', 'notas', 'itbis', 'ncf', 'cliente_nombre'],
-    refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }],
+    refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }, { col: 'cajero_id', tabla: 'usuarios' }],
     unicos: ['numero'],
   },
   {
@@ -33,6 +33,17 @@ export const TABLAS = [
   },
   { t: 'venta_servicios', cols: ['descripcion', 'cantidad', 'precio_unitario'], refs: [{ col: 'venta_id', tabla: 'ventas' }] },
   { t: 'pagos', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'recibo_id', tabla: 'recibos' }] },
+  {
+    t: 'ventas_pendientes',
+    cols: ['numero', 'fecha', 'cliente_nombre', 'tipo_ncf', 'descuento', 'total', 'notas', 'estado'],
+    refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }, { col: 'venta_id', tabla: 'ventas' }],
+  },
+  {
+    t: 'ventas_pendientes_detalle',
+    cols: ['cantidad', 'precio_unitario', 'descuento', 'garantia_meses', 'serie'],
+    refs: [{ col: 'pendiente_id', tabla: 'ventas_pendientes' }, { col: 'producto_id', tabla: 'productos' }],
+  },
+  { t: 'ventas_pendientes_servicios', cols: ['descripcion', 'cantidad', 'precio_unitario'], refs: [{ col: 'pendiente_id', tabla: 'ventas_pendientes' }] },
   { t: 'cuentas_cobrar', cols: ['vence'], refs: [{ col: 'venta_id', tabla: 'ventas' }] },
   {
     t: 'garantias',

@@ -21,6 +21,7 @@ import { vistaCompras } from './compras.js';
 import { vistaClientes } from './clientes.js';
 import { vistaProveedores } from './proveedores.js';
 import { vistaCaja } from './caja.js';
+import { abrirImpresoras } from './impresion.js';
 import { vistaReportes } from './reportes.js';
 import { vistaContabilidad } from './contabilidad.js';
 import { vistaGarantias } from './garantias.js';
@@ -370,6 +371,10 @@ async function vistaAjustes(raiz) {
       errorFiscal,
       h('button', { class: 'btn primario', onClick: guardarFiscal }, 'Guardar'),
       seccionPadron),
+    h('section', { class: 'seccion' },
+      h('h2', {}, 'Impresoras de esta computadora'),
+      h('p', { class: 'ayuda' }, 'Impresora normal para las facturas a crédito y todo lo demás; impresora de punto de venta 80 mm para las facturas al contado que se cobran en caja.'),
+      h('button', { class: 'btn', onClick: () => abrirImpresoras() }, 'Configurar impresoras')),
     h('section', { class: 'seccion' },
       h('h2', {}, 'Datos del negocio'),
       ...campos.map(([k, et]) => h('label', { class: 'etiqueta' }, et, inputs[k])),

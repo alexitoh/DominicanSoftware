@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 
 export const TABLAS_SYNC = [
   'categorias', 'productos', 'clientes', 'cliente_direcciones', 'cliente_contactos', 'recibos', 'recibo_metodos', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'pagos',
+  'ventas_pendientes', 'ventas_pendientes_detalle', 'ventas_pendientes_servicios',
   'cuentas_cobrar', 'garantias', 'garantia_reclamos', 'compras', 'compra_detalle', 'cuentas_pagar', 'pagos_compra',
   'centros_costo', 'cuentas_contables', 'asientos', 'asiento_lineas', 'cuentas_bancarias', 'banco_movs', 'conciliaciones', 'activos_fijos', 'empleados', 'nomina_corridas', 'nomina_detalle', 'presupuestos', 'periodos_cerrados',
   'caja', 'gastos', 'cotizaciones', 'cotizacion_detalle', 'movimientos_inventario', 'ncf_anulados', 'bitacora', 'config',
@@ -100,6 +101,15 @@ export function abrirBase(ruta) {
       equipo TEXT,
       fecha TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE (negocio, clave)
+    );
+    -- Quién está cobrando cada venta enviada a caja: dos cajeros no pueden cobrar la misma factura
+    CREATE TABLE IF NOT EXISTS cobros_reclamados (
+      negocio TEXT NOT NULL,
+      clave TEXT NOT NULL,
+      equipo TEXT,
+      estado TEXT NOT NULL DEFAULT 'cobrando',
+      fecha TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (negocio, clave)
     );
     CREATE TABLE IF NOT EXISTS pagos_lic (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

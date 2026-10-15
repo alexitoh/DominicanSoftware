@@ -1,8 +1,12 @@
 // caja.js - apertura de caja, gastos y cierre con cuadre de efectivo
 import {
   consultar, cajaAbierta, abrirCaja, resumenCaja, registrarGasto, eliminarGasto, cerrarCaja,
+  listarPendientes, detallePendiente, cobrarPendiente, cancelarPendiente,
 } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
+import { panelCobro } from './caja-cobro.js';
+import { imprimirContado, abrirImpresoras } from './impresion.js';
+import { sincronizarAhora } from './nube-app.js';
 
 const CATEGORIAS = [
   'Alquiler', 'Luz y agua', 'Internet y teléfono', 'Transporte', 'Sueldos', 'Pago a proveedor', 'Mantenimiento', 'Otros',
@@ -17,14 +21,77 @@ const numero = (placeholder = '0.00') => h('input', {
 
 export async function vistaCaja(raiz) {
   const cuerpo = h('div');
+  const porCobrar = h('div');
+  let cajaActual = null;
+  let conteoAnterior = null;
 
   async function pintar() {
     const caja = await cajaAbierta();
+    cajaActual = caja;
     const historial = await consultar("SELECT * FROM caja WHERE estado = 'cerrada' ORDER BY id DESC LIMIT 30");
     cuerpo.replaceChildren(
+      porCobrar,
       caja ? await bloqueAbierta(caja) : bloqueCerrada(historial[0]),
       seccionHistorial(historial));
+    await pintarPorCobrar();
   }
+
+  // ---------- Ventas enviadas por los vendedores, esperando que el cliente pague ----------
+  async function pintarPorCobrar() {
+    const lista = await listarPendientes();
+    if (conteoAnterior != null && lista.length > conteoAnterior) toast('Hay una nueva venta por cobrar');
+    conteoAnterior = lista.length;
+    porCobrar.replaceChildren(h('section', { class: 'seccion' },
+      h('h2', {}, lista.length ? `Por cobrar (${lista.length})` : 'Por cobrar'),
+      !lista.length
+        ? h('p', { class: 'ayuda' }, 'No hay ventas esperando. Cuando un vendedor envíe una venta al contado a caja, aparecerá aquí.')
+        : h('div', { class: 'lista' },
+            !cajaActual ? h('p', { class: 'error' }, 'Abre la caja para poder cobrar estas ventas.') : null,
+            ...lista.map((p) => h('button', { class: 'fila inventario', onClick: () => cobrarVenta(p) },
+              h('span', { class: 'datos' },
+                h('strong', {}, `${p.numero} · ${p.cliente || 'Cliente general'}`),
+                h('small', {}, `${p.fecha.slice(11, 16)} · ${p.lineas} ${p.lineas === 1 ? 'línea' : 'líneas'}${p.vendedor ? ` · ${p.vendedor}` : ''}`)),
+              h('span', { class: 'precio' }, dinero(p.total)))))));
+  }
+
+  async function cobrarVenta(p) {
+    if (!cajaActual) { toast('Abre la caja para cobrar', 'error'); return; }
+    const { items, servicios } = await detallePendiente(p.id);
+    let cerrar = () => {};
+    const error = h('p', { class: 'error', role: 'alert' });
+    async function cancelar() {
+      const ok = await confirmar('Cancelar venta', `Se cancelará ${p.numero} por ${dinero(p.total)}. El vendedor tendrá que enviarla de nuevo.`, 'Cancelar venta');
+      if (!ok) return;
+      try { await cancelarPendiente(p.id); cerrar(); toast('Venta cancelada'); await pintarPorCobrar(); } catch (e) { error.textContent = e.message || String(e); }
+    }
+    const avisos = items.filter((l) => l.stock_actual < l.cantidad).map((l) => `${l.nombre} (hay ${l.stock_actual})`);
+    cerrar = hoja(`Cobrar ${p.numero}`,
+      h('div', { class: 'cuerpo' },
+        h('p', { class: 'ayuda' }, `${p.cliente || 'Cliente general'}${p.vendedor ? ` · Vendedor: ${p.vendedor}` : ''}`),
+        h('ul', { class: 'historial detalle' },
+          ...items.map((l) => h('li', {}, h('strong', {}, `${l.cantidad}×`), h('span', {}, l.nombre), h('small', {}, dinero(l.cantidad * l.precio_unitario - (l.descuento || 0))))),
+          ...servicios.map((s) => h('li', {}, h('strong', {}, `${s.cantidad}×`), h('span', {}, `${s.descripcion} (servicio)`), h('small', {}, dinero(s.cantidad * s.precio_unitario))))),
+        avisos.length ? h('p', { class: 'error' }, `Falta inventario: ${avisos.join('; ')}. Cancela la venta o corrige el inventario antes de cobrar.`) : null,
+        panelCobro({
+          total: p.total,
+          alCobrar: async ({ metodo, recibido }) => {
+            const numero = await cobrarPendiente(p.id, { metodo_pago: metodo });
+            const [v] = await consultar('SELECT id, total FROM ventas WHERE numero = ?', [numero]);
+            cerrar();
+            toast(`Cobrado. Factura ${numero}`);
+            await pintar();
+            await imprimirContado(v.id, { recibido: recibido ?? null });
+          },
+        }),
+        error,
+        h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: cancelar }, 'Cancelar esta venta'))));
+  }
+
+  // Las ventas nuevas llegan por sincronización: mientras esta pantalla esté abierta se revisa cada pocos segundos
+  const reloj = setInterval(async () => {
+    if (cuerpo.isConnected === false) { clearInterval(reloj); return; }
+    try { await sincronizarAhora(); await pintarPorCobrar(); } catch { /* sin conexión: se reintenta */ }
+  }, 6000);
 
   // ---------- Caja cerrada: abrir ----------
   function bloqueCerrada(ultimo) {
@@ -227,6 +294,6 @@ export async function vistaCaja(raiz) {
         : h('p', { class: 'ayuda' }, 'Aún no hay cierres de caja.'));
   }
 
-  raiz.replaceChildren(h('header', { class: 'barra' }, h('h1', {}, 'Caja')), cuerpo);
+  raiz.replaceChildren(h('header', { class: 'barra' }, h('h1', {}, 'Caja'), h('button', { class: 'btn claro', onClick: () => abrirImpresoras() }, 'Impresoras')), cuerpo);
   await pintar();
 }

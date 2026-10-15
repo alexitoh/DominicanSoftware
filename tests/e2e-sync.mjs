@@ -115,6 +115,21 @@ assert.equal((await uno(B, 'SELECT COUNT(*) n FROM categorias')).n, 6, 'categor�
 assert.equal(await B.motor.pendientes(), 0, 'lo que baja no se marca como cambio propio');
 ok('B baja productos, stock, ventas, cuentas por cobrar y ajustes con las relaciones bien puestas');
 
+// ---------- 2b. Cola de caja: el vendedor envía, el cajero (otro equipo) la ve y la cobra ----------
+A.run("INSERT INTO ventas_pendientes (numero, cliente_nombre, total) VALUES ('T-0001', 'Pedro', 200)");
+const tkA = (await uno(A, "SELECT id FROM ventas_pendientes WHERE numero = 'T-0001'")).id;
+A.run('INSERT INTO ventas_pendientes_detalle (pendiente_id, producto_id, cantidad, precio_unitario) VALUES (?, (SELECT id FROM productos WHERE codigo = \'P-1\'), 2, 100)', [tkA]);
+A.run("INSERT INTO ventas_pendientes_servicios (pendiente_id, descripcion, cantidad, precio_unitario) VALUES (?, 'Instalación', 1, 50)", [tkA]);
+await A.motor.sincronizar(); await B.motor.sincronizar();
+const tkB = await uno(B, "SELECT id, estado, cliente_nombre FROM ventas_pendientes WHERE numero = 'T-0001'");
+assert.deepEqual({ estado: tkB.estado, cli: tkB.cliente_nombre }, { estado: 'pendiente', cli: 'Pedro' });
+assert.equal((await uno(B, 'SELECT d.cantidad c FROM ventas_pendientes_detalle d JOIN productos p ON p.id = d.producto_id WHERE d.pendiente_id = ? AND p.codigo = ?', [tkB.id, 'P-1'])).c, 2);
+assert.equal((await uno(B, 'SELECT descripcion d FROM ventas_pendientes_servicios WHERE pendiente_id = ?', [tkB.id])).d, 'Instalación');
+B.run("UPDATE ventas_pendientes SET estado = 'cobrada' WHERE id = ?", [tkB.id]);
+await B.motor.sincronizar(); await A.motor.sincronizar();
+assert.equal((await uno(A, 'SELECT estado e FROM ventas_pendientes WHERE id = ?', [tkA])).e, 'cobrada', 'el vendedor ve que ya se cobró');
+ok('una venta enviada a caja viaja con sus productos y servicios al equipo del cajero, y el cobro regresa al vendedor');
+
 // ---------- 3. Ventas al mismo tiempo sin internet ----------
 await venderLocal(A, pA, 2, 'V-A000003'); // A: 8 -> 6
 await venderLocal(B, pA, 3, 'V-B000001'); // B: 8 -> 5
@@ -679,6 +694,19 @@ assert.ok(JSON.stringify(hist).includes('Cambió identificador'), 'queda en la b
   // Bajar el próximo número avisa
   const baja = await cH.guardarNcf('B01', { siguiente: 3, hasta: 20 });
   assert.match(baja.aviso, /repetir/);
+}
+// Reclamo del cobro: solo un cajero a la vez puede cobrar una venta
+{
+  const cH = crearCliente({ base: () => B6, token: () => lh.token });
+  const rec = (equipo, extra = {}) => cH.reclamarCobro({ clave: 'ticket-uid-0001', dispositivo: equipo, ...extra });
+  assert.equal((await rec('caja-1')).ok, true);
+  const otro = await rec('caja-2');
+  assert.deepEqual({ ok: otro.ok, motivo: otro.motivo }, { ok: false, motivo: 'otro' }, 'otro cajero no puede cobrar a la vez');
+  assert.equal((await rec('caja-1')).ok, true, 'el mismo equipo puede reintentar');
+  await rec('caja-1', { cerrar: true });
+  const tarde = await rec('caja-2');
+  assert.deepEqual({ ok: tarde.ok, motivo: tarde.motivo }, { ok: false, motivo: 'cobrada' }, 'una venta ya cobrada no se cobra otra vez');
+  await assert.rejects(() => cH.reclamarCobro({ clave: 'x', dispositivo: 'a' }), /clave/);
 }
 ok('las secuencias de NCF son del negocio: cada factura pide su número al servidor, sin repetir ni saltar, y un negocio nuevo no hereda las de otro');
 
