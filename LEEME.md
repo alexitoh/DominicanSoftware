@@ -316,3 +316,10 @@ Notas de crédito/débito y anticipos aún no salen en el 606; un anticipo en ef
 
 ### Contabilidad de las compras y entradas de factura
 Cada factura que se da entrada genera su asiento solo: Inventario (1301) + ITBIS adelantado contra Cuentas por pagar (2101); si es de contado, el pago sale de Caja (1101) o Banco según el método; si es a crédito queda en 2101 hasta pagarla. Las órdenes de compra, el back order y los "no llegará" no generan asientos hasta que llega mercancía con factura.
+
+### Banco (Contabilidad → Bancos)
+Trece secciones: Banco, Cargo Bancario, Cheque, Conciliación, Crédito Bancario, Cambio Tasa, Depósito Bancario, Moneda, Reporte Banco, Reporte Dinámico, Solicitud Pago, Tipo de Cuenta y Transferencia Bancaria.
+- Cada movimiento arma su asiento solo con la cuenta contable de su cuenta bancaria: depósito (Banco / Caja u otra cuenta), cargo (Comisiones bancarias 6207 / Banco), cheque (cuenta que paga / Banco), transferencia (Banco destino / Banco origen).
+- **Crédito bancario**: el desembolso entra al banco y queda en *Créditos bancarios por pagar* (2502); cada cuota separa capital (baja 2502) e interés (*Intereses de préstamos* 6215) y sale del banco. Cuota fija mensual; el interés es tasa/12 sobre el saldo.
+- **Solicitud de pago**: se pide, se aprueba (permiso "Aprobar solicitudes de pago": administrador y gerente) y recién entonces se paga con cheque o transferencia. A un suplidor baja sus facturas y sale de la cuenta bancaria predeterminada.
+- **Cheque**: queda "en tránsito" hasta conciliarlo; entonces pasa a "cobrado". Uno cobrado no se anula.

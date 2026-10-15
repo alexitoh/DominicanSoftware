@@ -648,11 +648,19 @@ CREATE INDEX IF NOT EXISTS idx_asiento_lineas ON asiento_lineas(asiento_id);
 
 CREATE TABLE IF NOT EXISTS cuentas_bancarias (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tipo_cuenta_id INTEGER,
   nombre TEXT NOT NULL,
   banco TEXT,
   numero TEXT,
   cuenta_id INTEGER REFERENCES cuentas_contables(id),
   predeterminada INTEGER NOT NULL DEFAULT 0,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+
+-- Tipos de cuenta bancaria (corriente, ahorro…)
+CREATE TABLE IF NOT EXISTS tipos_cuenta_banco (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
   activo INTEGER NOT NULL DEFAULT 1
 );
 
@@ -667,7 +675,54 @@ CREATE TABLE IF NOT EXISTS banco_movs (
   banco_destino_id INTEGER REFERENCES cuentas_bancarias(id),
   referencia TEXT,
   detalle TEXT,
+  beneficiario TEXT,                  -- cheques: a nombre de quién
   estado TEXT NOT NULL DEFAULT 'vigente'
+);
+
+-- Créditos bancarios (préstamos): desembolso al banco y cuotas con capital e interés
+CREATE TABLE IF NOT EXISTS creditos_bancarios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT NOT NULL UNIQUE,
+  fecha TEXT NOT NULL,
+  entidad TEXT,
+  banco_id INTEGER NOT NULL REFERENCES cuentas_bancarias(id), -- cuenta donde se depositó el desembolso
+  monto REAL NOT NULL,
+  tasa_anual REAL NOT NULL DEFAULT 0,
+  plazo_meses INTEGER NOT NULL,
+  cuota REAL NOT NULL,
+  notas TEXT,
+  estado TEXT NOT NULL DEFAULT 'vigente'
+);
+CREATE TABLE IF NOT EXISTS credito_pagos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT NOT NULL UNIQUE,
+  credito_id INTEGER NOT NULL REFERENCES creditos_bancarios(id),
+  fecha TEXT NOT NULL,
+  capital REAL NOT NULL,
+  interes REAL NOT NULL DEFAULT 0,
+  banco_id INTEGER NOT NULL REFERENCES cuentas_bancarias(id),
+  referencia TEXT,
+  estado TEXT NOT NULL DEFAULT 'vigente'
+);
+
+-- Solicitudes de pago: se piden, se aprueban y recién ahí se emite el cheque o la transferencia
+CREATE TABLE IF NOT EXISTS solicitudes_pago (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT NOT NULL UNIQUE,
+  fecha TEXT NOT NULL,
+  beneficiario TEXT NOT NULL,
+  proveedor_id INTEGER REFERENCES proveedores(id),
+  concepto TEXT,
+  monto REAL NOT NULL,
+  forma TEXT NOT NULL DEFAULT 'cheque',          -- cheque | transferencia
+  contra_cuenta_id INTEGER REFERENCES cuentas_contables(id), -- en qué se gasta (si no es pago a un suplidor)
+  banco_id INTEGER REFERENCES cuentas_bancarias(id),
+  estado TEXT NOT NULL DEFAULT 'pendiente',      -- pendiente | aprobada | pagada | rechazada
+  aprobado_por TEXT,
+  mov_numero TEXT,
+  referencia TEXT,
+  notas TEXT,
+  usuario_id INTEGER
 );
 
 -- Caja chica: fondos fijos con custodio. El saldo sale de sus movimientos (fondo + reposiciones - desembolsos).
@@ -866,6 +921,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('2140', 'Otras retenciones por pagar', 'pasivo', 0, 'otros_pagar', NULL, 1),
   ('25', 'Pasivos no corrientes', 'pasivo', 1, NULL, NULL, 1),
   ('2501', 'Préstamos bancarios a largo plazo', 'pasivo', 0, NULL, NULL, 1),
+  ('2502', 'Créditos bancarios por pagar', 'pasivo', 0, 'prestamos_bancarios', NULL, 1),
   ('3', 'PATRIMONIO', 'patrimonio', 1, NULL, NULL, 1),
   ('3101', 'Capital social', 'patrimonio', 0, 'capital', NULL, 1),
   ('3201', 'Utilidades acumuladas', 'patrimonio', 0, 'utilidades_acum', NULL, 1),
@@ -894,6 +950,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario', NULL, 1),
   ('6208', 'Pérdida por diferencia cambiaria', 'gasto', 0, 'perdida_cambiaria', NULL, 1),
   ('6209', 'Cargos y recargos de proveedores', 'gasto', 0, 'cargos_proveedores', NULL, 1),
+  ('6215', 'Intereses de préstamos', 'gasto', 0, 'gasto_intereses', NULL, 1),
   ('6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros', 1);
 
 
@@ -902,6 +959,7 @@ INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('siguiente_numero_bancomov', '1'),
   ('siguiente_numero_cajachica', '1'),
   ('siguiente_numero_nc', '1'), ('siguiente_numero_nd', '1'), ('siguiente_numero_anticipo', '1'),
+  ('siguiente_numero_credito', '1'), ('siguiente_numero_pagocredito', '1'), ('siguiente_numero_solpago', '1'),
   ('siguiente_numero_ncp', '1'), ('siguiente_numero_ndp', '1'), ('siguiente_numero_anticipop', '1'), ('siguiente_numero_solicitud', '1'), ('siguiente_numero_requisicion', '1'), ('siguiente_numero_orden', '1'),
   ('fiscal_mes_inicio', '1'),
   ('siguiente_numero_nomina', '1'),

@@ -182,7 +182,9 @@ export async function cargarFuentes() {
       FROM cxc_docs d JOIN clientes c ON c.id = d.cliente_id LEFT JOIN ventas v ON v.id = d.venta_id WHERE d.estado = 'vigente'`);
   const cxpDocs = await q(`SELECT d.numero, d.tipo, substr(d.fecha, 1, 10) AS fecha, d.monto, d.itbis, d.metodo, d.referencia, c.numero AS compra_numero, p.nombre AS proveedor
       FROM cxp_docs d JOIN proveedores p ON p.id = d.proveedor_id LEFT JOIN compras c ON c.id = d.compra_id WHERE d.estado = 'vigente'`);
-  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, cxcDocs, cxpDocs, hoy: hoy() };
+  const creditosBanc = (await q("SELECT COALESCE(uid, id) AS id, numero, fecha, monto, banco_id, entidad FROM creditos_bancarios WHERE estado = 'vigente'")).map((c) => ({ ...c, cuenta_banco_id: cuentaDe.get(c.banco_id) }));
+  const creditoPagos = (await q("SELECT p.numero, p.fecha, p.capital, p.interes, p.banco_id, c.numero AS credito FROM credito_pagos p JOIN creditos_bancarios c ON c.id = p.credito_id WHERE p.estado = 'vigente' AND c.estado = 'vigente'")).map((p) => ({ ...p, cuenta_banco_id: cuentaDe.get(p.banco_id) }));
+  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, cxcDocs, cxpDocs, creditosBanc, creditoPagos, hoy: hoy() };
 }
 
 // Libro completo hasta una fecha (por defecto hoy). Respeta la fecha de inicio contable.
@@ -383,9 +385,9 @@ export async function marcarDeclaracion({ periodo, formulario, fecha, referencia
 export const quitarDeclaracion = (periodo, formulario) => ejecutar('DELETE FROM declaraciones WHERE clave = ?', [`${periodo}:${formulario}`]);
 
 // ---------- Bancos ----------
-export const listarBancos = () => consultar(`SELECT b.*, c.codigo AS cuenta_codigo, c.nombre AS cuenta_nombre FROM cuentas_bancarias b LEFT JOIN cuentas_contables c ON c.id = b.cuenta_id ORDER BY b.activo DESC, b.nombre`);
+export const listarBancos = () => consultar(`SELECT b.*, t.nombre AS tipo_cuenta, c.codigo AS cuenta_codigo, c.nombre AS cuenta_nombre FROM cuentas_bancarias b LEFT JOIN cuentas_contables c ON c.id = b.cuenta_id LEFT JOIN tipos_cuenta_banco t ON t.id = b.tipo_cuenta_id ORDER BY b.activo DESC, b.nombre`);
 
-export async function crearBanco({ nombre, banco = '', numero = '' }) {
+export async function crearBanco({ nombre, banco = '', numero = '', tipo_cuenta_id = null }) {
   if (!String(nombre || '').trim()) throw new Error('Escribe un nombre para la cuenta (por ejemplo, Popular corriente).');
   const bancos = await consultar('SELECT cuenta_id FROM cuentas_bancarias');
   const rolBanco = (await listarCuentas()).find((c) => c.rol === 'banco');
@@ -399,8 +401,8 @@ export async function crearBanco({ nombre, banco = '', numero = '' }) {
     await ejecutar('INSERT INTO cuentas_contables (codigo, nombre, tipo, grupo) VALUES (?,?,?,0)', [String(n), `Banco: ${nombre.trim()}`, 'activo']);
     cuentaId = (await consultar('SELECT id FROM cuentas_contables WHERE codigo = ?', [String(n)]))[0].id;
   }
-  await ejecutar('INSERT INTO cuentas_bancarias (nombre, banco, numero, cuenta_id, predeterminada) VALUES (?,?,?,?,?)',
-    [nombre.trim(), banco.trim() || null, numero.trim() || null, cuentaId, bancos.length === 0 ? 1 : 0]);
+  await ejecutar('INSERT INTO cuentas_bancarias (nombre, banco, numero, cuenta_id, predeterminada, tipo_cuenta_id) VALUES (?,?,?,?,?,?)',
+    [nombre.trim(), banco.trim() || null, numero.trim() || null, cuentaId, bancos.length === 0 ? 1 : 0, tipo_cuenta_id || null]);
 }
 
 export async function hacerPredeterminado(id) {
@@ -409,7 +411,7 @@ export async function hacerPredeterminado(id) {
 
 export const TIPOS_MOV_BANCO = { deposito: 'Depósito', retiro: 'Retiro', cheque: 'Cheque emitido', transferencia: 'Transferencia entre cuentas', comision: 'Comisión bancaria', interes: 'Interés ganado' };
 
-export async function registrarMovBanco({ banco_id, fecha, tipo, monto, contra_cuenta_id = null, banco_destino_id = null, referencia = '', detalle = '' }) {
+export async function registrarMovBanco({ banco_id, fecha, tipo, monto, contra_cuenta_id = null, banco_destino_id = null, referencia = '', detalle = '', beneficiario = '' }) {
   if (!TIPOS_MOV_BANCO[tipo]) throw new Error('Tipo de movimiento no válido.');
   await exigirPeriodoAbierto(fecha);
   monto = redondear(monto);
@@ -422,8 +424,8 @@ export async function registrarMovBanco({ banco_id, fecha, tipo, monto, contra_c
   if ((tipo === 'cheque') && !String(referencia).trim()) throw new Error('Escribe el número de cheque.');
   const numero = await numeroDocumento('BK', 'siguiente_numero_bancomov');
   await transaccion([{
-    statement: 'INSERT INTO banco_movs (numero, banco_id, fecha, tipo, monto, contra_cuenta_id, banco_destino_id, referencia, detalle) VALUES (?,?,?,?,?,?,?,?,?)',
-    values: [numero, banco_id, fecha, tipo, monto, contra_cuenta_id, tipo === 'transferencia' ? banco_destino_id : null, referencia.trim() || null, detalle.trim() || TIPOS_MOV_BANCO[tipo]],
+    statement: 'INSERT INTO banco_movs (numero, banco_id, fecha, tipo, monto, contra_cuenta_id, banco_destino_id, referencia, detalle, beneficiario) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    values: [numero, banco_id, fecha, tipo, monto, contra_cuenta_id, tipo === 'transferencia' ? banco_destino_id : null, referencia.trim() || null, detalle.trim() || TIPOS_MOV_BANCO[tipo], String(beneficiario || '').trim() || null],
   }, contador('siguiente_numero_bancomov')]);
   return numero;
 }

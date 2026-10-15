@@ -232,6 +232,13 @@ export function asientosAutomaticos(f, { inicio = '', hasta = '9999-12-31' } = {
     else continue;
     add('banco', m.numero, m.fecha, `${m.detalle || m.tipo}`, ls);
   }
+  // Créditos bancarios: el desembolso entra al banco y crea la deuda; cada cuota baja la deuda (capital), paga el interés y sale del banco
+  for (const c of f.creditosBanc || []) {
+    add('credito', c.numero, c.fecha, `Crédito bancario ${c.numero}${c.entidad ? ` · ${c.entidad}` : ''}`, [{ cuenta_id: c.cuenta_banco_id, debe: c.monto }, { rol: 'prestamos_bancarios', haber: c.monto }]);
+  }
+  for (const p of f.creditoPagos || []) {
+    add('pagocredito', p.numero, p.fecha, `Cuota de crédito ${p.credito}`, [{ rol: 'prestamos_bancarios', debe: p.capital }, { rol: 'gasto_intereses', debe: p.interes }, { cuenta_id: p.cuenta_banco_id, haber: r2(p.capital + p.interes) }]);
+  }
   return out;
 }
 

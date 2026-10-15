@@ -83,6 +83,8 @@ export async function initDB() {
     'ALTER TABLE pagos ADD COLUMN documento_id INTEGER',
     'ALTER TABLE proveedores ADD COLUMN tipo_proveedor_id INTEGER REFERENCES tipos_proveedor(id)',
     'ALTER TABLE pagos_compra ADD COLUMN documento_id INTEGER',
+    'ALTER TABLE cuentas_bancarias ADD COLUMN tipo_cuenta_id INTEGER',
+    'ALTER TABLE banco_movs ADD COLUMN beneficiario TEXT',
     "ALTER TABLE ordenes_compra ADD COLUMN condicion TEXT NOT NULL DEFAULT 'contado'",
     'ALTER TABLE ordenes_compra ADD COLUMN dias_credito INTEGER',
     'ALTER TABLE ordenes_compra ADD COLUMN autorizado_por TEXT',
@@ -128,6 +130,7 @@ export async function initDB() {
   await sembrarCxc();
   await sembrarMonedas();
   await sembrarCxp();
+  await sembrarBanco();
   await guardarWeb();
   return db;
 }
@@ -194,6 +197,14 @@ async function sembrarCxp() {
   const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM tipos_proveedor');
   if (n === 0) for (const nombre of ['Distribuidor', 'Fabricante', 'Servicios']) await ejecutar('INSERT OR IGNORE INTO tipos_proveedor (nombre) VALUES (?)', [nombre]);
   await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('cxp_sembrado', '1')");
+}
+
+async function sembrarBanco() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'banco_sembrado'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM tipos_cuenta_banco');
+  if (n === 0) for (const nombre of ['Corriente', 'Ahorro']) await ejecutar('INSERT OR IGNORE INTO tipos_cuenta_banco (nombre) VALUES (?)', [nombre]);
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('banco_sembrado', '1')");
 }
 
 // Monedas de ejemplo (sin tasas: las tasas las escribe el negocio), UNA sola vez

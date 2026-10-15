@@ -10,7 +10,7 @@ import { vistaCuentas } from './conta-ui-asientos.js';
 import { vistaDiarios } from './conta-ui-diarios.js';
 import { vistaGastos } from './conta-ui-gastos.js';
 import { vistaPeriodos } from './conta-ui-periodos.js';
-import { vistaBancos } from './conta-ui-bancos.js';
+import { vistaBanco } from './banco.js';
 import { vistaActivos, vistaNomina } from './conta-ui-activos.js';
 import { vistaReportes } from './conta-ui-reportes.js';
 import { vistaCuadreCaja } from './caja.js';
@@ -121,7 +121,7 @@ async function vistaAjustes(raiz) {
 }
 
 const TABS = [
-  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaDiarios], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cxc', 'CXC', vistaCxc], ['cxp', 'CXP', vistaCxp], ['cuadre', 'Cuadre de caja', vistaCuadreCaja], ['cajachica', 'Caja chica', vistaCajaChica], ['gastos', 'Gastos', vistaGastos],
+  ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaDiarios], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBanco], ['cxc', 'CXC', vistaCxc], ['cxp', 'CXP', vistaCxp], ['cuadre', 'Cuadre de caja', vistaCuadreCaja], ['cajachica', 'Caja chica', vistaCajaChica], ['gastos', 'Gastos', vistaGastos],
   ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['periodos', 'Períodos', vistaPeriodos], ['ajustes', 'Ajustes', vistaAjustes],
 ];
 let tabActual = 'resumen';

@@ -517,5 +517,94 @@ limpiarHojas();
 ok('la condición de pago (contado o crédito con sus días) se asigna desde el formulario del cliente');
 ok('la venta muestra el tipo de comprobante (con el aviso de cuál se entrega) y la casilla de RNC; el cliente tiene el botón de la DGII');
 
+
+// ======================= Banco =======================
+limpiarHojas();
+{
+  const { vistaBanco, SECCIONES_BANCO } = await import('../src/banco.js');
+  const bk = await import('../src/banco-db.js');
+  const rbk = new Nodo('div'); await vistaBanco(rbk); await pausa();
+  assert.deepEqual(rbk.todos((x) => x.tag === 'button' && x.attrs.role === 'tab').map((t) => t.texto.trim()),
+    ['Banco', 'Cargo Bancario', 'Cheque', 'Conciliación', 'Crédito Bancario', 'Cambio Tasa', 'Depósito Bancario', 'Moneda', 'Reporte Banco', 'Reporte Dinámico', 'Solicitud Pago', 'Tipo de Cuenta', 'Transferencia Bancaria']);
+  assert.equal(SECCIONES_BANCO.length, 13);
+  const verBk = async (nombre) => { await pulsar(rbk.todos((x) => x.tag === 'button' && x.attrs.role === 'tab' && x.texto.trim() === nombre)[0]); await pausa(); const t = textoDe(rbk); assert.ok(!t.includes('No se pudo cargar') && !t.includes('NaN') && !t.includes('undefined'), `${nombre}: ${t.slice(0, 300)}`); return t; };
+  for (const [, nombre] of SECCIONES_BANCO) await verBk(nombre);
+  ok('Banco tiene las 13 secciones y todas se pintan sin errores');
+  const ph = (r, t) => r.todos((x) => x.tag === 'input' && (x.attrs.placeholder === t || x.placeholder === t))[0];
+  const al = (r, t) => r.todos((x) => (x.tag === 'input' || x.tag === 'select') && x.attrs['aria-label'] === t)[0];
+  const [cuentaBk] = (await cd.listarBancos()).filter((x) => x.activo);
+  // Tipo de cuenta
+  await verBk('Tipo de Cuenta'); await pulsar(boton(rbk, 'Nuevo tipo de cuenta'));
+  let hb = document.body.hijos.at(-1); ph(hb, 'Ej. Corriente').value = 'Divisas'; await pulsar(boton(hb, 'Guardar'));
+  assert.ok((await bk.listarTiposCuenta()).some((t) => t.nombre === 'Divisas'));
+  limpiarHojas();
+  // Depósito, cargo y transferencia desde la pantalla
+  await verBk('Depósito Bancario'); await pulsar(boton(rbk, 'Nuevo depósito bancario'));
+  hb = document.body.hijos.at(-1);
+  hb.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '1500';
+  await pulsar(boton(hb, 'Guardar'));
+  assert.ok((await bk.listarMovsBanco('deposito')).some((m) => m.monto === 1500), 'el depósito se guarda');
+  limpiarHojas();
+  await verBk('Cargo Bancario'); await pulsar(boton(rbk, 'Nuevo cargo bancario'));
+  hb = document.body.hijos.at(-1);
+  hb.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '75';
+  await pulsar(boton(hb, 'Guardar'));
+  assert.ok((await bk.listarMovsBanco('cargo')).some((m) => m.monto === 75), 'el cargo se guarda');
+  limpiarHojas();
+  await verBk('Cheque'); await pulsar(boton(rbk, 'Emitir cheque'));
+  hb = document.body.hijos.at(-1);
+  await pulsar(boton(hb, 'Guardar'));
+  assert.ok(textoDe(hb).includes('número del cheque'), 'pide el número del cheque');
+  ph(hb, 'Número del cheque').value = '7001'; ph(hb, 'A nombre de').value = 'Juan Pérez';
+  hb.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '300';
+  hb.todos((x) => x.tag === 'select' && x.attrs['aria-label'] === 'Cuenta').at(-1).value = String((await cd.listarCuentas()).find((c) => c.codigo === '6201').id);
+  await pulsar(boton(hb, 'Guardar'));
+  assert.ok((await bk.listarMovsBanco('cheque')).some((m) => m.referencia === '7001' && m.beneficiario === 'Juan Pérez'), 'el cheque se emite');
+  assert.ok(textoDe(rbk).includes('7001') && textoDe(rbk).includes('En tránsito'));
+  limpiarHojas();
+  // Crédito bancario
+  await verBk('Crédito Bancario'); await pulsar(boton(rbk, 'Nuevo crédito bancario'));
+  hb = document.body.hijos.at(-1);
+  const nums = hb.todos((x) => x.tag === 'input' && x.attrs.type === 'number');
+  nums[0].value = '6000'; nums[1].value = '12'; nums[2].value = '6';
+  await pulsar(boton(hb, 'Registrar crédito'));
+  const [cred] = await bk.listarCreditos(); assert.equal(cred.monto, 6000);
+  limpiarHojas();
+  await verBk('Crédito Bancario');
+  await pulsar(rbk.todos((x) => x.className.includes('fila') && x.texto.includes(cred.numero))[0]);
+  hb = document.body.hijos.at(-1);
+  assert.ok(textoDe(hb).includes('Pagar cuota') && textoDe(hb).includes('Intereses pagados'));
+  await pulsar(boton(hb, 'Pagar cuota'));
+  assert.equal((await bk.detalleCredito(cred.id)).pagos.length, 1, 'la cuota se paga desde la pantalla');
+  limpiarHojas();
+  // Solicitud de pago: crear, aprobar (hay sesión de administrador) y pagar
+  await verBk('Solicitud Pago'); await pulsar(boton(rbk, 'Nueva solicitud de pago'));
+  hb = document.body.hijos.at(-1);
+  ph(hb, 'A quién se le paga').value = 'Edenorte'; ph(hb, 'Concepto').value = 'Luz';
+  hb.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '450';
+  hb.todos((x) => x.tag === 'select' && x.attrs['aria-label'] === 'Cuenta').at(-1).value = String((await cd.listarCuentas()).find((c) => c.codigo === '6202').id);
+  await pulsar(boton(hb, 'Crear solicitud'));
+  let sol = (await bk.listarSolicitudesPago()).find((x) => x.beneficiario === 'Edenorte'); assert.equal(sol.estado, 'pendiente');
+  limpiarHojas();
+  await verBk('Solicitud Pago'); await pulsar(rbk.todos((x) => x.className.includes('fila') && x.texto.includes(sol.numero))[0]);
+  hb = document.body.hijos.at(-1); await pulsar(boton(hb, 'Aprobar'));
+  assert.equal((await bk.listarSolicitudesPago()).find((x) => x.numero === sol.numero).estado, 'aprobada');
+  limpiarHojas();
+  await verBk('Solicitud Pago'); await pulsar(rbk.todos((x) => x.className.includes('fila') && x.texto.includes(sol.numero))[0]);
+  hb = document.body.hijos.at(-1);
+  ph(hb, 'Número del cheque').value = '7002';
+  await pulsar(hb.todos((x) => x.tag === 'button' && x.texto.trim() === 'Pagar')[0]);
+  assert.equal((await bk.listarSolicitudesPago()).find((x) => x.numero === sol.numero).estado, 'pagada');
+  limpiarHojas();
+  ok('depósito, cargo, cheque, crédito (con su cuota) y solicitud de pago (crear, aprobar, pagar) funcionan desde la pantalla');
+  // Reportes y conciliación
+  assert.ok((await verBk('Reporte Banco')).includes('Saldo en bancos'));
+  assert.ok((await verBk('Reporte Dinámico')).includes('Neto'));
+  assert.ok((await verBk('Conciliación')).includes('Elige la cuenta'));
+  assert.ok((await verBk('Cambio Tasa')).length > 0 && (await verBk('Moneda')).includes('Nueva moneda'));
+  assert.ok(cuentaBk);
+  ok('reportes del banco, conciliación, cambio de tasa y monedas abren sin errores');
+}
+
 console.log(`\n${n} grupos OK`);
 process.exit(0);

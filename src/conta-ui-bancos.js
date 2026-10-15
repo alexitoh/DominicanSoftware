@@ -5,44 +5,52 @@ import {
   listarBancos, crearBanco, hacerPredeterminado, TIPOS_MOV_BANCO, registrarMovBanco, anularMovBanco, movimientosBanco,
   calcularConciliacion, prepararConciliacion, listarConciliaciones, finalizarConciliacion, deshacerConciliacion, listarCuentas, fechaHoy,
 } from './conta-db.js';
+import { listarTiposCuenta, asignarTipoCuenta } from './banco-db.js';
+import { selectDe } from './cxp-docs.js';
 import { campo, numero, fechaInput, texto, selectCuentas, tabla, vacio, fechaCorta, limpiar } from './conta-ui-comun.js';
 
-export async function vistaBancos(raiz) {
+export async function vistaBancos(raiz, opciones = {}) {
+  const modoConc = opciones.modo === 'conciliacion';
   const bancos = await listarBancos();
+  const tiposCuenta = await listarTiposCuenta();
   const saldos = await Promise.all(bancos.map((b) => movimientosBanco(b.id).then((m) => m.saldoLibros).catch(() => 0)));
 
   function nuevaCuenta() {
     const nombre = texto('', 'Ej. Popular corriente');
     const banco = texto('', 'Banco');
     const num = texto('', 'Número de cuenta (opcional)');
+    const tipoC = selectDe(tiposCuenta.filter((t) => t.activo).map((t) => [t.id, t.nombre]), { vacioTexto: 'Sin tipo', etiqueta: 'Tipo de cuenta' });
     const error = h('p', { class: 'error', role: 'alert' });
     const cerrar = hoja('Nueva cuenta bancaria', h('div', { class: 'cuerpo' },
-      campo('Nombre', nombre), campo('Banco', banco), campo('Número', num), error,
+      campo('Nombre', nombre), campo('Banco', banco), campo('Número', num), campo('Tipo de cuenta', tipoC), error,
       h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: async () => {
-        try { await crearBanco({ nombre: nombre.value, banco: banco.value, numero: num.value }); cerrar(); toast('Cuenta creada'); await vistaBancos(raiz); }
+        try { await crearBanco({ nombre: nombre.value, banco: banco.value, numero: num.value, tipo_cuenta_id: Number(tipoC.value) || null }); cerrar(); toast('Cuenta creada'); await vistaBancos(raiz, opciones); }
         catch (e) { error.textContent = limpiar(e); }
       } }, 'Crear'))));
   }
 
   raiz.replaceChildren(
-    h('div', { class: 'filtros' }, h('button', { class: 'btn primario', onClick: nuevaCuenta }, 'Nueva cuenta bancaria')),
+    modoConc ? h('p', { class: 'ayuda' }, 'Elige la cuenta y concilia su estado de cuenta contra tus libros. Lo que marques como ya reflejado por el banco deja de estar en tránsito.') : h('div', { class: 'filtros' }, h('button', { class: 'btn primario', onClick: nuevaCuenta }, 'Nueva cuenta bancaria')),
     bancos.length ? h('div', { class: 'lista' }, bancos.map((b, i) => h('button', { class: 'fila inventario', onClick: () => detalle(b) },
-      h('span', { class: 'datos' }, h('strong', {}, b.nombre), h('small', {}, `${b.banco || 'Banco'}${b.numero ? ` · ${b.numero}` : ''}${b.predeterminada ? ' · predeterminada' : ''}`)),
+      h('span', { class: 'datos' }, h('strong', {}, b.nombre), h('small', {}, `${b.banco || 'Banco'}${b.numero ? ` · ${b.numero}` : ''}${b.tipo_cuenta ? ` · ${b.tipo_cuenta}` : ''}${b.predeterminada ? ' · predeterminada' : ''}`)),
       h('span', { class: 'precio' }, dinero(saldos[i])))))
       : vacio('Aún no hay cuentas bancarias. Crea una para registrar depósitos, cheques y conciliar. Los cobros con tarjeta, transferencia o cheque de las ventas ya se cargan al banco predeterminado.'));
 
   async function detalle(b) {
     const info = await movimientosBanco(b.id);
     const cont = h('div', { class: 'cuerpo' });
+    const tipoSel = selectDe(tiposCuenta.filter((t) => t.activo || t.id === b.tipo_cuenta_id).map((t) => [t.id, t.nombre]), { valor: b.tipo_cuenta_id ?? '', vacioTexto: 'Sin tipo', etiqueta: 'Tipo de cuenta' });
+    tipoSel.addEventListener('change', async () => { await asignarTipoCuenta(b.id, Number(tipoSel.value) || null); toast('Tipo guardado'); });
     const hist = await listarConciliaciones(b.id);
 
     const movs = await consultar("SELECT * FROM banco_movs WHERE banco_id = ? AND estado = 'vigente' ORDER BY fecha DESC, id DESC LIMIT 30", [b.id]);
 
     cont.append(
       h('div', { class: 'totales' }, h('div', {}, h('span', {}, 'Saldo en libros'), h('span', {}, dinero(info.saldoLibros))), h('div', {}, h('span', {}, 'Saldo conciliado'), h('span', {}, dinero(info.saldoConciliado)))),
+      campo('Tipo de cuenta', tipoSel),
       h('div', { class: 'acciones' },
         h('button', { class: 'btn primario', onClick: () => { cerrar(); nuevoMov(b); } }, 'Registrar movimiento'),
-        b.predeterminada ? null : h('button', { class: 'btn', onClick: async () => { await hacerPredeterminado(b.id); cerrar(); toast('Cuenta predeterminada'); await vistaBancos(raiz); } }, 'Usar para cobros con tarjeta/transferencia')),
+        b.predeterminada ? null : h('button', { class: 'btn', onClick: async () => { await hacerPredeterminado(b.id); cerrar(); toast('Cuenta predeterminada'); await vistaBancos(raiz, opciones); } }, 'Usar para cobros con tarjeta/transferencia')),
       h('h3', { class: 'seccion' }, 'Conciliación'),
       h('p', { class: 'ayuda' }, hist[0] ? `Última conciliación: al ${fechaCorta(hist[0].fecha_corte)}.` : 'Aún no has conciliado esta cuenta.'),
       h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: () => { cerrar(); conciliar(b); } }, 'Nueva conciliación')),
@@ -55,7 +63,7 @@ export async function vistaBancos(raiz) {
         h('span', { class: 'precio' }, dinero(m.monto)),
         h('button', { class: 'btn chico', onClick: async () => {
           if (!(await confirmar('Anular movimiento', `Se anulará ${m.numero}.`, 'Anular'))) return;
-          try { await anularMovBanco(m.id); cerrar(); toast('Movimiento anulado'); await vistaBancos(raiz); } catch (e) { toast(limpiar(e), 'error'); }
+          try { await anularMovBanco(m.id); cerrar(); toast('Movimiento anulado'); await vistaBancos(raiz, opciones); } catch (e) { toast(limpiar(e), 'error'); }
         } }, 'Anular'))))
         : vacio('Sin movimientos manuales.'));
     const cerrar = hoja(b.nombre, cont);
@@ -106,7 +114,7 @@ export async function vistaBancos(raiz) {
       error.textContent = '';
       try {
         await finalizarConciliacion({ banco_id: b.id, fecha_corte: fecha.value, saldo_extracto: extracto.value, marcas: [...marcas], notas: nota.value });
-        cerrar(); toast('Conciliación guardada'); await vistaBancos(raiz);
+        cerrar(); toast('Conciliación guardada'); await vistaBancos(raiz, opciones);
       } catch (e) { error.textContent = limpiar(e); }
     }
     extracto.addEventListener('input', calcular);
@@ -135,7 +143,7 @@ export async function vistaBancos(raiz) {
       c.notas ? h('p', { class: 'ayuda' }, `Nota: ${c.notas}`) : null, error,
       ultima ? h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: async () => {
         if (!(await confirmar('Deshacer conciliación', 'Sus movimientos volverán a quedar pendientes de conciliar.', 'Deshacer'))) return;
-        try { await deshacerConciliacion(c.id); cerrar(); toast('Conciliación deshecha'); await vistaBancos(raiz); } catch (e) { error.textContent = limpiar(e); }
+        try { await deshacerConciliacion(c.id); cerrar(); toast('Conciliación deshecha'); await vistaBancos(raiz, opciones); } catch (e) { error.textContent = limpiar(e); }
       } }, 'Deshacer')) : null));
   }
 
@@ -157,7 +165,7 @@ export async function vistaBancos(raiz) {
       h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: async () => {
         try {
           await registrarMovBanco({ banco_id: b.id, fecha: fecha.value, tipo: tipo.value, monto: monto.value, contra_cuenta_id: Number(contra.value) || null, banco_destino_id: Number(destino.value) || null, referencia: ref.value, detalle: det.value });
-          cerrar(); toast('Movimiento registrado'); await vistaBancos(raiz);
+          cerrar(); toast('Movimiento registrado'); await vistaBancos(raiz, opciones);
         } catch (e) { error.textContent = limpiar(e); }
       } }, 'Guardar'))));
   }

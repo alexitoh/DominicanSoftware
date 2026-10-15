@@ -8,7 +8,7 @@ export const TABLAS_SYNC = [
   'categorias', 'productos', 'tipos_cliente', 'condiciones_pago', 'clientes', 'cliente_direcciones', 'cliente_contactos', 'recibos', 'recibo_metodos', 'tipos_proveedor', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'cxc_conceptos', 'cxc_docs', 'pagos',
   'ventas_pendientes', 'ventas_pendientes_detalle', 'ventas_pendientes_servicios',
   'cuentas_cobrar', 'garantias', 'garantia_reclamos', 'compras', 'compra_detalle', 'cuentas_pagar', 'cxp_docs', 'pagos_compra', 'solicitudes_compra', 'solicitud_detalle', 'requisiciones', 'requisicion_detalle', 'requisicion_cot', 'ordenes_compra', 'orden_detalle',
-  'centros_costo', 'cuentas_contables', 'asientos', 'asiento_lineas', 'cuentas_bancarias', 'banco_movs', 'cajas_chicas', 'caja_chica_movs', 'conciliaciones_banco', 'conciliaciones', 'dep_tipos', 'activos_tipos', 'tasas_inflacion', 'activos_fijos', 'activos_reval', 'empleados', 'nomina_corridas', 'nomina_detalle', 'presupuestos', 'periodos_cerrados',
+  'centros_costo', 'cuentas_contables', 'asientos', 'asiento_lineas', 'tipos_cuenta_banco', 'cuentas_bancarias', 'banco_movs', 'creditos_bancarios', 'credito_pagos', 'solicitudes_pago', 'cajas_chicas', 'caja_chica_movs', 'conciliaciones_banco', 'conciliaciones', 'dep_tipos', 'activos_tipos', 'tasas_inflacion', 'activos_fijos', 'activos_reval', 'empleados', 'nomina_corridas', 'nomina_detalle', 'presupuestos', 'periodos_cerrados',
   'caja', 'tipos_pago', 'conceptos_conta', 'declaraciones', 'monedas', 'tasas_cambio', 'partidas_ext', 'dif_cambiaria', 'gastos', 'cotizaciones', 'cotizacion_detalle', 'movimientos_inventario', 'ncf_anulados', 'bitacora', 'config',
 ];
 

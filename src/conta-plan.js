@@ -19,7 +19,7 @@ export const ROLES = {
   capital: 'Capital social', superavit_reval: 'Superávit por revalorización', utilidades_acum: 'Utilidades acumuladas', utilidad_ejercicio: 'Utilidad del ejercicio',
   ventas: 'Ventas de mercancía', servicios: 'Ingresos por servicios', desc_ventas: 'Descuentos y devoluciones en ventas', otros_ingresos: 'Otros ingresos', cargos_clientes: 'Cargos y recargos a clientes', ganancia_cambiaria: 'Ganancia por diferencia cambiaria',
   costo_ventas: 'Costo de ventas', desc_compras: 'Descuentos y devoluciones en compras', cargos_proveedores: 'Cargos y recargos de proveedores', gasto_sueldos: 'Sueldos y salarios', gasto_tss: 'Aportes patronales',
-  gasto_depreciacion: 'Gasto de depreciación', gasto_bancario: 'Comisiones bancarias', perdida_cambiaria: 'Pérdida por diferencia cambiaria', gasto_otros: 'Otros gastos',
+  gasto_depreciacion: 'Gasto de depreciación', gasto_bancario: 'Comisiones bancarias', perdida_cambiaria: 'Pérdida por diferencia cambiaria', gasto_otros: 'Otros gastos', prestamos_bancarios: 'Préstamos bancarios (créditos)', gasto_intereses: 'Intereses de préstamos',
 };
 
 // [código, nombre, tipo, es título (no admite movimientos), rol, categoría de gasto de Caja]
@@ -47,6 +47,7 @@ export const PLAN_BASE = [
   ['2140', 'Otras retenciones por pagar', 'pasivo', 0, 'otros_pagar'],
   ['25', 'Pasivos no corrientes', 'pasivo', 1],
   ['2501', 'Préstamos bancarios a largo plazo', 'pasivo', 0],
+  ['2502', 'Créditos bancarios por pagar', 'pasivo', 0, 'prestamos_bancarios'],
   ['3', 'PATRIMONIO', 'patrimonio', 1],
   ['3101', 'Capital social', 'patrimonio', 0, 'capital'],
   ['3201', 'Utilidades acumuladas', 'patrimonio', 0, 'utilidades_acum'],
@@ -75,6 +76,7 @@ export const PLAN_BASE = [
   ['6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario'],
   ['6208', 'Pérdida por diferencia cambiaria', 'gasto', 0, 'perdida_cambiaria'],
   ['6209', 'Cargos y recargos de proveedores', 'gasto', 0, 'cargos_proveedores'],
+  ['6215', 'Intereses de préstamos', 'gasto', 0, 'gasto_intereses'],
   ['6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros'],
 ];
 

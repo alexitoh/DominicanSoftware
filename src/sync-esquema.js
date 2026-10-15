@@ -128,9 +128,10 @@ export const TABLAS = [
     t: 'asiento_lineas', cols: ['debe', 'haber', 'detalle'],
     refs: [{ col: 'asiento_id', tabla: 'asientos' }, { col: 'cuenta_id', tabla: 'cuentas_contables' }, { col: 'centro_id', tabla: 'centros_costo' }],
   },
-  { t: 'cuentas_bancarias', cols: ['nombre', 'banco', 'numero', 'predeterminada', 'activo'], refs: [{ col: 'cuenta_id', tabla: 'cuentas_contables' }] },
+  { t: 'tipos_cuenta_banco', cols: ['nombre', 'activo'], unicos: ['nombre'] },
+  { t: 'cuentas_bancarias', cols: ['nombre', 'banco', 'numero', 'predeterminada', 'activo'], refs: [{ col: 'cuenta_id', tabla: 'cuentas_contables' }, { col: 'tipo_cuenta_id', tabla: 'tipos_cuenta_banco' }] },
   {
-    t: 'banco_movs', cols: ['numero', 'fecha', 'tipo', 'monto', 'referencia', 'detalle', 'estado'],
+    t: 'banco_movs', cols: ['numero', 'fecha', 'tipo', 'monto', 'referencia', 'detalle', 'beneficiario', 'estado'],
     refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'contra_cuenta_id', tabla: 'cuentas_contables' }, { col: 'banco_destino_id', tabla: 'cuentas_bancarias' }],
     unicos: ['numero'],
   },
@@ -139,6 +140,12 @@ export const TABLAS = [
     refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }],
   },
   { t: 'conciliaciones', cols: ['ref', 'fecha'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'conciliacion_id', tabla: 'conciliaciones_banco' }] },
+  { t: 'creditos_bancarios', cols: ['numero', 'fecha', 'entidad', 'monto', 'tasa_anual', 'plazo_meses', 'cuota', 'notas', 'estado'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }], unicos: ['numero'] },
+  { t: 'credito_pagos', cols: ['numero', 'fecha', 'capital', 'interes', 'referencia', 'estado'], refs: [{ col: 'credito_id', tabla: 'creditos_bancarios' }, { col: 'banco_id', tabla: 'cuentas_bancarias' }], unicos: ['numero'] },
+  {
+    t: 'solicitudes_pago', cols: ['numero', 'fecha', 'beneficiario', 'concepto', 'monto', 'forma', 'estado', 'aprobado_por', 'mov_numero', 'referencia', 'notas'],
+    refs: [{ col: 'proveedor_id', tabla: 'proveedores' }, { col: 'contra_cuenta_id', tabla: 'cuentas_contables' }, { col: 'banco_id', tabla: 'cuentas_bancarias' }], unicos: ['numero'],
+  },
   { t: 'cajas_chicas', cols: ['nombre', 'custodio', 'notas', 'activa'], unicos: ['nombre'] },
   {
     t: 'caja_chica_movs', cols: ['numero', 'fecha', 'tipo', 'concepto', 'categoria', 'beneficiario', 'documento', 'comprobante', 'ncf', 'itbis', 'monto', 'reposicion_numero', 'estado'],

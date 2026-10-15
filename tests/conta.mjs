@@ -798,5 +798,110 @@ await assert.rejects(() => xp.crearOrden({ proveedor_id: sid, items: [{ producto
 ok('CxP: tipos de suplidor, notas de crédito y débito, anticipos, pagos repartidos, reportes, contabilidad cuadrando y circuito solicitud → requisición → orden → factura');
 }
 
+
+{
+  // ======================= Banco =======================
+  const bk = await import('../src/banco-db.js'); const xp = await import('../src/cxp-db.js');
+  const libB = async () => cd.libroContable();
+  const sd = (lib, codigo) => r2(lib.lineas.filter((l) => l.cuenta_id === C[codigo].id).reduce((a, l) => a + l.debe - l.haber, 0));
+  const sdCuenta = (lib, id) => r2(lib.lineas.filter((l) => l.cuenta_id === id).reduce((a, l) => a + l.debe - l.haber, 0));
+  // tipos de cuenta
+  const tipos = await bk.listarTiposCuenta(); assert.ok(tipos.some((t) => t.nombre === 'Corriente') && tipos.some((t) => t.nombre === 'Ahorro'));
+  await bk.guardarTipoCuenta({ nombre: 'Nómina' });
+  await assert.rejects(() => bk.guardarTipoCuenta({ nombre: 'nómina' }), /Ya existe/);
+  const tCor = (await bk.listarTiposCuenta()).find((t) => t.nombre === 'Corriente');
+  await cd.crearBanco({ nombre: 'Banco A', banco: 'Popular' }); await cd.crearBanco({ nombre: 'Banco B', banco: 'BHD' });
+  const [bA, bB] = (await cd.listarBancos()).filter((b) => ['Banco A', 'Banco B'].includes(b.nombre)).sort((x, y) => x.nombre.localeCompare(y.nombre));
+  await bk.asignarTipoCuenta(bA.id, tCor.id);
+  await assert.rejects(() => bk.eliminarTipoCuenta(tCor.id), /Hay cuentas/);
+  const nomina = (await bk.listarTiposCuenta()).find((t) => t.nombre === 'Nómina'); await bk.eliminarTipoCuenta(nomina.id);
+  // depósito, cargo, transferencia y cheque
+  const l0 = await libB();
+  await bk.registrarDeposito({ banco_id: bA.id, monto: 10000, referencia: 'DEP-1' });
+  await bk.registrarCargo({ banco_id: bA.id, monto: 150, concepto: 'Comisión por mantenimiento de cuenta' });
+  await assert.rejects(() => bk.registrarCargo({ banco_id: bA.id, monto: 5, concepto: '' }), /concepto/);
+  await bk.registrarTransferencia({ banco_id: bA.id, banco_destino_id: bB.id, monto: 2000, referencia: 'TR-1' });
+  await assert.rejects(() => bk.registrarTransferencia({ banco_id: bA.id, banco_destino_id: bA.id, monto: 1 }), /destino/);
+  const gastoAlq = C['6201'];
+  await assert.rejects(() => bk.emitirCheque({ banco_id: bA.id, monto: 500, numero_cheque: '1001', beneficiario: 'Pedro', contra_cuenta_id: null }), /cuenta contable/);
+  await assert.rejects(() => bk.emitirCheque({ banco_id: bA.id, monto: 500, numero_cheque: '', beneficiario: 'Pedro', contra_cuenta_id: gastoAlq.id }), /número del cheque/);
+  const bkNum = await bk.emitirCheque({ banco_id: bA.id, monto: 500, numero_cheque: '1001', beneficiario: 'Pedro Alquiler', contra_cuenta_id: gastoAlq.id });
+  await assert.rejects(() => bk.emitirCheque({ banco_id: bA.id, monto: 1, numero_cheque: '1001', beneficiario: 'X', contra_cuenta_id: gastoAlq.id }), /ya se emitió/);
+  let chs = (await bk.listarMovsBanco('cheque')).filter((x) => x.numero === bkNum); assert.equal(chs.length, 1); assert.equal(chs[0].estado_cheque, 'transito'); assert.equal(chs[0].beneficiario, 'Pedro Alquiler');
+  const l1 = await libB();
+  assert.deepEqual(l1.faltantes, []);
+  assert.equal(sdCuenta(l1, bA.cuenta_id) - sdCuenta(l0, bA.cuenta_id), r2(10000 - 150 - 2000 - 500), 'la cuenta contable del Banco A refleja depósito, cargo, transferencia y cheque');
+  assert.equal(sdCuenta(l1, bB.cuenta_id) - sdCuenta(l0, bB.cuenta_id), 2000, 'la transferencia entra al Banco B');
+  assert.equal(sd(l1, '6207') - sd(l0, '6207'), 150, 'el cargo va a Comisiones bancarias (6207)');
+  assert.equal(sd(l1, '6201') - sd(l0, '6201'), 500, 'el cheque se aplica a la cuenta elegida');
+  // el cheque pasa a "cobrado" al conciliarlo
+  const prep = await cd.prepararConciliacion(bA.id, '2099-12-31');
+  const keyCh = prep.movimientos.find((m) => m.key.startsWith(`banco:${bkNum}#`)).key;
+  const todas = new Set(prep.movimientos.map((m) => m.key));
+  await cd.finalizarConciliacion({ banco_id: bA.id, fecha_corte: '2099-12-31', saldo_extracto: prep.saldoLibros, marcas: [...todas] });
+  chs = (await bk.listarMovsBanco('cheque')).filter((x) => x.numero === bkNum); assert.equal(chs[0].estado_cheque, 'cobrado'); assert.ok(keyCh);
+  await assert.rejects(() => bk.anularCheque(chs[0].id), /concilió/);
+  const bkNum2 = await bk.emitirCheque({ banco_id: bB.id, monto: 100, numero_cheque: '2001', beneficiario: 'Ana', contra_cuenta_id: gastoAlq.id });
+  const ch2 = (await bk.listarMovsBanco('cheque')).find((x) => x.numero === bkNum2); await bk.anularCheque(ch2.id);
+  assert.equal((await bk.listarMovsBanco('cheque')).find((x) => x.numero === bkNum2).estado_cheque, 'anulado');
+  // crédito bancario
+  assert.equal(bk.calcularCuota(12000, 0, 12), 1000);
+  const am = bk.tablaAmortizacion(12000, 12, 12); assert.equal(am.length, 12); assert.equal(am.at(-1).saldo, 0);
+  assert.equal(r2(am.reduce((s, f) => s + f.capital, 0)), 12000);
+  const antesCr = await libB();
+  const cnum = await bk.crearCredito({ entidad: 'Banreservas', banco_id: bB.id, monto: 12000, tasa_anual: 12, plazo_meses: 12 });
+  await assert.rejects(() => bk.crearCredito({ banco_id: bB.id, monto: 0, plazo_meses: 12 }), /mayor que cero/);
+  await assert.rejects(() => bk.crearCredito({ banco_id: bB.id, monto: 100, plazo_meses: 0 }), /plazo/);
+  let cr = (await bk.listarCreditos())[0]; assert.equal(cr.numero, cnum); assert.equal(cr.saldo, 12000);
+  const pg = await bk.pagarCreditoCuota({ credito_id: cr.id, banco_id: bB.id });
+  assert.equal(pg.interes, 120); assert.equal(r2(pg.capital + pg.interes), cr.cuota);
+  await assert.rejects(() => bk.pagarCreditoCuota({ credito_id: cr.id, banco_id: bB.id, monto: 50 }), /interés/);
+  const dc = await bk.detalleCredito(cr.id); assert.equal(dc.saldo, r2(12000 - pg.capital)); assert.equal(dc.pagos.length, 1);
+  const lc = await libB();
+  assert.deepEqual(lc.faltantes, []);
+  assert.equal(r2(sd(lc, '2502') - sd(antesCr, '2502')), r2(-12000 + pg.capital), 'el crédito queda en Créditos bancarios por pagar (2502)');
+  assert.equal(sd(lc, '6215') - sd(antesCr, '6215'), 120, 'el interés va a Intereses de préstamos (6215)');
+  assert.equal(r2(sdCuenta(lc, bB.cuenta_id) - sdCuenta(antesCr, bB.cuenta_id)), r2(12000 - pg.capital - pg.interes), 'el banco recibe el crédito y paga la cuota');
+  await assert.rejects(() => bk.anularCredito(cr.id), /cuotas pagadas/);
+  const pagoRow = (await bk.detalleCredito(cr.id)).pagos[0]; await bk.anularPagoCredito(pagoRow.id);
+  assert.equal((await bk.detalleCredito(cr.id)).saldo, 12000);
+  await bk.anularCredito(cr.id);
+  assert.equal(r2(sd(await libB(), '2502') - sd(antesCr, '2502')), 0, 'anulado el crédito, la deuda desaparece');
+  // solicitudes de pago
+  await assert.rejects(() => bk.crearSolicitudPago({ beneficiario: 'Luz', monto: 100, concepto: 'Luz' }), /cuenta contable/);
+  const sp = await bk.crearSolicitudPago({ beneficiario: 'Edesur', monto: 800, forma: 'cheque', contra_cuenta_id: C['6202'].id, concepto: 'Luz de octubre' });
+  let sols = await bk.listarSolicitudesPago(); assert.equal(sols[0].estado, 'pendiente');
+  await assert.rejects(() => bk.pagarSolicitudPago({ id: sols[0].id, banco_id: bA.id, referencia: '1002' }), /aprobada/);
+  await bk.aprobarSolicitudPago(sols[0].id);
+  await assert.rejects(() => bk.pagarSolicitudPago({ id: sols[0].id, banco_id: bA.id }), /número del cheque/);
+  const antesSp = await libB();
+  const movSp = await bk.pagarSolicitudPago({ id: sols[0].id, banco_id: bA.id, referencia: '1002' });
+  sols = await bk.listarSolicitudesPago(); assert.equal(sols.find((x) => x.numero === sp).estado, 'pagada'); assert.equal(sols.find((x) => x.numero === sp).mov_numero, movSp);
+  assert.equal(sd(await libB(), '6202') - sd(antesSp, '6202'), 800, 'la solicitud pagada se aplica a su cuenta contable (6202)');
+  const sp2 = await bk.crearSolicitudPago({ beneficiario: 'Otro', monto: 5, contra_cuenta_id: C['6202'].id });
+  await bk.rechazarSolicitudPago((await bk.listarSolicitudesPago()).find((x) => x.numero === sp2).id, 'no procede');
+  assert.equal((await bk.listarSolicitudesPago()).find((x) => x.numero === sp2).estado, 'rechazada');
+  // solicitud a suplidor: baja su deuda y sale de la cuenta bancaria predeterminada
+  const [prov] = await bd.consultar("SELECT id FROM proveedores LIMIT 1");
+  await bd.ejecutar("UPDATE proveedores SET condicion = 'credito', dias_credito = 30 WHERE id = ?", [prov.id]);
+  const cb = await bd.registrarCompra({ proveedor_id: prov.id, items: [{ producto_id: (await uno('SELECT id FROM productos LIMIT 1')).id, cantidad: 1, costo_unitario: 700 }], forma_pago: 'credito', actualizarCosto: false });
+  const debia = r2((await xp.proveedoresCxp()).find((p) => p.id === prov.id).saldo);
+  const sp3 = await bk.crearSolicitudPago({ proveedor_id: prov.id, monto: 700, forma: 'transferencia' });
+  const id3 = (await bk.listarSolicitudesPago()).find((x) => x.numero === sp3).id;
+  await bk.aprobarSolicitudPago(id3); await bk.pagarSolicitudPago({ id: id3, referencia: 'TRF-9' });
+  assert.equal(r2((await xp.proveedoresCxp()).find((p) => p.id === prov.id).saldo), r2(debia - 700), 'el pago a suplidor baja su deuda');
+  assert.ok(cb);
+  // reportes
+  const rp = await bk.reporteBanco({ desde: '2000-01-01', hasta: '2099-12-31' });
+  assert.ok(rp.filas.length >= 2); assert.equal(r2(rp.total.inicial + rp.total.entradas - rp.total.salidas), rp.total.final);
+  const mv = await bk.movimientosBancoDin({ desde: '2000-01-01', hasta: '2099-12-31' });
+  const din = bk.tablaDinamicaBanco(mv, { dimension: 'cuenta' }); assert.ok(din.filas.length >= 2);
+  assert.ok(bk.tablaDinamicaBanco(mv, { dimension: 'documento' }).total.transferencia >= 2000);
+  const lf = await libB();
+  assert.deepEqual(lf.faltantes, []);
+  assert.equal(r2(lf.lineas.reduce((a, l) => a + l.debe, 0)), r2(lf.lineas.reduce((a, l) => a + l.haber, 0)), 'el libro sigue cuadrando');
+  ok('Banco: tipos de cuenta, depósitos, cargos, transferencias, cheques (tránsito/cobrado/anulado), crédito con cuotas e intereses, solicitudes de pago y reportes — todo en su cuenta contable');
+}
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);
