@@ -7,7 +7,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { crearServidor } from '../server/index.js';
-import { abrirBase } from '../server/db.js';
+import { abrirBase, siguienteVersion } from '../server/db.js';
 import { importarPadron } from '../server/dgii.js';
 import { crearCliente } from '../src/nube.js';
 import { crearMotor } from '../src/sync-nucleo.js';
@@ -327,6 +327,46 @@ assert.equal((await uno(D2, "SELECT COUNT(*) n FROM productos WHERE codigo = 'LP
 assert.equal((await uno(D2, "SELECT COUNT(*) n FROM productos WHERE codigo = 'LP-1'")).n, 0);
 srv5.close();
 ok('limpiar datos desde el panel exige el nombre exacto, conserva la cuenta y vacía los dispositivos sin que los datos viejos regresen');
+
+// ---------- 9f. Un producto modificado después de sus movimientos no pierde stock en un equipo nuevo ----------
+{
+  const P = await crearDispositivo('P'); const Q = await crearDispositivo('Q');
+  const pu = crearProducto(P, 'ORD-1', 'Amplificador 8000', 10, 1400);
+  const rP = await conectar(P, 'registro', { negocio: 'Orden', nombre: 'Eva', usuario: 'eva', correo: 'eva@x.com', clave: 'abcd1234' });
+  await P.motor.marcarTodo(); await P.motor.sincronizar();
+  // Más tarde: entra mercancía y el producto se modifica (el costo cambia), así que su versión queda por encima de la de sus movimientos
+  const idp = (await uno(P, 'SELECT id FROM productos WHERE uid = ?', [pu])).id;
+  P.run("INSERT INTO movimientos_inventario (producto_id, tipo, cantidad, motivo) VALUES (?, 'entrada', 5, 'compra')", [idp]);
+  P.run('UPDATE productos SET stock_actual = stock_actual + 5, costo = 900 WHERE id = ?', [idp]);
+  await P.motor.sincronizar();
+  await conectar(Q, 'login', { identificador: 'eva', clave: 'abcd1234', negocioId: rP.negocio.identificador });
+  await Q.motor.reemplazarLocal();
+  const rQ = await Q.motor.sincronizar();
+  assert.equal(rQ.errores.length, 0, rQ.errores.join('\n'));
+  assert.equal((await uno(Q, 'SELECT stock_actual s FROM productos')).s, 15, 'el equipo nuevo ve las 15 unidades');
+  assert.equal((await uno(Q, 'SELECT COUNT(*) n FROM movimientos_inventario')).n, 2, 'no se pierde ningún movimiento');
+  // Un equipo dañado por la versión anterior (movimiento perdido, stock en 5) se repara solo al sincronizar
+  Q.db.exec('UPDATE sync_ctl SET aplicando = 1');
+  Q.db.exec("DELETE FROM movimientos_inventario WHERE cantidad = 10"); Q.db.exec('UPDATE productos SET stock_actual = 5');
+  Q.db.exec("DELETE FROM config WHERE clave = 'sync_reparado_2'");
+  Q.db.exec('UPDATE sync_ctl SET aplicando = 0');
+  await Q.motor.sincronizar();
+  assert.equal((await uno(Q, 'SELECT stock_actual s FROM productos')).s, 15, 'se recupera el movimiento perdido');
+  assert.equal((await uno(Q, 'SELECT COUNT(*) n FROM movimientos_inventario')).n, 2);
+  assert.equal(await Q.motor.pendientes(), 0, 'la reparación no genera cambios propios');
+  await P.motor.sincronizar();
+  assert.equal((await uno(P, 'SELECT stock_actual s FROM productos')).s, 15, 'el equipo original no cambia');
+  // Un producto subido por una versión anterior (sin la columna itbis_exento) también se descarga, con su movimiento
+  const insReg = (tabla, uid, datos) => srvDb.prepare('INSERT INTO registros (negocio, tabla, uid, datos, borrado, actualizado, version, origen) VALUES (?,?,?,?,0,?,?,?)')
+    .run(rP.negocio.uid, tabla, uid, JSON.stringify(datos), Date.now(), siguienteVersion(srvDb), 'equipo-viejo');
+  insReg('movimientos_inventario', 'mov-viejo-1', { tipo: 'entrada', cantidad: 7, motivo: 'stock inicial', producto_id: 'prod-viejo-1' });
+  insReg('productos', 'prod-viejo-1', { codigo: 'VIEJO-1', nombre: 'Producto de versión anterior', costo: 10, precio: 20, stock_minimo: 0, activo: 1 });
+  const rV = await Q.motor.sincronizar();
+  assert.equal(rV.errores.length, 0, rV.errores.join('\n'));
+  const viejo = await uno(Q, "SELECT stock_actual s, itbis_exento e FROM productos WHERE codigo = 'VIEJO-1'");
+  assert.deepEqual({ ...viejo }, { s: 7, e: 0 }, 'el producto antiguo llega con su stock y sin exención');
+}
+ok('un producto modificado después de sus movimientos no pierde stock en un equipo nuevo, y un equipo dañado se repara solo');
 
 // ---------- 10. Seguridad y cuentas del servidor ----------
 const r = await fetch(`${BASE}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });

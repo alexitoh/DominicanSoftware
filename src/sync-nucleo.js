@@ -164,7 +164,8 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
     }
     const datos = c.d || {};
     const grupos = gruposRef(d);
-    const colsPlanas = d.cols;
+    // Un registro subido por una versión anterior puede no traer columnas nuevas (por ejemplo itbis_exento): esas se dejan con su valor por defecto
+    const colsPlanas = d.cols.filter((k) => Object.prototype.hasOwnProperty.call(datos, k));
     const colsRef = [...grupos.keys()];
     const columnas = [...colsPlanas, ...colsRef, 'uid', 'dirty', 'act'];
     const marcas = [...colsPlanas.map(() => '?')];
@@ -199,7 +200,7 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
   }
 
   async function aplicar(cambios) {
-    const res = { aplicados: 0, omitidos: 0, errores: [] };
+    const res = { aplicados: 0, omitidos: 0, errores: [], fallidos: [] };
     const sets = [];
     const porCambio = [];
     for (const c of cambios) {
@@ -216,16 +217,22 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
       await lote(ENVOLTURA(sets));
       res.aplicados = porCambio.length;
     } catch {
-      // Algo no cuadró (por ejemplo un registro cuyo padre no existe): se aplica uno por uno para no perder el resto
+      // Algo no cuadró (por ejemplo un registro cuyo padre no existe todavía): se aplica uno por uno para no perder el resto
+      const fallidos = [];
       for (const { c } of porCambio) {
         try {
           if (!c.x) await ajustarUnicos(porNombre[c.t], c); // ahora sí ve lo que ya se aplicó
           await lote(ENVOLTURA(sentenciasDe(porNombre[c.t], c)));
           res.aplicados++;
-        } catch (e) {
-          res.omitidos++;
-          res.errores.push(`${c.t}/${c.uid}: ${e.message || e}`);
-        }
+        } catch (e) { c._error = e.message || String(e); fallidos.push(c); }
+      }
+      // Segunda pasada: un hijo puede llegar antes que su padre (el padre se modificó después y tiene una versión mayor)
+      for (const c of fallidos) {
+        try {
+          if (!c.x) await ajustarUnicos(porNombre[c.t], c);
+          await lote(ENVOLTURA(sentenciasDe(porNombre[c.t], c)));
+          res.aplicados++;
+        } catch (e) { c._error = e.message || String(e); res.fallidos.push(c); }
       }
     }
     return res;
@@ -238,6 +245,13 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
     await reconciliarStock();
     const total = { subidos: 0, bajados: 0, omitidos: 0, errores: [] };
     let cursor = c.cursor || 0;
+    // Reparación única: las versiones anteriores podían perder registros que llegaban antes que su padre (por ejemplo movimientos de
+    // inventario de un producto modificado después). Se vuelve a bajar todo una vez; aplicar dos veces el mismo registro no cambia nada.
+    const [reparado] = await consultar("SELECT valor FROM config WHERE clave = 'sync_reparado_2'");
+    const hacerReparacion = !reparado && cursor > 0;
+    if (hacerReparacion) cursor = 0;
+    let pend = []; // registros que llegaron antes que su padre: se reintentan con lo que siga llegando
+    let completo = false;
 
     for (let ronda = 0; ronda < 500; ronda++) {
       const { cambios, marcas } = await reunir();
@@ -253,16 +267,25 @@ export function crearMotor({ consultar, lote, nube, alMiembros = null }) {
         continue;
       }
       await limpiar(marcas);
-      const r = await aplicar(resp.cambios || []);
+      const r = await aplicar([...pend, ...(resp.cambios || [])]);
+      pend = r.fallidos;
       total.subidos += resp.aceptados ?? cambios.length;
       total.bajados += r.aplicados;
       total.omitidos += r.omitidos;
       total.errores.push(...r.errores);
       cursor = Math.max(cursor, resp.hasta || 0);
-      await lote([{ statement: "UPDATE sync_ctl SET cursor = ?, ultimo = datetime('now') WHERE id = 1", values: [cursor] }]);
+      // Mientras queden registros esperando a su padre, lo guardado no pasa de ahí: si se corta, el próximo ciclo los vuelve a pedir
+      const guardado = pend.length ? Math.min(cursor, Math.max(0, Math.min(...pend.map((x) => x.v ?? cursor)) - 1)) : cursor;
+      await lote([{ statement: "UPDATE sync_ctl SET cursor = ?, ultimo = datetime('now') WHERE id = 1", values: [guardado] }]);
       alProgreso?.({ ...total, hayMas: !!resp.hayMas });
       const quedan = cambios.length > 0 ? (await pendientes()) > 0 : false;
-      if (!resp.hayMas && !quedan) break;
+      if (!resp.hayMas && !quedan) { completo = true; break; }
+    }
+    if (completo) {
+      // Ya se bajó todo: lo que sigue sin padre es que el padre no existe. Se anota y se sigue.
+      for (const x of pend) { total.omitidos++; total.errores.push(`${x.t}/${x.uid}: ${x._error || 'sin registro padre'}`); }
+      await lote([{ statement: 'UPDATE sync_ctl SET cursor = ? WHERE id = 1', values: [cursor] }]);
+      if (hacerReparacion || !reparado) await lote([{ statement: "INSERT OR REPLACE INTO config (clave, valor) VALUES ('sync_reparado_2', '1')", values: [] }]);
     }
     return total;
   }
