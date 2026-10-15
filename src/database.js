@@ -67,6 +67,7 @@ export async function initDB() {
     'ALTER TABLE ventas ADD COLUMN ncf TEXT',
     'ALTER TABLE ventas ADD COLUMN cliente_nombre TEXT',
     'ALTER TABLE ventas ADD COLUMN cajero_id INTEGER',
+    'ALTER TABLE conciliaciones ADD COLUMN conciliacion_id INTEGER REFERENCES conciliaciones_banco(id)',
     'ALTER TABLE caja ADD COLUMN conteo_cajero REAL',
     'ALTER TABLE caja ADD COLUMN conteo_fecha TEXT',
     'ALTER TABLE caja ADD COLUMN conteo_nota TEXT',

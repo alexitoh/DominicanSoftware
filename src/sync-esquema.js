@@ -102,7 +102,11 @@ export const TABLAS = [
     refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'contra_cuenta_id', tabla: 'cuentas_contables' }, { col: 'banco_destino_id', tabla: 'cuentas_bancarias' }],
     unicos: ['numero'],
   },
-  { t: 'conciliaciones', cols: ['ref', 'fecha'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }] },
+  {
+    t: 'conciliaciones_banco', cols: ['fecha_corte', 'saldo_extracto', 'saldo_libros', 'depositos_transito', 'cheques_transito', 'saldo_ajustado', 'n_conciliados', 'notas', 'por', 'creado'],
+    refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }],
+  },
+  { t: 'conciliaciones', cols: ['ref', 'fecha'], refs: [{ col: 'banco_id', tabla: 'cuentas_bancarias' }, { col: 'conciliacion_id', tabla: 'conciliaciones_banco' }] },
   {
     t: 'activos_fijos', cols: ['codigo', 'nombre', 'fecha_adq', 'costo', 'residual', 'vida_meses', 'estado', 'fecha_baja', 'notas'],
     refs: [{ col: 'contra_cuenta_id', tabla: 'cuentas_contables' }],

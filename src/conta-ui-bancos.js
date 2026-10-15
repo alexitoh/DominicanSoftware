@@ -3,7 +3,7 @@ import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { consultar } from './database.js';
 import {
   listarBancos, crearBanco, hacerPredeterminado, TIPOS_MOV_BANCO, registrarMovBanco, anularMovBanco, movimientosBanco,
-  marcarConciliados, diferenciaConciliacion, listarCuentas, fechaHoy,
+  calcularConciliacion, prepararConciliacion, listarConciliaciones, finalizarConciliacion, deshacerConciliacion, listarCuentas, fechaHoy,
 } from './conta-db.js';
 import { campo, numero, fechaInput, texto, selectCuentas, tabla, vacio, fechaCorta, limpiar } from './conta-ui-comun.js';
 
@@ -34,28 +34,7 @@ export async function vistaBancos(raiz) {
   async function detalle(b) {
     const info = await movimientosBanco(b.id);
     const cont = h('div', { class: 'cuerpo' });
-    const marcas = new Set();
-    const extracto = numero('');
-    const resultado = h('p', { class: 'ayuda' });
-    const mostrar = (m) => `${fechaCorta(m.fecha)} · ${m.concepto}`;
-
-    function pintarConc() {
-      const base = info.saldoConciliado;
-      const marcado = [...marcas].reduce((s, k) => { const m = info.movimientos.find((x) => x.key === k); return s + (m ? m.entra - m.sale : 0); }, 0);
-      const sConc = Math.round((base + marcado) * 100) / 100;
-      const e = parseFloat(extracto.value);
-      resultado.textContent = Number.isFinite(e)
-        ? `Saldo conciliado: ${dinero(sConc)} · Diferencia contra el estado de cuenta: ${dinero(diferenciaConciliacion(sConc, e))}${Math.abs(diferenciaConciliacion(sConc, e)) < 0.005 ? ' ✓ cuadra' : ''}`
-        : `Saldo conciliado: ${dinero(sConc)}. Escribe el saldo final de tu estado de cuenta para comparar.`;
-    }
-    extracto.addEventListener('input', pintarConc);
-
-    const pend = info.movimientos.filter((m) => !m.conciliado);
-    const filasPend = pend.map((m) => {
-      const chk = h('input', { type: 'checkbox', 'aria-label': `Conciliar ${m.concepto}`, onChange: (e) => { if (e.target.checked) marcas.add(m.key); else marcas.delete(m.key); pintarConc(); } });
-      return h('label', { class: 'fila inventario' }, chk, h('span', { class: 'datos' }, h('strong', {}, m.concepto), h('small', {}, fechaCorta(m.fecha))),
-        h('span', { class: m.entra ? 'precio' : 'precio deuda' }, m.entra ? `+${dinero(m.entra)}` : `-${dinero(m.sale)}`));
-    });
+    const hist = await listarConciliaciones(b.id);
 
     const movs = await consultar("SELECT * FROM banco_movs WHERE banco_id = ? AND estado = 'vigente' ORDER BY fecha DESC, id DESC LIMIT 30", [b.id]);
 
@@ -65,13 +44,11 @@ export async function vistaBancos(raiz) {
         h('button', { class: 'btn primario', onClick: () => { cerrar(); nuevoMov(b); } }, 'Registrar movimiento'),
         b.predeterminada ? null : h('button', { class: 'btn', onClick: async () => { await hacerPredeterminado(b.id); cerrar(); toast('Cuenta predeterminada'); await vistaBancos(raiz); } }, 'Usar para cobros con tarjeta/transferencia')),
       h('h3', { class: 'seccion' }, 'Conciliación'),
-      pend.length ? h('div', {}, h('div', { class: 'lista' }, filasPend),
-        campo('Saldo final del estado de cuenta', extracto), resultado,
-        h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: async () => {
-          if (!marcas.size) { toast('Marca los movimientos que aparecen en el estado de cuenta', 'error'); return; }
-          await marcarConciliados(b.id, [...marcas]); cerrar(); toast('Conciliados'); await vistaBancos(raiz);
-        } }, 'Conciliar marcados')))
-        : vacio('No hay movimientos pendientes de conciliar.'),
+      h('p', { class: 'ayuda' }, hist[0] ? `Última conciliación: al ${fechaCorta(hist[0].fecha_corte)}.` : 'Aún no has conciliado esta cuenta.'),
+      h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: () => { cerrar(); conciliar(b); } }, 'Nueva conciliación')),
+      hist.length ? h('div', { class: 'lista' }, hist.map((c, i) => h('button', { class: 'fila inventario', onClick: () => { cerrar(); verConciliacion(b, c, i === 0); } },
+        h('span', { class: 'datos' }, h('strong', {}, `Al ${fechaCorta(c.fecha_corte)}`), h('small', {}, `${c.n_conciliados} movimientos · hecha ${fechaCorta((c.creado || '').slice(0, 10))}`)),
+        h('span', { class: 'precio' }, dinero(c.saldo_extracto))))) : null,
       h('h3', { class: 'seccion' }, 'Últimos movimientos registrados aquí'),
       movs.length ? h('div', { class: 'lista' }, movs.map((m) => h('div', { class: 'fila inventario' },
         h('span', { class: 'datos' }, h('strong', {}, `${TIPOS_MOV_BANCO[m.tipo]} · ${m.numero}`), h('small', {}, `${fechaCorta(m.fecha)}${m.referencia ? ` · ${m.referencia}` : ''}`)),
@@ -81,8 +58,85 @@ export async function vistaBancos(raiz) {
           try { await anularMovBanco(m.id); cerrar(); toast('Movimiento anulado'); await vistaBancos(raiz); } catch (e) { toast(limpiar(e), 'error'); }
         } }, 'Anular'))))
         : vacio('Sin movimientos manuales.'));
-    pintarConc();
     const cerrar = hoja(b.nombre, cont);
+  }
+
+  // ---- Conciliación bancaria: estado de cuenta contra libros, a una fecha de corte ----
+  async function conciliar(b) {
+    const fecha = fechaInput(fechaHoy());
+    const extracto = numero('');
+    const nota = texto('', 'Opcional');
+    const error = h('p', { class: 'error', role: 'alert' });
+    const panel = h('div', { class: 'totales' });
+    const lista = h('div', { class: 'lista' });
+    const botonFin = h('button', { class: 'btn primario', onClick: finalizar }, 'Finalizar conciliación');
+    const marcas = new Set();
+    let info = { movimientos: [] };
+
+    async function cargar() {
+      info = await prepararConciliacion(b.id, fecha.value || fechaHoy());
+      const pend = info.movimientos.filter((m) => !m.conciliado);
+      for (const k of [...marcas]) if (!pend.some((m) => m.key === k)) marcas.delete(k);
+      lista.replaceChildren(...(pend.length ? pend.map((m) => h('label', { class: 'fila inventario' },
+        h('input', { type: 'checkbox', checked: marcas.has(m.key), 'aria-label': `Aparece en el estado de cuenta: ${m.concepto}`,
+          onChange: (e) => { if (e.target.checked) marcas.add(m.key); else marcas.delete(m.key); calcular(); } }),
+        h('span', { class: 'datos' }, h('strong', {}, m.concepto), h('small', {}, fechaCorta(m.fecha))),
+        h('span', { class: m.entra ? 'precio' : 'precio deuda' }, m.entra ? `+${dinero(m.entra)}` : `-${dinero(m.sale)}`)))
+        : [vacio('No hay movimientos pendientes a esa fecha.')]));
+      calcular();
+    }
+    const renglon = (a, v, clase = '') => h('div', { class: clase }, h('span', {}, a), h('span', {}, v));
+    function calcular() {
+      const e = parseFloat(extracto.value);
+      if (!Number.isFinite(e)) {
+        panel.replaceChildren(renglon('Saldo según libros', dinero(calcularConciliacion(info.movimientos, marcas, 0).saldoLibros)));
+        botonFin.disabled = true; return;
+      }
+      const c = calcularConciliacion(info.movimientos, marcas, e);
+      panel.replaceChildren(
+        renglon('Saldo según el estado de cuenta', dinero(c.saldoExtracto)),
+        renglon('+ Depósitos en tránsito', dinero(c.depositosTransito)),
+        renglon('- Cheques y retiros en circulación', `- ${dinero(c.chequesTransito)}`),
+        renglon('= Saldo bancario ajustado', dinero(c.saldoAjustado), 'gran'),
+        renglon('Saldo según libros', dinero(c.saldoLibros), 'gran'),
+        renglon('Diferencia', c.cuadra ? '0.00 ✓ cuadra' : dinero(c.diferencia), c.cuadra ? '' : 'deuda'));
+      botonFin.disabled = !c.cuadra;
+    }
+    async function finalizar() {
+      error.textContent = '';
+      try {
+        await finalizarConciliacion({ banco_id: b.id, fecha_corte: fecha.value, saldo_extracto: extracto.value, marcas: [...marcas], notas: nota.value });
+        cerrar(); toast('Conciliación guardada'); await vistaBancos(raiz);
+      } catch (e) { error.textContent = limpiar(e); }
+    }
+    extracto.addEventListener('input', calcular);
+    fecha.addEventListener('change', cargar);
+    const cerrar = hoja(`Conciliar · ${b.nombre}`, h('div', { class: 'cuerpo' },
+      h('p', { class: 'ayuda' }, 'Marca lo que YA aparece en tu estado de cuenta del banco. Lo que no marques queda "en tránsito" (cheques o depósitos que el banco aún no refleja). Si no cuadra, falta registrar algo que el banco hizo (comisión, interés, nota de débito o crédito): usa "Registrar movimiento", vuelve y concilia.'),
+      h('div', { class: 'rejilla' }, campo('Fecha de corte del estado de cuenta', fecha), campo('Saldo final del estado de cuenta', extracto)),
+      lista, panel, campo('Nota', nota), error,
+      h('div', { class: 'acciones' },
+        h('button', { class: 'btn', onClick: () => { cerrar(); nuevoMov(b); } }, 'Registrar movimiento'),
+        botonFin)));
+    await cargar();
+  }
+
+  function verConciliacion(b, c, ultima) {
+    const renglon = (a, v, clase = '') => h('div', { class: clase }, h('span', {}, a), h('span', {}, v));
+    const error = h('p', { class: 'error', role: 'alert' });
+    const cerrar = hoja(`Conciliación al ${fechaCorta(c.fecha_corte)}`, h('div', { class: 'cuerpo' },
+      h('div', { class: 'totales' },
+        renglon('Saldo según el estado de cuenta', dinero(c.saldo_extracto)),
+        renglon('+ Depósitos en tránsito', dinero(c.depositos_transito)),
+        renglon('- Cheques y retiros en circulación', `- ${dinero(c.cheques_transito)}`),
+        renglon('= Saldo bancario ajustado', dinero(c.saldo_ajustado), 'gran'),
+        renglon('Saldo según libros', dinero(c.saldo_libros), 'gran'),
+        renglon('Movimientos conciliados', String(c.n_conciliados))),
+      c.notas ? h('p', { class: 'ayuda' }, `Nota: ${c.notas}`) : null, error,
+      ultima ? h('div', { class: 'acciones' }, h('button', { class: 'btn peligro', onClick: async () => {
+        if (!(await confirmar('Deshacer conciliación', 'Sus movimientos volverán a quedar pendientes de conciliar.', 'Deshacer'))) return;
+        try { await deshacerConciliacion(c.id); cerrar(); toast('Conciliación deshecha'); await vistaBancos(raiz); } catch (e) { error.textContent = limpiar(e); }
+      } }, 'Deshacer')) : null));
   }
 
   async function nuevoMov(b) {

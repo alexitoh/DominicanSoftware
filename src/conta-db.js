@@ -269,6 +269,65 @@ export async function marcarConciliados(bancoId, keys, conciliar = true) {
 // Conciliación: el saldo conciliado debe igualar el saldo del estado de cuenta del banco
 export const diferenciaConciliacion = (saldoConciliado, saldoExtracto) => r2(saldoExtracto - saldoConciliado);
 
+// ---------- Conciliación bancaria formal ----------
+// Saldo del estado de cuenta + depósitos en tránsito - cheques y retiros en circulación = saldo bancario ajustado,
+// que debe ser igual al saldo en libros. Si no cuadra, falta registrar en libros algo que el banco ya hizo
+// (comisiones, intereses, notas de débito o crédito, depósitos directos) o hay un error.
+// movimientos: los del libro hasta la fecha de corte; marcas: llaves que sí aparecen en el estado de cuenta.
+export function calcularConciliacion(movimientos, marcas, saldoExtracto) {
+  const enBanco = movimientos.filter((m) => m.conciliado || marcas.has(m.key));
+  const transito = movimientos.filter((m) => !m.conciliado && !marcas.has(m.key));
+  const depositos = r2(transito.reduce((s, m) => s + m.entra, 0));
+  const cheques = r2(transito.reduce((s, m) => s + m.sale, 0));
+  const saldoLibros = r2(movimientos.reduce((s, m) => s + m.entra - m.sale, 0));
+  const extracto = Number(saldoExtracto);
+  const ajustado = r2(extracto + depositos - cheques);
+  return {
+    saldoExtracto: extracto, depositosTransito: depositos, chequesTransito: cheques, saldoAjustado: ajustado, saldoLibros,
+    diferencia: r2(ajustado - saldoLibros), cuadra: Number.isFinite(extracto) && Math.abs(ajustado - saldoLibros) < 0.005,
+    nEnBanco: enBanco.length, transito,
+  };
+}
+
+export async function prepararConciliacion(bancoId, fechaCorte) {
+  const info = await movimientosBanco(bancoId, { hasta: fechaCorte });
+  return { ...info, movimientos: info.movimientos.filter((m) => m.fecha <= fechaCorte) };
+}
+
+export const listarConciliaciones = (bancoId) =>
+  consultar('SELECT * FROM conciliaciones_banco WHERE banco_id = ? ORDER BY fecha_corte DESC, id DESC LIMIT 24', [bancoId]);
+
+export async function finalizarConciliacion({ banco_id, fecha_corte, saldo_extracto, marcas = [], notas = '' }) {
+  if (!fecha_corte) throw new Error('Elige la fecha de corte del estado de cuenta.');
+  if (!Number.isFinite(Number(saldo_extracto)) || saldo_extracto === '') throw new Error('Escribe el saldo final del estado de cuenta.');
+  const info = await prepararConciliacion(banco_id, fecha_corte);
+  const validas = new Set(info.movimientos.filter((m) => !m.conciliado).map((m) => m.key));
+  const elegidas = new Set([...marcas].filter((k) => validas.has(k)));
+  const c = calcularConciliacion(info.movimientos, elegidas, saldo_extracto);
+  if (!c.cuadra) throw new Error(`La conciliación no cuadra: diferencia de ${c.diferencia}. Registra lo que falta en libros (comisiones, intereses, notas del banco) o revisa lo marcado.`);
+  const [ult] = await consultar('SELECT MAX(fecha_corte) AS f FROM conciliaciones_banco WHERE banco_id = ?', [banco_id]);
+  if (ult?.f && fecha_corte < ult.f) throw new Error(`Ya hay una conciliación hasta el ${ult.f}. Elige una fecha igual o posterior.`);
+  await ejecutar(
+    `INSERT INTO conciliaciones_banco (banco_id, fecha_corte, saldo_extracto, saldo_libros, depositos_transito, cheques_transito, saldo_ajustado, n_conciliados, notas)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [banco_id, fecha_corte, r2(c.saldoExtracto), c.saldoLibros, c.depositosTransito, c.chequesTransito, c.saldoAjustado, elegidas.size, notas.trim() || null]);
+  const [{ id }] = await consultar('SELECT MAX(id) AS id FROM conciliaciones_banco WHERE banco_id = ?', [banco_id]);
+  for (const k of elegidas) await ejecutar('INSERT INTO conciliaciones (banco_id, ref, fecha, conciliacion_id) VALUES (?,?,?,?)', [banco_id, k, fecha_corte, id]);
+  return id;
+}
+
+// Solo se deshace la última conciliación de la cuenta: sus movimientos vuelven a quedar pendientes
+export async function deshacerConciliacion(id) {
+  const [c] = await consultar('SELECT * FROM conciliaciones_banco WHERE id = ?', [id]);
+  if (!c) throw new Error('La conciliación no existe.');
+  const [mas] = await consultar('SELECT id FROM conciliaciones_banco WHERE banco_id = ? AND (fecha_corte > ? OR (fecha_corte = ? AND id > ?))', [c.banco_id, c.fecha_corte, c.fecha_corte, id]);
+  if (mas) throw new Error('Solo se puede deshacer la última conciliación de la cuenta.');
+  await transaccion([
+    { statement: 'DELETE FROM conciliaciones WHERE conciliacion_id = ?', values: [id] },
+    { statement: 'DELETE FROM conciliaciones_banco WHERE id = ?', values: [id] },
+  ]);
+}
+
 // ---------- Activos fijos ----------
 export const listarActivos = () => consultar('SELECT * FROM activos_fijos ORDER BY estado, fecha_adq DESC, id DESC');
 export async function crearActivo({ codigo = '', nombre, fecha_adq, costo, residual = 0, vida_meses, contra_cuenta_id = null, notas = '' }) {

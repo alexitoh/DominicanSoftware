@@ -234,3 +234,6 @@ Límites a tener presentes:
 
 ## Categorías de productos
 Cada negocio tiene sus propias categorías (se guardan en su base y se sincronizan entre sus dispositivos). En Productos → botón **Categorías** puedes crear, renombrar y eliminar. Al eliminar una, sus productos quedan "Sin categoría". Las 6 de ejemplo (Bocinas, Amplificadores…) se crean solo la primera vez y se pueden borrar sin que vuelvan.
+
+## Conciliación bancaria
+Contabilidad → Bancos → toca una cuenta → **Nueva conciliación**. Pones la fecha de corte y el saldo final de tu estado de cuenta, y marcas los movimientos que ya aparecen en él. Lo que no marcas queda "en tránsito" (depósitos o cheques que el banco aún no refleja). El sistema calcula: saldo del estado de cuenta + depósitos en tránsito − cheques en circulación = saldo bancario ajustado, que debe ser igual al saldo en libros. Si hay diferencia, falta registrar algo que el banco hizo (comisión, interés, nota de débito/crédito): usa "Registrar movimiento" y vuelve. Solo se puede finalizar cuando cuadra; queda en el historial de la cuenta y se puede deshacer la última.

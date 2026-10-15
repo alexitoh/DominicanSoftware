@@ -448,11 +448,28 @@ CREATE TABLE IF NOT EXISTS banco_movs (
   estado TEXT NOT NULL DEFAULT 'vigente'
 );
 
+-- Conciliación bancaria terminada: guarda las cifras del cierre a una fecha de corte
+CREATE TABLE IF NOT EXISTS conciliaciones_banco (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  banco_id INTEGER NOT NULL REFERENCES cuentas_bancarias(id),
+  fecha_corte TEXT NOT NULL,
+  saldo_extracto REAL NOT NULL,
+  saldo_libros REAL NOT NULL,
+  depositos_transito REAL NOT NULL DEFAULT 0,
+  cheques_transito REAL NOT NULL DEFAULT 0,
+  saldo_ajustado REAL NOT NULL DEFAULT 0,
+  n_conciliados INTEGER NOT NULL DEFAULT 0,
+  notas TEXT,
+  por TEXT,
+  creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS conciliaciones (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   banco_id INTEGER NOT NULL REFERENCES cuentas_bancarias(id),
   ref TEXT NOT NULL,
-  fecha TEXT NOT NULL DEFAULT (date('now','localtime'))
+  fecha TEXT NOT NULL DEFAULT (date('now','localtime')),
+  conciliacion_id INTEGER REFERENCES conciliaciones_banco(id)
 );
 
 CREATE TABLE IF NOT EXISTS activos_fijos (
