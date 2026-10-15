@@ -460,6 +460,21 @@ limpiarHojas();
 const { formularioCliente } = await import('../src/clientes.js');
 formularioCliente(); await pausa();
 assert.ok(textoDe(document.body).includes('Verificar en la DGII') && textoDe(document.body).includes('Se le dará: Factura de consumo (B02)'));
+// Condición de pago desde el formulario del cliente
+limpiarHojas();
+const k15 = (await bd.consultar('SELECT id FROM condiciones_pago WHERE dias = 15'))[0].id;
+formularioCliente(); await pausa();
+const fc = document.body.hijos.at(-1);
+const selK = fc.todos((x) => x.tag === 'select' && x.attrs['aria-label'] === 'Condición de pago')[0];
+assert.ok(selK, 'el cliente tiene el selector de condición de pago');
+assert.ok(selK.todos((x) => x.tag === 'option').some((o) => o.texto.includes('15 días de crédito')), 'lista las condiciones creadas en CxC');
+fc.todos((x) => x.tag === 'input' && x.className === 'campo')[0].value = 'Cliente Con Plazo';
+selK.value = String(k15);
+await pulsar(boton(fc, 'Guardar cliente'));
+const cp = (await bd.consultar("SELECT condicion, dias_credito, condicion_pago_id FROM clientes WHERE nombre = 'Cliente Con Plazo'"))[0];
+assert.deepEqual([cp.condicion, cp.dias_credito, cp.condicion_pago_id], ['credito', 15, k15]);
+limpiarHojas();
+ok('la condición de pago (contado o crédito con sus días) se asigna desde el formulario del cliente');
 ok('la venta muestra el tipo de comprobante (con el aviso de cuál se entrega) y la casilla de RNC; el cliente tiene el botón de la DGII');
 
 console.log(`\n${n} grupos OK`);

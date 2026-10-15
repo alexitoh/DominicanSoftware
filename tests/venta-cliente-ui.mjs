@@ -177,8 +177,10 @@ const camposCredito = () => { const d = document.body.todos((x) => x.attrs.role 
 const { formularioCliente } = await import('../src/clientes.js');
 const auth = await import('../src/auth.js');
 formularioCliente(null); await pausa();
-assert.ok(camposCredito().length === 0, 'el formulario del cliente ya no tiene campos de crédito');
-assert.match(document.body.todos((x) => x.attrs.role === 'dialog').pop().texto, /Contabilidad → CxC → Cliente/);
+const dlg = document.body.todos((x) => x.attrs.role === 'dialog').pop();
+assert.equal(dlg.todos((x) => x.attrs['aria-label'] === 'Condición de pago').length, 1, 'el cliente solo elige su condición de pago');
+assert.equal(dlg.todos((x) => x.attrs['aria-label'] === 'Días para pagar' || x.attrs['aria-label'] === 'Límite de crédito').length, 0, 'los días y el límite no se escriben aquí');
+assert.match(dlg.texto, /Contabilidad → CxC → Condición de Pago/);
 await auth.registrarPropietario({ negocio: 'Prueba', nombre: 'Admin', usuario: 'admin', correo: 'a@b.com', clave: 'Clave-segura-123' });
 await auth.iniciarSesion('admin', 'Clave-segura-123');
 ok('el crédito del cliente se configura solo en Contabilidad → CxC → Cliente');

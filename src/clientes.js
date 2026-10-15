@@ -2,6 +2,7 @@
 import { consultar, ejecutar, leerReglasComprobante, anotar } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { buscarRNC } from './dgii.js';
+import { listarCondiciones } from './cxc-db.js';
 import { TIPOS_NCF, NOMBRE_COMPROBANTE, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
 
@@ -24,6 +25,17 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
   const telefono = h('input', { class: 'campo', type: 'tel', inputmode: 'tel', value: c?.telefono ?? '' });
   const direccion = h('input', { class: 'campo', value: c?.direccion ?? '' });
   const notas = h('textarea', { class: 'campo', rows: '2' }, c?.notas ?? '');
+  // Condición de pago (contado o crédito con sus días): se crean en Contabilidad → CxC → Condición de Pago
+  const OPC_ACTUAL = '_actual';
+  const actual = c && !c.condicion_pago_id && c.condicion === 'credito';
+  const condSel = h('select', { class: 'campo', 'aria-label': 'Condición de pago' }, h('option', { value: '' }, 'Contado (sin crédito)'));
+  condSel.value = actual ? OPC_ACTUAL : String(c?.condicion_pago_id ?? '');
+  listarCondiciones().then((cs) => {
+    condSel.replaceChildren(h('option', { value: '' }, 'Contado (sin crédito)'),
+      actual ? h('option', { value: OPC_ACTUAL }, `Crédito ${c.dias_credito ?? 30} días (actual)`) : null,
+      ...cs.filter((k) => k.activo || k.id === c?.condicion_pago_id).map((k) => h('option', { value: String(k.id) }, k.dias > 0 ? `${k.nombre} (${k.dias} días de crédito)` : `${k.nombre} (contado)`)));
+    condSel.value = actual ? OPC_ACTUAL : String(c?.condicion_pago_id ?? '');
+  }).catch(() => {});
   const tipoDoc = h('select', { class: 'campo', 'aria-label': 'Tipo de documento' },
     ...TIPOS_DOC.map((t) => h('option', { value: t.id }, t.nombre)));
   tipoDoc.value = c?.tipo_doc || 'rnc';
@@ -89,6 +101,11 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       } else {
         await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, tipo_doc=?, documento=?, tipo_comprobante=?, regimen_dgii=? WHERE id=?', [...valores, id]);
       }
+      if (condSel.value !== OPC_ACTUAL) {
+        const [k] = condSel.value ? await consultar('SELECT * FROM condiciones_pago WHERE id = ?', [Number(condSel.value)]) : [];
+        await ejecutar('UPDATE clientes SET condicion_pago_id = ?, condicion = ?, dias_credito = ? WHERE id = ?',
+          [k ? k.id : null, k ? (k.dias > 0 ? 'credito' : 'contado') : null, k && k.dias > 0 ? k.dias : null, id]);
+      }
       await anotar(nuevo ? 'Cliente creado' : 'Cliente modificado', nombre.value.trim());
       cerrar();
       toast(nuevo ? 'Cliente guardado' : 'Cambios guardados');
@@ -120,6 +137,8 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     h('div', { class: 'cuerpo' },
       campo('Nombre', nombre),
       campo('Teléfono', telefono),
+      campo('Condición de pago', condSel),
+      h('p', { class: 'ayuda' }, 'Contado o crédito con sus días. Las condiciones se crean en Contabilidad → CxC → Condición de Pago; la venta a crédito toma ese plazo.'),
       h('div', { class: 'etiqueta' }, 'Identificación fiscal', h('div', { class: 'par' }, tipoDoc, documento)),
       estatusDgii,
       h('button', { class: 'btn chico', onClick: consultarDgii }, 'Verificar en la DGII'),
