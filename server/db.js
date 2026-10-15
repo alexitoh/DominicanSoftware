@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 export const TABLAS_SYNC = [
-  'categorias', 'productos', 'clientes', 'cliente_direcciones', 'cliente_contactos', 'recibos', 'recibo_metodos', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'pagos',
+  'categorias', 'productos', 'tipos_cliente', 'condiciones_pago', 'clientes', 'cliente_direcciones', 'cliente_contactos', 'recibos', 'recibo_metodos', 'proveedores', 'ventas', 'venta_detalle', 'venta_servicios', 'cxc_conceptos', 'cxc_docs', 'pagos',
   'ventas_pendientes', 'ventas_pendientes_detalle', 'ventas_pendientes_servicios',
   'cuentas_cobrar', 'garantias', 'garantia_reclamos', 'compras', 'compra_detalle', 'cuentas_pagar', 'pagos_compra',
   'centros_costo', 'cuentas_contables', 'asientos', 'asiento_lineas', 'cuentas_bancarias', 'banco_movs', 'cajas_chicas', 'caja_chica_movs', 'conciliaciones_banco', 'conciliaciones', 'dep_tipos', 'activos_tipos', 'tasas_inflacion', 'activos_fijos', 'activos_reval', 'empleados', 'nomina_corridas', 'nomina_detalle', 'presupuestos', 'periodos_cerrados',

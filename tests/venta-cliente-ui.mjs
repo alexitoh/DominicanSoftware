@@ -172,18 +172,16 @@ assert.equal((await bd.consultar("SELECT COUNT(*) AS n FROM ventas WHERE metodo_
 await bd.ejecutar("UPDATE clientes SET condicion = 'credito', dias_credito = 45 WHERE nombre = 'Juan Pérez'");
 ok('a un cliente sin crédito autorizado no se le factura a crédito');
 
-// 10. Solo Contabilidad configura el crédito en el perfil del cliente
+const camposCredito = () => { const d = document.body.todos((x) => x.attrs.role === 'dialog').pop(); return [...d.todos((x) => x.attrs['aria-label'] === 'Condición de pago'), ...d.todos((x) => x.attrs['aria-label'] === 'Días para pagar'), ...d.todos((x) => x.attrs['aria-label'] === 'Límite de crédito')]; };
+// 10. El crédito ya no se configura en el perfil del cliente: vive en Contabilidad → CxC
 const { formularioCliente } = await import('../src/clientes.js');
 const auth = await import('../src/auth.js');
-const camposCredito = () => { const d = document.body.todos((x) => x.attrs.role === 'dialog').pop(); return [...d.todos((x) => x.attrs['aria-label'] === 'Condición de pago'), ...d.todos((x) => x.attrs['aria-label'] === 'Días para pagar'), ...d.todos((x) => x.attrs['aria-label'] === 'Límite de crédito')]; };
 formularioCliente(null); await pausa();
-assert.ok(camposCredito().length === 3 && camposCredito().every((x) => x.disabled), 'sin permiso de Contabilidad el crédito no se edita');
-assert.match(document.body.todos((x) => x.attrs.role === 'dialog').pop().texto, /solo lo configura Contabilidad/);
+assert.ok(camposCredito().length === 0, 'el formulario del cliente ya no tiene campos de crédito');
+assert.match(document.body.todos((x) => x.attrs.role === 'dialog').pop().texto, /Contabilidad → CxC → Cliente/);
 await auth.registrarPropietario({ negocio: 'Prueba', nombre: 'Admin', usuario: 'admin', correo: 'a@b.com', clave: 'Clave-segura-123' });
 await auth.iniciarSesion('admin', 'Clave-segura-123');
-formularioCliente(null); await pausa();
-assert.ok(camposCredito().every((x) => !x.disabled), 'con permiso de Contabilidad sí se edita');
-ok('el crédito del cliente solo lo configura quien tiene el permiso de Contabilidad');
+ok('el crédito del cliente se configura solo en Contabilidad → CxC → Cliente');
 
 // 11. El vendedor nunca cobra al contado: ni siquiera quien tiene permiso de Caja ve "Cobrar" en Nueva venta
 await raiz.todos((x) => x.tag === 'button' && x.texto.includes('Nueva venta'))[0].click(); await pausa();

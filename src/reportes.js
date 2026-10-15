@@ -79,64 +79,6 @@ export async function datosReporte(periodo, rango) {
   };
 }
 
-// Facturas a crédito con saldo, ordenadas por fecha límite (las más próximas a vencer primero).
-// La fecha límite sale de la política de días del cliente; si la venta es antigua y no la tiene, se calcula.
-export async function datosFacturas() {
-  return consultar(
-    `SELECT * FROM (
-       SELECT v.id, v.numero, v.fecha, v.total, c.nombre AS cliente, c.condicion, c.dias_credito,
-              COALESCE(a.vence, date(v.fecha, '+' || COALESCE(c.dias_credito, 30) || ' days')) AS vence,
-              v.total - (SELECT COALESCE(SUM(monto), 0) FROM pagos WHERE venta_id = v.id) AS saldo
-         FROM ventas v
-    LEFT JOIN clientes c ON c.id = v.cliente_id
-    LEFT JOIN cuentas_cobrar a ON a.venta_id = v.id
-        WHERE v.metodo_pago = 'credito' AND v.estado = 'completada')
-      WHERE saldo > 0.005
-      ORDER BY vence ASC, id ASC`);
-}
-
-function diasEntreISO(a, b) {
-  const t = (x) => Date.UTC(+x.slice(0, 4), +x.slice(5, 7) - 1, +x.slice(8, 10));
-  return Math.round((t(b) - t(a)) / 86400000);
-}
-
-async function vistaFacturas(cuerpo) {
-  const hoy = hoyISO();
-  const todas = (await datosFacturas()).map((f) => ({ ...f, dias: diasEntreISO(hoy, f.vence) }));
-  const filtro = { v: 'todas' };
-  const segmento = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Filtro' });
-  const lista = h('div');
-  const FILTROS = [['todas', 'Todas'], ['vencidas', 'Vencidas'], ['semana', 'Próx. 7 días']];
-
-  const pasa = (f) => filtro.v === 'todas' || (filtro.v === 'vencidas' ? f.dias < 0 : f.dias >= 0 && f.dias <= 7);
-
-  function pintarLista() {
-    segmento.replaceChildren(...FILTROS.map(([id, t]) => h('button', {
-      'aria-pressed': String(filtro.v === id),
-      onClick: () => { filtro.v = id; pintarLista(); },
-    }, t)));
-    const f = todas.filter(pasa);
-    const venc = todas.filter((x) => x.dias < 0);
-    const sum = (a) => a.reduce((s, x) => s + x.saldo, 0);
-    lista.replaceChildren(
-      h('section', { class: 'seccion' }, h('div', { class: 'totales' },
-        renglon(`Facturas pendientes (${todas.length})`, dinero(sum(todas))),
-        renglon(`Vencidas (${venc.length})`, dinero(sum(venc)), venc.length ? 'deuda' : ''))),
-      f.length
-        ? h('div', { class: 'lista' }, f.map((x) => h('div', { class: 'fila inventario' },
-            h('span', { class: 'datos' },
-              h('strong', {}, `${x.numero} · ${x.cliente || 'Cliente general'}`),
-              h('small', {}, `${textoCondicion(x) || 'Sin política'} · Fecha: ${x.fecha.slice(8, 10)}/${x.fecha.slice(5, 7)}/${x.fecha.slice(0, 4)} · Límite: ${x.vence.split('-').reverse().join('/')}`),
-              h('small', { class: x.dias < 0 ? 'deuda' : '' },
-                x.dias < 0 ? `Vencida hace ${-x.dias} días` : x.dias === 0 ? 'Vence hoy' : `Vence en ${x.dias} días`)),
-            h('span', { class: 'precio' }, dinero(x.saldo)))))
-        : h('p', { class: 'ayuda' }, 'No hay facturas en este filtro.'),
-      h('p', { class: 'ayuda' }, 'Ordenadas de la más próxima a vencer a la más lejana, según los días de crédito de cada cliente. El monto es lo que falta por pagar.'));
-  }
-  cuerpo.replaceChildren(h('div', { class: 'filtros' }, segmento), lista);
-  pintarLista();
-}
-
 export async function vistaReportes(raiz) {
   const estado = { periodo: 'mes', rango: rangoInicial() };
   const segmento = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Período' });
@@ -146,14 +88,13 @@ export async function vistaReportes(raiz) {
   const barraPeriodo = h('div', { class: 'filtros' }, segmento, filaRango.el);
   const contenido = h('div');
   let pestana = 'general';
-  const pintarPestanas = () => pestanas.replaceChildren(...[['general', 'Resumen'], ['negocio', 'Negocio y P&L'], ['flujo', 'Flujo de caja'], ['facturas', 'Facturas']].map(([id, t]) =>
+  const pintarPestanas = () => pestanas.replaceChildren(...[['general', 'Resumen'], ['negocio', 'Negocio y P&L'], ['flujo', 'Flujo de caja']].map(([id, t]) =>
     h('button', { 'aria-pressed': String(pestana === id), onClick: async () => {
       pestana = id; pintarPestanas();
       barraPeriodo.style.display = id === 'general' ? '' : 'none';
       if (id === 'general') { contenido.replaceChildren(cuerpo); await pintar(); }
       else if (id === 'negocio') await vistaNegocio(contenido);
-      else if (id === 'flujo') await vistaFlujo(contenido);
-      else await vistaFacturas(contenido);
+      else await vistaFlujo(contenido);
     } }, t)));
 
   const pintarSegmento = () => segmento.replaceChildren(...PERIODOS.map(([id, t]) =>
@@ -181,9 +122,8 @@ export async function vistaReportes(raiz) {
           renglon('Ganancia neta', dinero(d.neta), 'gran'),
           renglon('Compras a proveedores', dinero(d.compras))),
         h('p', { class: 'ayuda' }, 'La ganancia neta es la ganancia de las ventas menos los gastos. Las compras no se restan: lo que vendes ya descuenta su costo.')),
-      d.porCobrar > 0.005 || d.porPagar > 0.005
+      d.porPagar > 0.005
         ? h('section', { class: 'seccion' }, h('div', { class: 'totales' },
-            d.porCobrar > 0.005 ? renglon('Por cobrar a clientes (ahora)', dinero(d.porCobrar), 'deuda') : null,
             d.porPagar > 0.005 ? renglon('Por pagar a proveedores (ahora)', dinero(d.porPagar), 'deuda') : null)) : null,
       h('section', { class: 'seccion' },
         h('h2', {}, 'Ventas por método de pago'),

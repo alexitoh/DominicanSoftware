@@ -1,23 +1,14 @@
-// clientes.js - lista, detalle con deuda y formulario de clientes
-import { consultar, ejecutar, redondear, leerReglasComprobante, anotar } from './database.js';
+// clientes.js - lista, detalle y formulario de clientes. El crédito, los cobros y lo que deben viven en Contabilidad → CxC.
+import { consultar, ejecutar, leerReglasComprobante, anotar } from './database.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
-import { formularioAbono, formularioCobro, listaRecibos } from './cobros.js';
-import { campoCondicion, textoCondicion } from './condicion.js';
-import { hoyISO } from './fechas.js';
-import { tienePermiso } from './auth.js';
 import { buscarRNC } from './dgii.js';
 import { TIPOS_NCF, NOMBRE_COMPROBANTE, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { TIPOS_DOC, validarDocumento, textoDocumento, formatearDocumento, limpiarDocumento } from './fiscal.js';
 
-// Lo que debe una venta a crédito: total menos lo abonado
-const SALDO = `(v.total - COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.venta_id = v.id), 0))`;
-
 const CLIENTES = `
   SELECT c.*,
     (SELECT COUNT(*) FROM ventas v WHERE v.cliente_id = c.id AND v.estado = 'completada') AS compras,
-    (SELECT COALESCE(SUM(v.total), 0) FROM ventas v WHERE v.cliente_id = c.id AND v.estado = 'completada') AS total,
-    (SELECT COALESCE(SUM(${SALDO}), 0) FROM ventas v
-      WHERE v.cliente_id = c.id AND v.estado = 'completada' AND v.metodo_pago = 'credito') AS deuda
+    (SELECT COALESCE(SUM(v.total), 0) FROM ventas v WHERE v.cliente_id = c.id AND v.estado = 'completada') AS total
   FROM clientes c`;
 
 const renglon = (a, b, clase = '') => h('div', { class: clase }, h('span', {}, a), h('span', {}, b));
@@ -37,15 +28,6 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     ...TIPOS_DOC.map((t) => h('option', { value: t.id }, t.nombre)));
   tipoDoc.value = c?.tipo_doc || 'rnc';
   const documento = h('input', { class: 'campo', inputmode: 'text', autocomplete: 'off', placeholder: 'RNC, cédula o DNI', value: c?.documento ? formatearDocumento(c.tipo_doc, c.documento) : '', 'aria-label': 'Número de documento' });
-  const limite = h('input', { class: 'campo', type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: 'Sin límite', value: c?.limite_credito > 0 ? c.limite_credito : '', 'aria-label': 'Límite de crédito' });
-  const condicion = campoCondicion(c);
-  // El crédito (condición, días y límite) solo lo define Contabilidad
-  const puedeCredito = tienePermiso('contabilidad');
-  if (!puedeCredito) {
-    for (const x of [...condicion.el.querySelectorAll('select'), ...condicion.el.querySelectorAll('input')]) x.disabled = true;
-    limite.disabled = true;
-  }
-  const avisoCredito = puedeCredito ? null : h('p', { class: 'ayuda' }, 'El crédito (condición, días y límite) solo lo configura Contabilidad. Sin crédito autorizado, este cliente paga de contado.');
   // Comprobante que se le da a este cliente: automático (según su RNC y su régimen en la DGII) o uno fijo
   let regimenDgii = c?.regimen_dgii ?? null;
   let reglas = REGLAS_COMPROBANTE_BASE;
@@ -91,13 +73,9 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
     }
     const n = nombre.value.trim();
     if (!n) { error.textContent = 'Escribe el nombre del cliente.'; nombre.focus(); return; }
-    const cond = condicion.valores();
-    if (cond.error) { error.textContent = cond.error; cond.foco?.focus(); return; }
     const doc = validarDocumento(tipoDoc.value, documento.value);
     if (doc.error) { error.textContent = doc.error; documento.focus(); return; }
-    const lim = limite.value === '' ? null : Number(limite.value);
-    if (lim != null && !(lim >= 0)) { error.textContent = 'El límite de crédito no es válido.'; limite.focus(); return; }
-    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, cond.condicion, cond.dias, doc.tipo, doc.numero, lim || null, tipoCpb.value || null, regimenDgii];
+    const valores = [n, telefono.value.trim() || null, direccion.value.trim() || null, notas.value.trim() || null, doc.tipo, doc.numero, tipoCpb.value || null, regimenDgii];
     try {
       if (doc.numero) {
         const [otro] = await consultar('SELECT nombre FROM clientes WHERE documento = ? AND id <> ?', [doc.numero, c?.id ?? -1]);
@@ -105,11 +83,11 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       }
       let id = c?.id;
       if (nuevo) {
-        const r = await ejecutar('INSERT INTO clientes (nombre, telefono, direccion, notas, condicion, dias_credito, tipo_doc, documento, limite_credito, tipo_comprobante, regimen_dgii) VALUES (?,?,?,?,?,?,?,?,?,?,?)', valores);
+        const r = await ejecutar('INSERT INTO clientes (nombre, telefono, direccion, notas, tipo_doc, documento, tipo_comprobante, regimen_dgii) VALUES (?,?,?,?,?,?,?,?)', valores);
         id = r?.changes?.lastId;
         if (!id) id = (await consultar('SELECT last_insert_rowid() AS id'))[0].id;
       } else {
-        await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, condicion=?, dias_credito=?, tipo_doc=?, documento=?, limite_credito=?, tipo_comprobante=?, regimen_dgii=? WHERE id=?', [...valores, id]);
+        await ejecutar('UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=?, tipo_doc=?, documento=?, tipo_comprobante=?, regimen_dgii=? WHERE id=?', [...valores, id]);
       }
       await anotar(nuevo ? 'Cliente creado' : 'Cliente modificado', nombre.value.trim());
       cerrar();
@@ -149,9 +127,7 @@ export function formularioCliente(c = null, alGuardar = () => {}) {
       textoCpb,
       campo('Dirección principal', direccion),
       campo('Notas', notas),
-      condicion.el,
-      campo('Límite de crédito (0 o vacío = sin límite)', limite),
-      avisoCredito,
+      h('p', { class: 'ayuda' }, 'El crédito (condición de pago, días, límite y tipo de cliente) se configura en Contabilidad → CxC → Cliente.'),
       error,
       h('div', { class: 'acciones' },
         nuevo ? null : h('button', { class: 'btn peligro', onClick: quitar }, 'Quitar cliente'),
@@ -207,7 +183,7 @@ function formularioContacto(clienteId, fila, alGuardar) {
 }
 
 export async function vistaClientes(raiz) {
-  const estado = { texto: '', soloDeuda: false };
+  const estado = { texto: '' };
   const resumen = h('dl', { class: 'resumen' });
   const lista = h('div', { class: 'lista' });
 
@@ -217,42 +193,23 @@ export async function vistaClientes(raiz) {
     onInput: (e) => { estado.texto = e.target.value; pintar(); },
   });
 
-  const segmento = h('div', { class: 'segmento', role: 'group', 'aria-label': 'Filtrar clientes' });
-  const pintarSegmento = () => segmento.replaceChildren(...[[false, 'Todos'], [true, 'Con deuda']].map(([valor, t]) =>
-    h('button', {
-      'aria-pressed': String(estado.soloDeuda === valor),
-      onClick: () => { estado.soloDeuda = valor; pintarSegmento(); pintar(); },
-    }, t)));
-
   async function pintar() {
-    const [r] = await consultar(
-      `SELECT COALESCE(SUM(${SALDO}), 0) AS por_cobrar, COUNT(DISTINCT v.cliente_id) AS n
-         FROM ventas v
-        WHERE v.estado = 'completada' AND v.metodo_pago = 'credito' AND ${SALDO} > 0.005`);
     const [{ n: totalClientes }] = await consultar('SELECT COUNT(*) AS n FROM clientes');
     const dato = (et, val) => h('div', {}, h('dt', {}, et), h('dd', {}, val));
-    resumen.replaceChildren(
-      dato('Clientes', String(totalClientes)),
-      dato('Con deuda', String(r.n)),
-      dato('Por cobrar', dinero(r.por_cobrar)));
+    resumen.replaceChildren(dato('Clientes', String(totalClientes)));
 
     const like = `%${estado.texto.trim()}%`;
     const soloDoc = limpiarDocumento(estado.texto);
     let filas = await consultar(`${CLIENTES} WHERE c.nombre LIKE ? OR c.telefono LIKE ? OR c.documento LIKE ? ORDER BY c.nombre`, [like, like, soloDoc ? `%${soloDoc}%` : '\u0000']);
-    if (estado.soloDeuda) filas = filas.filter((c) => c.deuda > 0.005);
 
     lista.replaceChildren(...(filas.length
       ? filas.map((c) => h('button', { class: 'fila inventario', onClick: () => detalleCliente(c.id) },
           h('span', { class: 'datos' },
             h('strong', {}, c.nombre),
-            h('small', {}, [c.telefono || 'Sin teléfono', c.documento ? textoDocumento(c.tipo_doc, c.documento) : null].filter(Boolean).join(' · ')),
-            textoCondicion(c) ? h('small', {}, textoCondicion(c)) : null),
+            h('small', {}, [c.telefono || 'Sin teléfono', c.documento ? textoDocumento(c.tipo_doc, c.documento) : null].filter(Boolean).join(' · '))),
           h('span', { class: 'precio' }, dinero(c.total),
-            h('small', { class: 'bloque' }, `${c.compras} ${c.compras === 1 ? 'compra' : 'compras'}`),
-            c.deuda > 0.005 ? h('small', { class: 'bloque deuda' }, `Debe ${dinero(c.deuda)}`) : null)))
-      : [h('p', { class: 'vacio' }, estado.soloDeuda
-          ? 'Ningún cliente tiene deudas pendientes.'
-          : estado.texto.trim()
+            h('small', { class: 'bloque' }, `${c.compras} ${c.compras === 1 ? 'compra' : 'compras'}`))))
+      : [h('p', { class: 'vacio' }, estado.texto.trim()
             ? 'Ningún cliente coincide con la búsqueda.'
             : 'Aún no hay clientes. Toca "Nuevo cliente" para registrar el primero.')]));
   }
@@ -260,46 +217,20 @@ export async function vistaClientes(raiz) {
   async function detalleCliente(id) {
     const [c] = await consultar(`${CLIENTES} WHERE c.id = ?`, [id]);
     if (!c) return;
-    const pendientes = (await consultar(
-      `SELECT v.id, v.numero, v.fecha, v.total, (SELECT vence FROM cuentas_cobrar WHERE venta_id = v.id) AS vence,
-              COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.venta_id = v.id), 0) AS pagado
-         FROM ventas v
-        WHERE v.cliente_id = ? AND v.estado = 'completada' AND v.metodo_pago = 'credito'
-        ORDER BY v.id`, [id]))
-      .map((v) => ({ ...v, saldo: redondear(v.total - v.pagado) }))
-      .filter((v) => v.saldo > 0.005);
-
     const direcciones = await consultar('SELECT * FROM cliente_direcciones WHERE cliente_id = ? ORDER BY id', [id]);
     const contactos = await consultar('SELECT * FROM cliente_contactos WHERE cliente_id = ? ORDER BY id', [id]);
     const historial = await consultar(
       `SELECT v.id, v.numero, v.fecha, v.total, v.metodo_pago, v.estado FROM ventas v WHERE v.cliente_id = ? ORDER BY v.id DESC LIMIT 100`, [id]);
-    const deudaActual = Math.max(0, c.deuda);
-    const limite = c.limite_credito > 0 ? c.limite_credito : null;
-
     let cerrar = () => {};
-    const refrescar = async () => { cerrar(); await pintar(); await detalleCliente(id); };
     const recargar = async () => { cerrar(); await detalleCliente(id); };
 
     cerrar = hoja(c.nombre,
       h('div', { class: 'cuerpo' },
         h('p', { class: 'ayuda' }, [c.telefono, c.direccion].filter(Boolean).join(', ') || 'Sin datos de contacto'),
         c.documento ? h('p', { class: 'ayuda' }, `Identificación: ${textoDocumento(c.tipo_doc, c.documento)}`) : null,
-        textoCondicion(c) ? h('p', { class: 'ayuda' }, `Condición de pago: ${textoCondicion(c)}`) : null,
         h('div', { class: 'totales' },
           renglon('Compras', String(c.compras)),
-          renglon('Total comprado', dinero(c.total)),
-          limite ? renglon('Límite de crédito', dinero(limite)) : null,
-          limite ? renglon('Crédito disponible', dinero(Math.max(0, limite - deudaActual)), deudaActual > limite ? 'deuda' : '') : null,
-          renglon('Pendiente de pago', dinero(deudaActual), 'gran')),
-        pendientes.length ? h('h3', {}, 'Ventas a crédito pendientes') : h('p', { class: 'ayuda' }, 'No tiene deudas pendientes.'),
-        pendientes.length
-          ? h('div', { class: 'carrito' }, pendientes.map((v) => h('div', { class: 'linea' },
-              h('div', { class: 'linea-cab' }, h('strong', {}, v.numero), h('span', { class: 'deuda' }, dinero(v.saldo))),
-              h('div', { class: 'linea-pie' },
-                h('small', { class: v.vence && v.vence < hoyISO() ? 'deuda' : 'ayuda' },
-                  `${v.fecha.slice(0, 10)}, total ${dinero(v.total)}${v.vence ? `, ${v.vence < hoyISO() ? 'vencida' : 'vence'} ${v.vence.split('-').reverse().join('/')}` : ''}`),
-                h('button', { class: 'btn', onClick: () => formularioAbono(v, refrescar) }, 'Registrar abono')))))
-          : null,
+          renglon('Total comprado', dinero(c.total))),
         seccionDirecciones(direcciones),
         seccionContactos(contactos),
         h('h3', {}, 'Historial de compras'),
@@ -311,8 +242,7 @@ export async function vistaClientes(raiz) {
           : h('p', { class: 'ayuda' }, 'Todavía no tiene compras.'),
         h('div', { class: 'acciones' },
           h('button', { class: 'btn', onClick: () => { cerrar(); formularioCliente(c, pintar); } }, 'Editar cliente'),
-          h('button', { class: 'btn', onClick: () => listaRecibos({ clienteId: id, alCambiar: refrescar }) }, 'Recibos'),
-          pendientes.length ? h('button', { class: 'btn primario', onClick: () => { cerrar(); formularioCobro({ clienteId: id, alGuardar: async () => { await pintar(); } }); } }, 'Cobrar') : null)));
+          )));
 
     function seccionDirecciones(lista) {
       return h('div', {},
@@ -338,12 +268,9 @@ export async function vistaClientes(raiz) {
   raiz.replaceChildren(
     h('header', { class: 'barra' },
       h('h1', {}, 'Clientes'),
-      h('button', { class: 'btn claro', onClick: () => formularioCobro({ alGuardar: pintar }) }, 'Cobrar'),
-      h('button', { class: 'btn claro', onClick: () => listaRecibos({ alCambiar: pintar }) }, 'Recibos'),
       h('button', { class: 'btn claro', onClick: () => formularioCliente(null, pintar) }, 'Nuevo cliente')),
     resumen,
-    h('div', { class: 'filtros' }, buscador, segmento),
+    h('div', { class: 'filtros' }, buscador),
     lista);
-  pintarSegmento();
   await pintar();
 }

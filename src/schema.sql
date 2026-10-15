@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS clientes (
   limite_credito REAL,  -- tope de deuda a crédito (vacío = sin límite)
   tipo_comprobante TEXT, -- B01 | B02 | B14 | B15 (vacío = automático según su RNC)
   regimen_dgii TEXT,    -- régimen que la DGII tiene registrado para su RNC (se llena al verificarlo)
+  tipo_cliente_id INTEGER REFERENCES tipos_cliente(id),
+  condicion_pago_id INTEGER REFERENCES condiciones_pago(id),
   creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS pagos (
   metodo TEXT NOT NULL DEFAULT 'efectivo',
   nota TEXT,
   recibo_id INTEGER REFERENCES recibos(id),
+  documento_id INTEGER,   -- nota de crédito/débito o anticipo de cxc_docs que originó este movimiento
   fecha TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -290,6 +293,50 @@ CREATE TABLE IF NOT EXISTS declaraciones (
   referencia TEXT,
   notas TEXT
 );
+
+-- CxC: tipos de cliente, condiciones de pago, motivos de descuento/devolución y documentos (notas de crédito y débito, anticipos)
+CREATE TABLE IF NOT EXISTS tipos_cliente (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  descuento REAL NOT NULL DEFAULT 0,      -- % de descuento sugerido para este tipo de cliente
+  limite_credito REAL,                    -- límite de crédito sugerido
+  notas TEXT,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS condiciones_pago (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  dias INTEGER NOT NULL DEFAULT 0,        -- 0 = de contado
+  activo INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS cxc_conceptos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  tipo TEXT NOT NULL DEFAULT 'descuento', -- descuento | devolucion | cargo
+  porcentaje REAL,                        -- % sugerido (opcional)
+  notas TEXT,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+-- tipo: credito (baja lo que debe una factura) | debito (lo sube) | anticipo (dinero recibido por adelantado)
+CREATE TABLE IF NOT EXISTS cxc_docs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  tipo TEXT NOT NULL,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  cliente_id INTEGER NOT NULL REFERENCES clientes(id),
+  venta_id INTEGER REFERENCES ventas(id),
+  concepto_id INTEGER REFERENCES cxc_conceptos(id),
+  monto REAL NOT NULL,
+  itbis REAL NOT NULL DEFAULT 0,
+  ncf TEXT,
+  metodo TEXT,                            -- solo anticipos: cómo se recibió el dinero
+  referencia TEXT,
+  notas TEXT,
+  estado TEXT NOT NULL DEFAULT 'vigente', -- vigente | anulado
+  anulado_motivo TEXT,
+  usuario_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cxc_docs_cliente ON cxc_docs(cliente_id);
 
 CREATE TABLE IF NOT EXISTS gastos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -677,6 +724,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('21', 'Pasivos corrientes', 'pasivo', 1, NULL, NULL, 1),
   ('2101', 'Cuentas por pagar proveedores', 'pasivo', 0, 'cxp', NULL, 1),
   ('2110', 'ITBIS por pagar', 'pasivo', 0, 'itbis_pagar', NULL, 1),
+  ('2150', 'Anticipos de clientes', 'pasivo', 0, 'anticipos_clientes', NULL, 1),
   ('2120', 'TSS por pagar', 'pasivo', 0, 'tss_pagar', NULL, 1),
   ('2121', 'ISR retenido por pagar', 'pasivo', 0, 'isr_pagar', NULL, 1),
   ('2130', 'Sueldos por pagar', 'pasivo', 0, 'sueldos_pagar', NULL, 1),
@@ -692,7 +740,9 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('4', 'INGRESOS', 'ingreso', 1, NULL, NULL, 1),
   ('4101', 'Ventas de mercancía', 'ingreso', 0, 'ventas', NULL, 1),
   ('4102', 'Ingresos por servicios', 'ingreso', 0, 'servicios', NULL, 1),
+  ('4103', 'Descuentos y devoluciones en ventas', 'ingreso', 0, 'desc_ventas', NULL, 1),
   ('4201', 'Otros ingresos', 'ingreso', 0, 'otros_ingresos', NULL, 1),
+  ('4202', 'Cargos y recargos a clientes', 'ingreso', 0, 'cargos_clientes', NULL, 1),
   ('5', 'COSTOS', 'costo', 1, NULL, NULL, 1),
   ('5101', 'Costo de ventas', 'costo', 0, 'costo_ventas', NULL, 1),
   ('6', 'GASTOS', 'gasto', 1, NULL, NULL, 1),
@@ -712,6 +762,7 @@ INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('siguiente_numero_asiento', '1'),
   ('siguiente_numero_bancomov', '1'),
   ('siguiente_numero_cajachica', '1'),
+  ('siguiente_numero_nc', '1'), ('siguiente_numero_nd', '1'), ('siguiente_numero_anticipo', '1'),
   ('fiscal_mes_inicio', '1'),
   ('siguiente_numero_nomina', '1'),
   ('conta_inicio', ''),

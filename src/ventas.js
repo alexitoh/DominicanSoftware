@@ -7,7 +7,6 @@ import { h, hoja, toast, dinero, confirmar } from './ui.js';
 import { condicionRango, rangoInicial, selectorRango, hoyISO } from './fechas.js';
 import { formularioCliente } from './clientes.js';
 import { textoCondicion, DIAS_POR_DEFECTO } from './condicion.js';
-import { formularioAbono } from './cobros.js';
 import { compartirFactura } from './factura.js';
 import { botonEscaner } from './escaner.js';
 import { tienePermiso, registrarBitacora, usuarioActual } from './auth.js';
@@ -97,14 +96,11 @@ export async function vistaVentas(raiz) {
 
   function fila(v) {
     const anulada = v.estado === 'anulada';
-    const credito = v.metodo_pago === 'credito' && !anulada;
-    const debe = credito ? redondear(v.total - v.pagado) : 0;
     return h('button', { class: 'fila inventario', onClick: () => detalle(v.id) },
       h('span', { class: 'datos' },
         h('strong', {}, v.numero, anulada ? h('span', { class: 'anulada' }, ' (anulada)') : null),
         h('small', {}, v.cliente || v.cliente_nombre || 'Cliente general'),
-        h('small', {}, `${v.fecha.slice(0, 16)}, ${METODOS[v.metodo_pago] || v.metodo_pago}`),
-        credito ? h('small', { class: debe > 0.005 ? 'deuda' : 'pagada' }, debe > 0.005 ? `Debe ${dinero(debe)}` : 'Pagada') : null),
+        h('small', {}, `${v.fecha.slice(0, 16)}, ${METODOS[v.metodo_pago] || v.metodo_pago}`)),
       h('span', { class: `precio${anulada ? ' tachado' : ''}` }, dinero(v.total)));
   }
 
@@ -165,27 +161,10 @@ export async function vistaVentas(raiz) {
           renglon('Subtotal', dinero(v.subtotal)),
           v.descuento > 0 ? renglon('Descuento', `- ${dinero(v.descuento)}`) : null,
           v.itbis > 0 && Math.abs(v.total - (v.subtotal - v.descuento) - v.itbis) < 0.01 ? renglon('ITBIS', dinero(v.itbis)) : null,
-          renglon('Total', dinero(v.total), 'gran'),
-          credito ? renglon('Abonado', dinero(pagado)) : null,
-          credito ? renglon('Pendiente', dinero(anulada ? 0 : Math.max(0, saldo)),
-            !anulada && saldo > 0.005 ? 'deuda' : '') : null,
-          credito && cobro?.vence ? renglon('Fecha límite', cobro.vence.split('-').reverse().join('/'),
-            !anulada && saldo > 0.005 && cobro.vence < hoyISO() ? 'deuda' : '') : null),
-        pagos.length ? h('h3', {}, 'Abonos') : null,
-        pagos.length
-          ? h('ul', { class: 'historial abonos' }, pagos.map((p) => h('li', {},
-              h('span', {}, `${p.fecha.slice(0, 10)}, ${METODOS[p.metodo] || p.metodo}${p.nota ? `, ${p.nota}` : ''}`),
-              h('strong', {}, dinero(p.monto)))))
-          : null,
+          renglon('Total', dinero(v.total), 'gran')),
+        credito ? h('p', { class: 'ayuda' }, 'Venta a crédito: los cobros, abonos y saldo se manejan en Contabilidad → CxC.') : null,
         h('div', { class: 'acciones' },
           anulada || !tienePermiso('anular') ? null : h('button', { class: 'btn peligro', onClick: anular }, 'Anular venta'),
-          credito && !anulada && saldo > 0.005
-            ? h('button', {
-                class: 'btn',
-                onClick: () => formularioAbono({ id, numero: v.numero, total: v.total, pagado },
-                  async () => { cerrar(); await pintar(); await detalle(id); }),
-              }, 'Registrar abono')
-            : null,
           h('button', { class: 'btn', onClick: () => imprimirVenta(id) }, 'Imprimir'),
           h('button', { class: 'btn primario', onClick: () => compartir(id) }, 'Compartir factura'))));
   }
@@ -397,7 +376,7 @@ export async function vistaVentas(raiz) {
       const c = clientesInfo.get(cliente.value);
       if (metodo.value === 'credito' && !c) { avisoCredito.className = 'error'; avisoCredito.textContent = 'Para vender a crédito elige un cliente que tenga crédito autorizado.'; return; }
       if (metodo.value !== 'credito' || !c) { avisoCredito.textContent = ''; avisoCredito.className = 'ayuda'; return; }
-      if (!tieneCredito(c)) { avisoCredito.className = 'error'; avisoCredito.textContent = `${c.nombre} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes (condición Crédito y días permitidos). Cobra de contado.`; return; }
+      if (!tieneCredito(c)) { avisoCredito.className = 'error'; avisoCredito.textContent = `${c.nombre} no tiene crédito autorizado. Contabilidad debe configurarlo en CxC → Cliente (condición de pago y límite). Cobra de contado.`; return; }
       const d = new Date();
       d.setDate(d.getDate() + diasCredito());
       const fecha = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
@@ -583,7 +562,7 @@ export async function vistaVentas(raiz) {
       const total = redondear(sub - dto + itbisDe(sub, dto));
       const ini = esCredito ? Math.max(parseFloat(inicial.value) || 0, 0) : 0;
       if (esCredito && !cliente.value) { error.textContent = 'Para vender a crédito elige un cliente con crédito autorizado.'; cliente.focus(); return null; }
-      if (esCredito && !tieneCredito(clientesInfo.get(cliente.value))) { error.textContent = `${clientesInfo.get(cliente.value)?.nombre || 'Este cliente'} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes; mientras tanto cobra de contado.`; return null; }
+      if (esCredito && !tieneCredito(clientesInfo.get(cliente.value))) { error.textContent = `${clientesInfo.get(cliente.value)?.nombre || 'Este cliente'} no tiene crédito autorizado. Contabilidad debe configurarlo en CxC → Cliente; mientras tanto cobra de contado.`; return null; }
       if (esCredito && redondear(ini) > total) { error.textContent = 'El pago inicial no puede ser mayor que el total.'; inicial.focus(); return null; }
 
       if (buscaCliente.value.trim() && !cliente.value && ambulante !== buscaCliente.value.trim()) { error.textContent = 'Elige un cliente de la lista, usa el nombre como cliente de consumo, o borra la búsqueda para facturar a Cliente general.'; buscaCliente.focus(); return null; }
@@ -743,7 +722,7 @@ export async function vistaVentas(raiz) {
     const cerrar = hoja('Venta registrada',
       h('div', { class: 'cuerpo' },
         h('p', {}, `${numero} por ${dinero(v.total)}. El inventario ya se actualizó.`),
-        pendiente > 0.005 ? h('p', { class: 'deuda' }, `Queda pendiente ${dinero(pendiente)}. Puedes registrar abonos desde el detalle de la venta o desde Clientes.`) : null,
+        pendiente > 0.005 ? h('p', { class: 'deuda' }, `Queda pendiente ${dinero(pendiente)}. Los cobros se registran en Contabilidad → CxC.`) : null,
         h('div', { class: 'acciones' },
           h('button', { class: 'btn', onClick: () => cerrar() }, 'Listo'),
           h('button', { class: 'btn', onClick: () => imprimirCredito(v.id) }, 'Imprimir'),

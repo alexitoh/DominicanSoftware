@@ -6,7 +6,9 @@
 // unicos: columnas con restricción UNIQUE (si chocan al recibir, se le agrega un sufijo).
 export const TABLAS = [
   { t: 'categorias', cols: ['nombre'], unicos: ['nombre'] },
-  { t: 'clientes', cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'tipo_doc', 'documento', 'limite_credito', 'tipo_comprobante', 'regimen_dgii', 'creado'] },
+  { t: 'tipos_cliente', cols: ['nombre', 'descuento', 'limite_credito', 'notas', 'activo'], unicos: ['nombre'] },
+  { t: 'condiciones_pago', cols: ['nombre', 'dias', 'activo'], unicos: ['nombre'] },
+  { t: 'clientes', refs: [{ col: 'tipo_cliente_id', tabla: 'tipos_cliente' }, { col: 'condicion_pago_id', tabla: 'condiciones_pago' }], cols: ['nombre', 'telefono', 'direccion', 'notas', 'condicion', 'dias_credito', 'tipo_doc', 'documento', 'limite_credito', 'tipo_comprobante', 'regimen_dgii', 'creado'] },
   { t: 'cliente_direcciones', cols: ['etiqueta', 'direccion', 'referencia'], refs: [{ col: 'cliente_id', tabla: 'clientes' }] },
   { t: 'cliente_contactos', cols: ['nombre', 'cargo', 'telefono', 'correo'], refs: [{ col: 'cliente_id', tabla: 'clientes' }] },
   { t: 'recibos', cols: ['numero', 'fecha', 'total', 'estado', 'notas'], refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'] },
@@ -32,7 +34,12 @@ export const TABLAS = [
     refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'producto_id', tabla: 'productos' }],
   },
   { t: 'venta_servicios', cols: ['descripcion', 'cantidad', 'precio_unitario'], refs: [{ col: 'venta_id', tabla: 'ventas' }] },
-  { t: 'pagos', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'recibo_id', tabla: 'recibos' }] },
+  { t: 'cxc_conceptos', cols: ['nombre', 'tipo', 'porcentaje', 'notas', 'activo'], unicos: ['nombre'] },
+  {
+    t: 'cxc_docs', cols: ['numero', 'tipo', 'fecha', 'monto', 'itbis', 'ncf', 'metodo', 'referencia', 'notas', 'estado', 'anulado_motivo'],
+    refs: [{ col: 'cliente_id', tabla: 'clientes' }, { col: 'venta_id', tabla: 'ventas' }, { col: 'concepto_id', tabla: 'cxc_conceptos' }, { col: 'usuario_id', tabla: 'usuarios' }], unicos: ['numero'],
+  },
+  { t: 'pagos', cols: ['monto', 'metodo', 'nota', 'fecha'], refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'recibo_id', tabla: 'recibos' }, { col: 'documento_id', tabla: 'cxc_docs' }] },
   {
     t: 'ventas_pendientes',
     cols: ['numero', 'fecha', 'cliente_nombre', 'tipo_ncf', 'descuento', 'total', 'notas', 'estado'],

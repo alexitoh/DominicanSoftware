@@ -112,7 +112,19 @@ export function asientosAutomaticos(f, { inicio = '', hasta = '9999-12-31' } = {
   for (const p of f.pagos || []) {
     const v = ventasOk.get(p.venta_numero);
     if (!v || v.metodo_pago !== 'credito') continue;
+    if (p.metodo === 'nota_credito' || p.metodo === 'nota_debito') continue; // salen de su nota (abajo)
+    if (p.metodo === 'anticipo') { add('aplicacion', `P${p.id}`, p.fecha, `Anticipo aplicado a ${p.venta_numero}`, [{ rol: 'anticipos_clientes', debe: p.monto }, { rol: 'cxc', haber: p.monto }]); continue; }
     add('cobro', `P${p.id}`, p.fecha, `Cobro de ${p.venta_numero}`, [{ rol: rolMetodo(p.metodo), debe: p.monto }, { rol: 'cxc', haber: p.monto }]);
+  }
+  // CxC: notas de crédito (descuentos y devoluciones), notas de débito (cargos) y anticipos recibidos
+  for (const d of f.cxcDocs || []) {
+    const neto = r2(d.monto - (d.itbis || 0));
+    if (d.tipo === 'anticipo') add('anticipo', d.numero, d.fecha, `Anticipo ${d.numero} · ${d.cliente}`, [{ rol: rolMetodo(d.metodo), debe: d.monto }, { rol: 'anticipos_clientes', haber: d.monto }]);
+    else {
+      if (!ventasOk.has(d.venta_numero)) continue;
+      if (d.tipo === 'credito') add('notacredito', d.numero, d.fecha, `Nota de crédito ${d.numero} · ${d.cliente}`, [{ rol: 'desc_ventas', debe: neto }, { rol: 'itbis_pagar', debe: d.itbis || 0 }, { rol: 'cxc', haber: d.monto }]);
+      else add('notadebito', d.numero, d.fecha, `Nota de débito ${d.numero} · ${d.cliente}`, [{ rol: 'cxc', debe: d.monto }, { rol: 'cargos_clientes', haber: neto }, { rol: 'itbis_pagar', haber: d.itbis || 0 }]);
+    }
   }
 
   const comprasOk = new Map();

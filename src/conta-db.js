@@ -178,7 +178,9 @@ export async function cargarFuentes() {
   });
   const cajasCh = new Map((await q('SELECT id, nombre FROM cajas_chicas')).map((c) => [c.id, c.nombre]));
   const cajaChicaMovs = (await q('SELECT * FROM caja_chica_movs')).map((m) => ({ ...m, caja_nombre: cajasCh.get(m.caja_chica_id) || '', cuenta_banco_id: m.banco_id ? cuentaDe.get(m.banco_id) : null }));
-  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, hoy: hoy() };
+  const cxcDocs = await q(`SELECT d.numero, d.tipo, substr(d.fecha, 1, 10) AS fecha, d.monto, d.itbis, d.metodo, d.referencia, v.numero AS venta_numero, c.nombre AS cliente
+      FROM cxc_docs d JOIN clientes c ON c.id = d.cliente_id LEFT JOIN ventas v ON v.id = d.venta_id WHERE d.estado = 'vigente'`);
+  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, cxcDocs, hoy: hoy() };
 }
 
 // Libro completo hasta una fecha (por defecto hoy). Respeta la fecha de inicio contable.

@@ -252,6 +252,22 @@ Cuatro secciones: **Caja Chica**, **Desembolso**, **Reporte Caja Chica** y **Rep
 - **Reporte Caja Chica:** por período: fondo, desembolsado, ITBIS, repuesto, disponible, total por categoría y todos los movimientos (con CSV).
 Contabilidad: cuenta nueva **1102 Caja chica**. El fondo y la reposición mueven dinero entre Caja chica y la Caja general o el banco; cada desembolso se registra como gasto contra Caja chica (y suma a los reportes de gastos).
 
+## CxC: cuentas por cobrar (Contabilidad → CxC)
+Todo lo que te deben los clientes vive solo aquí. Se quitaron de Clientes, Ventas, Inicio y Reportes los abonos, el botón Cobrar, los recibos y los saldos por cobrar; allí solo queda el aviso en Inicio, que lleva a CxC. (La pantalla de Caja conserva "Por cobrar": son las ventas que el vendedor envió para cobrar en el momento, otra cosa.)
+Diez secciones:
+- **Cliente:** saldo, vencido, anticipos y crédito disponible de cada cliente. Al tocarlo: estado de cuenta, y se le asigna **tipo de cliente, condición de pago y límite de crédito** (antes eso estaba en el perfil del cliente). Desde ahí se hacen recibos, notas y anticipos.
+- **Descuento y Devolución:** motivos que se eligen en las notas (descuento, devolución, cargo), con % sugerido opcional. Una devolución de mercancía NO reingresa el inventario sola: ajústalo en Inventario.
+- **Nota de Crédito:** baja lo que debe una factura a crédito (no puede pasar de lo pendiente). Se anula con motivo. Contabilidad: débito a *Descuentos y devoluciones en ventas* (y al ITBIS si lo indicas), crédito a Cuentas por cobrar.
+- **Nota de Débito:** sube lo que debe una factura (mora, cobranza, cheque devuelto). Contabilidad: *Cargos y recargos a clientes*.
+- **Recibo:** cobros a clientes (varias facturas, varios métodos de pago), con su lista, detalle, anulación y PDF.
+- **Anticipo CxC:** dinero recibido antes de facturar. Queda como *Anticipos de clientes* (pasivo) y se aplica después a facturas; se puede quitar la aplicación o anular el anticipo (si no está aplicado).
+- **Condición de Pago:** Contado, 15, 30, 45, 60 días o las que crees. Fija los días para pagar del cliente (las ventas a crédito los toman).
+- **Reporte CxC:** antigüedad de saldos por cliente (al día, 1–30, 31–60, 61–90, más de 90), filtrable por tipo y condición, con detalle de facturas y CSV.
+- **Reporte Dinámico:** tabla dinámica de facturas, notas, recibos y anticipos agrupada por cliente, tipo de cliente, condición, mes, motivo o tipo de documento (con CSV).
+- **Tipo de Cliente:** consumidor final, mayorista, empresa…; con descuento y límite sugeridos.
+Cuentas nuevas en el catálogo: 2150 Anticipos de clientes, 4103 Descuentos y devoluciones en ventas y 4202 Cargos y recargos a clientes.
+Límites: las notas de crédito y débito todavía no salen en el 607 de la DGII; los anticipos en efectivo no entran al cuadre de la caja del cajero; la contabilización no mueve inventario.
+
 ## Gastos, períodos y diarios (Contabilidad)
 - **Gastos** (pestaña nueva), tres secciones:
   - **Gastos:** registra gastos sin abrir caja (alquiler, luz…), con concepto guardado, categoría, beneficiario, RNC, NCF, ITBIS y tipo de pago. Se contabilizan solos y, con NCF, entran al 606. También lista los gastos hechos desde Caja. Se anulan con motivo (no se borran).

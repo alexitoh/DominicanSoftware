@@ -44,8 +44,8 @@ export const INICIO = {
 const PALABRAS = {
   ventas: 'vender factura facturar cotizacion cotizaciones pos cobrar', productos: 'articulos catalogo precio precios codigo',
   inventario: 'stock existencia existencias almacen ajuste', compras: 'comprar suplidor mercancia', caja: 'efectivo cierre apertura gastos turno',
-  clientes: 'cobrar credito abonos', proveedores: 'suplidores', garantias: 'garantia',
-  reportes: 'informes estadisticas ganancias', contabilidad: 'cxc cxp cuentas por cobrar pagar deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
+  clientes: 'direcciones contactos telefono', proveedores: 'suplidores', garantias: 'garantia',
+  reportes: 'informes estadisticas ganancias', contabilidad: 'cxc cxp cuentas por cobrar pagar recibo recibos nota credito debito anticipo anticipos condicion de pago tipo de cliente abonos cobrar gastos periodos fiscal diarios deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
 };
 const plano = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 
@@ -100,8 +100,7 @@ export function crearVistaInicio(ir, puede = () => true, nombreUsuario = () => '
       reponer.n && puede('inventario') ? aviso(`${reponer.n} ${reponer.n === 1 ? 'producto por reponer' : 'productos por reponer'}`, 'inventario', 'alerta') : null,
       vencidas.n && puede('contabilidad') ? aviso(`${vencidas.n} ${vencidas.n === 1 ? 'cuenta vencida' : 'cuentas vencidas'} con proveedores (${dinero(vencidas.total)})`, 'contabilidad', 'alerta', 'cxp') : null,
       garantias.n && puede('garantias') ? aviso(`${garantias.n} ${garantias.n === 1 ? 'garantía vence' : 'garantías vencen'} en 30 días`, 'garantias') : null,
-      porCobrar.total > 0.005 && puede('contabilidad') ? aviso(`Por cobrar a clientes: ${dinero(porCobrar.total)}`, 'contabilidad', '', 'cxc')
-        : porCobrar.total > 0.005 && puede('clientes') ? aviso(`Por cobrar a clientes: ${dinero(porCobrar.total)}`, 'clientes') : null,
+      porCobrar.total > 0.005 && puede('contabilidad') ? aviso(`Por cobrar a clientes: ${dinero(porCobrar.total)}`, 'contabilidad', '', 'cxc') : null,
     ].filter(Boolean);
 
     raiz.replaceChildren(

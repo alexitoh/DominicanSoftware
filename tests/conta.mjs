@@ -513,5 +513,79 @@ await assert.rejects(() => cd.guardarMesInicioFiscal(13), /entre 1 y 12/);
 await cd.guardarMesInicioFiscal(1);
 ok('tipos de pago, conceptos, gastos desde Contabilidad (con anulación y reportes), diarios cancelados, períodos contables y fiscales');
 
+{
+// ---- CxC: tipos de cliente, condiciones, notas, anticipos y reportes ----
+const cx = await import('../src/cxc-db.js');
+assert.equal((await cx.listarCondiciones()).length, 5); assert.equal((await cx.listarTiposCliente()).length, 3); assert.equal((await cx.listarConceptosCxc()).length, 7);
+await cx.guardarTipoCliente({ nombre: 'Taller', descuento: 5, limite_credito: 50000 });
+await assert.rejects(() => cx.guardarTipoCliente({ nombre: 'taller' }), /Ya existe/);
+await assert.rejects(() => cx.guardarTipoCliente({ nombre: 'X', descuento: 120 }), /entre 0 y 100/);
+const tTaller = (await cx.listarTiposCliente()).find((t) => t.nombre === 'Taller');
+const cond45 = (await cx.listarCondiciones()).find((c) => c.dias === 45);
+await cx.guardarCreditoCliente({ cliente_id: cid, tipo_cliente_id: tTaller.id, condicion_pago_id: cond45.id, limite_credito: 9000 });
+const cliRow = await uno('SELECT * FROM clientes WHERE id = ?', [cid]);
+assert.deepEqual([cliRow.condicion, cliRow.dias_credito, cliRow.limite_credito, cliRow.tipo_cliente_id], ['credito', 45, 9000, tTaller.id]);
+await cx.guardarCondicion({ id: cond45.id, nombre: '45 días', dias: 40 });
+assert.equal((await uno('SELECT dias_credito FROM clientes WHERE id = ?', [cid])).dias_credito, 40, 'cambiar los días de la condición actualiza a sus clientes');
+await assert.rejects(() => cx.eliminarCondicion(cond45.id), /Desactívala/);
+await assert.rejects(() => cx.eliminarTipoCliente(tTaller.id), /Desactívalo/);
+
+const saldoFactura = async () => r2((await bd.facturasPendientes(cid)).find((f) => f.id === vcre).saldo);
+const saldo0 = await saldoFactura(); assert.equal(saldo0, r2(354 - 50 - 100));
+const cxcConceptos = await cx.listarConceptosCxc();
+const kDesc = cxcConceptos.find((k) => k.tipo === 'descuento'), kCargo = cxcConceptos.find((k) => k.tipo === 'cargo');
+await assert.rejects(() => cx.crearNota({ tipo: 'credito', cliente_id: cid, venta_id: vcre, monto: 9999 }), /no puede ser mayor/);
+await assert.rejects(() => cx.crearNota({ tipo: 'credito', cliente_id: cid, venta_id: vcre, monto: 10, concepto_id: kCargo.id }), /descuento o una devolución/);
+await assert.rejects(() => cx.crearNota({ tipo: 'debito', cliente_id: cid, venta_id: vcre, monto: 10, concepto_id: kDesc.id }), /tipo cargo/);
+const nc = await cx.crearNota({ tipo: 'credito', cliente_id: cid, venta_id: vcre, monto: 59, itbis: 9, concepto_id: kDesc.id });
+assert.match(nc.numero, /^NC-/); assert.equal(await saldoFactura(), r2(saldo0 - 59));
+const nd = await cx.crearNota({ tipo: 'debito', cliente_id: cid, venta_id: vcre, monto: 20, concepto_id: kCargo.id });
+assert.match(nd.numero, /^ND-/); assert.equal(await saldoFactura(), r2(saldo0 - 59 + 20));
+const ant = await cx.crearAnticipo({ cliente_id: cid, monto: 500, metodo: 'transferencia', referencia: 'T-77' });
+await assert.rejects(() => cx.crearAnticipo({ cliente_id: cid, monto: 10, metodo: 'cheque' }), /número de cheque/);
+await assert.rejects(() => cx.aplicarAnticipo({ anticipo_id: ant.id, venta_id: vcre, monto: 600 }), /disponible/);
+await cx.aplicarAnticipo({ anticipo_id: ant.id, venta_id: vcre, monto: 100 });
+assert.equal(await saldoFactura(), r2(saldo0 - 59 + 20 - 100));
+assert.equal((await cx.listarAnticipos({ clienteId: cid }))[0].disponible, 400);
+await assert.rejects(() => cx.anularAnticipo(ant.id, 'x'), /ya se aplicó/);
+// el libro sigue cuadrando y CxC del libro = saldos de facturas
+const lib2 = await cd.libroContable();
+assert.deepEqual(lib2.faltantes, []);
+assert.equal(r2(lib2.lineas.reduce((s, l) => s + l.debe, 0)), r2(lib2.lineas.reduce((s, l) => s + l.haber, 0)));
+const saldoCuenta = (codigo) => r2(lib2.lineas.filter((l) => l.cuenta_id === C[codigo].id).reduce((s, l) => s + l.debe - l.haber, 0));
+const porCobrarTotal = r2((await cd.saldosPorCobrar()).reduce((s, x) => s + x.saldo, 0));
+assert.equal(saldoCuenta('1201'), porCobrarTotal, 'la cuenta 1201 coincide con lo que deben los clientes');
+assert.equal(saldoCuenta('4103'), 50, 'nota de crédito: descuento sin ITBIS');
+assert.equal(saldoCuenta('4202'), -20, 'nota de débito: cargo a clientes');
+assert.equal(saldoCuenta('2150'), -400, 'anticipo recibido menos lo aplicado');
+const bal = cm.balanceGeneral(lib2.cuentas, lib2.lineas, '2099-12-31'); assert.equal(bal.cuadra, true);
+// anular
+await assert.rejects(() => cx.anularNota(nc.id, ''), /motivo/);
+await cx.anularNota(nd.id, 'Error'); assert.equal(await saldoFactura(), r2(saldo0 - 59 - 100));
+await cx.anularNota(nc.id, 'Error'); assert.equal(await saldoFactura(), r2(saldo0 - 100));
+await assert.rejects(() => cx.anularNota(nc.id, 'otra vez'), /ya está anulada/);
+const [apl] = await cx.aplicacionesAnticipo(ant.id); await cx.quitarAplicacion(apl.id); assert.equal(await saldoFactura(), saldo0);
+await cx.anularAnticipo(ant.id, 'Devuelto al cliente'); assert.equal((await cx.listarAnticipos({ clienteId: cid }))[0].disponible, 0);
+assert.equal(saldoCuenta('1201') > 0, true);
+const lib3 = await cd.libroContable(); const sc = (c) => r2(lib3.lineas.filter((l) => l.cuenta_id === C[c].id).reduce((s, l) => s + l.debe - l.haber, 0));
+assert.equal(sc('4103'), 0); assert.equal(sc('4202'), 0); assert.equal(sc('2150'), 0, 'anulado: no queda nada contabilizado');
+// reportes
+await cx.crearNota({ tipo: 'credito', cliente_id: cid, venta_id: vcre, monto: 10 });
+const rep = await cx.reporteCxc({ hasta: '2099-01-01' });
+assert.equal(rep.clientes.length, 1); assert.equal(rep.totales.total, r2(saldo0 - 10)); assert.equal(rep.totales.t90m, rep.totales.total, 'muy vencida');
+assert.equal((await cx.reporteCxc({ hasta: '2099-01-01', tipoClienteId: 9999 })).clientes.length, 0);
+const movs = await cx.movimientosCxc({});
+const tabla = cx.tablaDinamicaCxc(movs, { dimension: 'cliente' });
+assert.equal(tabla.filas.length, 1); assert.equal(tabla.filas[0].factura, 354); assert.equal(tabla.filas[0].credito, 10);
+assert.equal(tabla.filas[0].neto, r2(354 - 10 - 100 - 0), 'factura − crédito − recibo (los 50 iniciales y 100 del cobro: ver recibo)');
+assert.equal(cx.tablaDinamicaCxc(movs, { dimension: 'documento' }).filas.length >= 2, true);
+assert.throws(() => cx.tablaDinamicaCxc(movs, { dimension: 'nada' }), /Agrupación/);
+const ec = await cx.estadoCuentaCliente(cid); assert.equal(ec.saldo, r2(saldo0 - 10)); assert.ok(ec.movimientos.length >= 3);
+const lcx = await cx.clientesCxc(); assert.equal(lcx.find((c) => c.id === cid).saldo, r2(saldo0 - 10));
+const idV1 = (await uno('SELECT id FROM ventas WHERE numero = ?', [v1])).id;
+await assert.rejects(() => cx.crearNota({ tipo: 'credito', cliente_id: cid, venta_id: idV1, monto: 5 }), /de este cliente|a crédito/);
+ok('CxC: tipos de cliente, condiciones, notas de crédito y débito, anticipos (aplicar/anular), reportes y contabilidad cuadrando');
+}
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

@@ -41,6 +41,7 @@ const { vistaBancos } = await import('../src/conta-ui-bancos.js');
 const { vistaActivos, vistaNomina } = await import('../src/conta-ui-activos.js');
 const { vistaCajaChica } = await import('../src/conta-ui-cajachica.js');
 const { vistaReportes } = await import('../src/conta-ui-reportes.js');
+const r2c = (x) => Math.round(x * 100) / 100;
 await bd.initDB();
 let n = 0; const ok = (t) => { n++; console.log(`  ✔ ${t}`); };
 console.log('Interfaz de Contabilidad (DOM simulado)');
@@ -202,6 +203,84 @@ await pulsar(boton(rp, '606'));
 assert.ok(textoDe(document.body).includes('Marcar presentada'));
 limpiarHojas();
 ok('Gastos (crear/anular), Tipo de Pago, Reportes de Gasto, Concepto, Diarios Cancelados y Períodos abren y funcionan');
+
+// CxC: las 10 secciones abren y el flujo de notas, anticipos y créditos funciona desde la interfaz
+limpiarHojas();
+const { vistaCxc } = await import('../src/cxc.js');
+const cx = await import('../src/cxc-db.js');
+await bd.ejecutar("INSERT INTO productos (codigo, nombre, costo, precio, stock_actual) VALUES ('CX-1', 'Amplificador', 1000, 2000, 10)");
+const pCx = (await bd.consultar("SELECT id FROM productos WHERE codigo = 'CX-1'"))[0].id;
+await bd.ejecutar("INSERT INTO clientes (nombre, condicion, dias_credito) VALUES ('Cliente CxC', 'credito', 30)");
+const cCx = (await bd.consultar("SELECT id FROM clientes WHERE nombre = 'Cliente CxC'"))[0].id;
+await bd.registrarVenta({ cliente_id: cCx, metodo_pago: 'credito', items: [{ producto_id: pCx, cantidad: 1, precio_unitario: 2000 }] });
+const rcx = new Nodo('div'); await vistaCxc(rcx); await pausa();
+const SECCIONES_ESPERADAS = ['Cliente', 'Descuento y Devolución', 'Nota de Crédito', 'Nota de Débito', 'Recibo', 'Anticipo CxC', 'Condición de Pago', 'Reporte CxC', 'Reporte Dinámico', 'Tipo de Cliente'];
+const tabsCx = rcx.todos((x) => x.tag === 'button' && x.attrs.role === 'tab');
+assert.deepEqual(tabsCx.map((t) => t.texto.trim()), SECCIONES_ESPERADAS);
+const verSeccion = async (nombre) => { await pulsar(rcx.todos((x) => x.tag === 'button' && x.attrs.role === 'tab' && x.texto.trim() === nombre)[0]); const t = textoDe(rcx); assert.ok(!t.includes('No se pudo cargar') && !t.includes('NaN') && !t.includes('undefined'), `${nombre}: ${t.slice(0, 300)}`); return t; };
+for (const sec of SECCIONES_ESPERADAS) await verSeccion(sec);
+ok('CxC tiene las 10 secciones y todas se pintan sin errores');
+// Cliente: estado de cuenta y crédito
+await verSeccion('Cliente');
+assert.ok(textoDe(rcx).includes('Cliente CxC'));
+await pulsar(rcx.todos((x) => x.className.includes('fila') && x.texto.includes('Cliente CxC'))[0]);
+let hj2 = document.body.hijos.at(-1);
+assert.ok(textoDe(hj2).includes('Guardar crédito') && textoDe(hj2).includes('Facturas pendientes') && textoDe(hj2).includes('Nuevo recibo'));
+const selCond = hj2.todos((x) => x.tag === 'select' && x.attrs['aria-label'] === 'Condición de pago')[0];
+selCond.value = String((await cx.listarCondiciones()).find((k) => k.dias === 60).id);
+hj2.todos((x) => x.tag === 'input' && x.attrs['aria-label'] === 'Límite de crédito')[0].value = '8000';
+await pulsar(boton(hj2, 'Guardar crédito'));
+const cRow = (await bd.consultar('SELECT condicion, dias_credito, limite_credito FROM clientes WHERE id = ?', [cCx]))[0];
+assert.deepEqual([cRow.condicion, cRow.dias_credito, cRow.limite_credito], ['credito', 60, 8000]);
+limpiarHojas();
+ok('el crédito del cliente (condición y límite) se guarda desde CxC → Cliente');
+// Nota de crédito desde la pantalla
+await verSeccion('Nota de Crédito');
+await pulsar(boton(rcx, 'Nueva nota de crédito'));
+hj2 = document.body.hijos.at(-1);
+const montos = hj2.todos((x) => x.tag === 'input' && x.attrs.type === 'number'); montos[0].value = '250';
+await pulsar(boton(hj2, 'Guardar nota'));
+assert.ok(textoDe(rcx).includes('NC-') && textoDe(rcx).includes('Cliente CxC'), 'la nota aparece: ' + textoDe(rcx).slice(0, 400));
+assert.equal(r2c((await bd.facturasPendientes(cCx))[0].saldo), 1750);
+limpiarHojas();
+// Nota de débito
+await verSeccion('Nota de Débito');
+await pulsar(boton(rcx, 'Nueva nota de débito'));
+hj2 = document.body.hijos.at(-1);
+hj2.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '100';
+await pulsar(boton(hj2, 'Guardar nota'));
+assert.ok(textoDe(rcx).includes('ND-'));
+assert.equal(r2c((await bd.facturasPendientes(cCx))[0].saldo), 1850);
+limpiarHojas();
+// Anticipo: crear y aplicar
+await verSeccion('Anticipo CxC');
+await pulsar(boton(rcx, 'Nuevo anticipo'));
+hj2 = document.body.hijos.at(-1);
+hj2.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '600';
+await pulsar(boton(hj2, 'Guardar anticipo'));
+assert.ok(textoDe(rcx).includes('AN-') && textoDe(rcx).includes('600'), textoDe(rcx).slice(0, 300));
+limpiarHojas();
+await pulsar(rcx.todos((x) => x.className.includes('fila') && x.texto.includes('AN-'))[0]);
+hj2 = document.body.hijos.at(-1);
+hj2.todos((x) => x.tag === 'input' && x.attrs.type === 'number')[0].value = '400';
+await pulsar(boton(hj2, 'Aplicar'));
+assert.equal(r2c((await bd.facturasPendientes(cCx))[0].saldo), 1450);
+limpiarHojas();
+ok('notas de crédito y débito y anticipos (crear y aplicar) funcionan desde la pantalla y mueven el saldo');
+// Reportes
+await verSeccion('Reporte CxC');
+assert.ok(textoDe(rcx).includes('Cliente CxC') && textoDe(rcx).includes('Total por cobrar'));
+await pulsar(boton(rcx, 'Ver detalle de facturas')); assert.ok(textoDe(rcx).includes('Atraso'));
+await verSeccion('Reporte Dinámico');
+const dimSel = rcx.todos((x) => x.tag === 'select' && x.attrs['aria-label'] === 'Agrupar por')[0];
+for (const o of dimSel.todos((x) => x.tag === 'option')) { dimSel.value = o.attrs.value; await dimSel.disparar('change'); await pausa(); assert.ok(!textoDe(rcx).includes('NaN') && !textoDe(rcx).includes('undefined'), 'dinámico ' + o.attrs.value); }
+assert.ok(textoDe(rcx).includes('Neto'));
+// Catálogos
+await verSeccion('Tipo de Cliente'); await pulsar(boton(rcx, 'Nuevo tipo de cliente')); assert.ok(textoDe(document.body).includes('Descuento sugerido')); limpiarHojas();
+await verSeccion('Condición de Pago'); await pulsar(boton(rcx, 'Nueva condición de pago')); assert.ok(textoDe(document.body).includes('Días para pagar')); limpiarHojas();
+await verSeccion('Descuento y Devolución'); await pulsar(boton(rcx, 'Nuevo motivo')); assert.ok(textoDe(document.body).includes('Porcentaje sugerido')); limpiarHojas();
+await verSeccion('Recibo'); assert.ok(textoDe(rcx).includes('Nuevo recibo'));
+ok('reportes CxC y dinámico, y los catálogos (tipo de cliente, condición, motivos) abren sin errores');
 
 // Facturación: tipo de comprobante y consulta del RNC
 limpiarHojas();

@@ -78,6 +78,9 @@ export async function initDB() {
     'ALTER TABLE asientos ADD COLUMN anulado_por TEXT',
     'ALTER TABLE asientos ADD COLUMN anulado_motivo TEXT',
     'ALTER TABLE gastos ADD COLUMN tipo_pago_id INTEGER REFERENCES tipos_pago(id)',
+    'ALTER TABLE clientes ADD COLUMN tipo_cliente_id INTEGER REFERENCES tipos_cliente(id)',
+    'ALTER TABLE clientes ADD COLUMN condicion_pago_id INTEGER REFERENCES condiciones_pago(id)',
+    'ALTER TABLE pagos ADD COLUMN documento_id INTEGER',
     'ALTER TABLE gastos ADD COLUMN beneficiario TEXT',
     "ALTER TABLE gastos ADD COLUMN estado TEXT NOT NULL DEFAULT 'vigente'",
     "ALTER TABLE gastos ADD COLUMN origen TEXT NOT NULL DEFAULT 'caja'",
@@ -112,6 +115,7 @@ export async function initDB() {
   await sembrarCategorias();
   await sembrarTiposActivo();
   await sembrarTiposPago();
+  await sembrarCxc();
   await guardarWeb();
   return db;
 }
@@ -149,6 +153,28 @@ async function sembrarTiposActivo() {
 }
 
 // Tipos de pago de ejemplo: se siembran una sola vez; después el negocio los edita
+// Condiciones de pago, tipos de cliente y motivos de descuento/devolución de ejemplo, UNA sola vez
+async function sembrarCxc() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'cxc_sembrado'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM condiciones_pago');
+  if (n === 0) {
+    for (const [nombre, dias] of [['Contado', 0], ['15 días', 15], ['30 días', 30], ['45 días', 45], ['60 días', 60]]) {
+      await ejecutar('INSERT OR IGNORE INTO condiciones_pago (nombre, dias) VALUES (?,?)', [nombre, dias]);
+    }
+  }
+  const [{ t }] = await consultar('SELECT COUNT(*) AS t FROM tipos_cliente');
+  if (t === 0) for (const nombre of ['Consumidor final', 'Mayorista', 'Empresa']) await ejecutar('INSERT OR IGNORE INTO tipos_cliente (nombre) VALUES (?)', [nombre]);
+  const [{ c }] = await consultar('SELECT COUNT(*) AS c FROM cxc_conceptos');
+  if (c === 0) {
+    for (const [nombre, tipo] of [['Descuento comercial', 'descuento'], ['Descuento por pronto pago', 'descuento'], ['Devolución de mercancía', 'devolucion'], ['Error de facturación', 'devolucion'],
+      ['Interés por mora', 'cargo'], ['Gastos de cobranza', 'cargo'], ['Cheque devuelto', 'cargo']]) {
+      await ejecutar('INSERT OR IGNORE INTO cxc_conceptos (nombre, tipo) VALUES (?,?)', [nombre, tipo]);
+    }
+  }
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('cxc_sembrado', '1')");
+}
+
 async function sembrarTiposPago() {
   const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'tipos_pago_sembrados'");
   if (marca) return;
@@ -291,7 +317,7 @@ export async function registrarVenta({ cliente_id = null, items, servicios = [],
     const [cc] = await consultar('SELECT nombre, condicion, dias_credito FROM clientes WHERE id = ?', [cliente_id]);
     if (!cc) throw new Error('El cliente no existe.');
     if (cc.condicion !== 'credito' || cc.dias_credito == null) {
-      throw new Error(`${cc.nombre} no tiene crédito autorizado. Contabilidad debe configurarlo en su perfil de Clientes (condición Crédito y días permitidos); mientras tanto la venta debe ser de contado.`);
+      throw new Error(`${cc.nombre} no tiene crédito autorizado. Contabilidad debe configurarlo en CxC → Cliente (condición de pago y límite); mientras tanto la venta debe ser de contado.`);
     }
     dias_credito = cc.dias_credito; // los días permitidos los fija el perfil del cliente
     // Límite de crédito del cliente: lo que ya debe más lo que queda pendiente de esta venta no puede pasarlo

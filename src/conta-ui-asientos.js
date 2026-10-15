@@ -10,7 +10,7 @@ import { campo, numero, fechaInput, texto, selectCuentas, tabla, renglon, vacio,
 
 const ORIGENES = {
   manual: 'Manual', apertura: 'Apertura', cierre: 'Cierre', venta: 'Venta', cobro: 'Cobro', compra: 'Compra', pagocompra: 'Pago a proveedor',
-  gasto: 'Gasto', activo: 'Activo fijo', baja: 'Baja de activo', revalorizacion: 'Revalorización', depreciacion: 'Depreciación', nomina: 'Nómina', pagonomina: 'Pago de nómina', banco: 'Banco',
+  gasto: 'Gasto', aplicacion: 'Anticipo aplicado', anticipo: 'Anticipo de cliente', notacredito: 'Nota de crédito', notadebito: 'Nota de débito', cajachica: 'Caja chica', activo: 'Activo fijo', baja: 'Baja de activo', revalorizacion: 'Revalorización', depreciacion: 'Depreciación', nomina: 'Nómina', pagonomina: 'Pago de nómina', banco: 'Banco',
 };
 
 // ---------------- Asientos ----------------
