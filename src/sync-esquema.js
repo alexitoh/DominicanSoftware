@@ -77,6 +77,10 @@ export const TABLAS = [
     t: 'conceptos_conta', cols: ['nombre', 'tipo', 'categoria_gasto', 'notas', 'activo'],
     refs: [{ col: 'cuenta_debe_id', tabla: 'cuentas_contables' }, { col: 'cuenta_haber_id', tabla: 'cuentas_contables' }], unicos: ['nombre'],
   },
+  { t: 'monedas', cols: ['codigo', 'nombre', 'simbolo', 'activa'], unicos: ['codigo'] },
+  { t: 'tasas_cambio', cols: ['clave', 'fecha', 'tasa'], refs: [{ col: 'moneda_id', tabla: 'monedas' }], unicos: ['clave'] },
+  { t: 'partidas_ext', cols: ['descripcion', 'monto_ext', 'tasa_libro', 'fecha', 'notas', 'activa'], refs: [{ col: 'moneda_id', tabla: 'monedas' }, { col: 'cuenta_id', tabla: 'cuentas_contables' }] },
+  { t: 'dif_cambiaria', cols: ['fecha', 'tasa_anterior', 'tasa_nueva', 'monto', 'asiento_numero'], refs: [{ col: 'partida_id', tabla: 'partidas_ext' }] },
   { t: 'declaraciones', cols: ['clave', 'periodo', 'formulario', 'fecha_presentada', 'referencia', 'notas'], unicos: ['clave'] },
   {
     t: 'gastos', cols: ['fecha', 'concepto', 'categoria', 'monto', 'metodo', 'nota', 'itbis', 'ncf', 'documento', 'beneficiario', 'estado', 'origen'],

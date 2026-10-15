@@ -338,6 +338,43 @@ CREATE TABLE IF NOT EXISTS cxc_docs (
 );
 CREATE INDEX IF NOT EXISTS idx_cxc_docs_cliente ON cxc_docs(cliente_id);
 
+-- Finanzas: monedas, tasas de cambio y partidas en moneda extranjera (para la diferencia cambiaria)
+CREATE TABLE IF NOT EXISTS monedas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo TEXT NOT NULL UNIQUE,            -- USD, EUR…
+  nombre TEXT NOT NULL,
+  simbolo TEXT,
+  activa INTEGER NOT NULL DEFAULT 1
+);
+-- tasa = cuántos pesos (moneda base) vale una unidad de la moneda en esa fecha
+CREATE TABLE IF NOT EXISTS tasas_cambio (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  clave TEXT NOT NULL UNIQUE,             -- CODIGO:AAAA-MM-DD
+  moneda_id INTEGER NOT NULL REFERENCES monedas(id),
+  fecha TEXT NOT NULL,
+  tasa REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS partidas_ext (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  descripcion TEXT NOT NULL,
+  moneda_id INTEGER NOT NULL REFERENCES monedas(id),
+  cuenta_id INTEGER NOT NULL REFERENCES cuentas_contables(id),
+  monto_ext REAL NOT NULL,                -- monto en la moneda extranjera
+  tasa_libro REAL NOT NULL,               -- tasa con la que está registrada hoy en los libros
+  fecha TEXT NOT NULL,
+  notas TEXT,
+  activa INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS dif_cambiaria (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  partida_id INTEGER NOT NULL REFERENCES partidas_ext(id),
+  fecha TEXT NOT NULL,
+  tasa_anterior REAL NOT NULL,
+  tasa_nueva REAL NOT NULL,
+  monto REAL NOT NULL,                    -- positivo = ganancia, negativo = pérdida
+  asiento_numero TEXT
+);
+
 CREATE TABLE IF NOT EXISTS gastos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   caja_id INTEGER REFERENCES caja(id),
@@ -743,6 +780,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('4103', 'Descuentos y devoluciones en ventas', 'ingreso', 0, 'desc_ventas', NULL, 1),
   ('4201', 'Otros ingresos', 'ingreso', 0, 'otros_ingresos', NULL, 1),
   ('4202', 'Cargos y recargos a clientes', 'ingreso', 0, 'cargos_clientes', NULL, 1),
+  ('4203', 'Ganancia por diferencia cambiaria', 'ingreso', 0, 'ganancia_cambiaria', NULL, 1),
   ('5', 'COSTOS', 'costo', 1, NULL, NULL, 1),
   ('5101', 'Costo de ventas', 'costo', 0, 'costo_ventas', NULL, 1),
   ('6', 'GASTOS', 'gasto', 1, NULL, NULL, 1),
@@ -755,6 +793,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('6205', 'Mantenimiento y reparaciones', 'gasto', 0, NULL, 'Mantenimiento', 1),
   ('6206', 'Depreciación', 'gasto', 0, 'gasto_depreciacion', NULL, 1),
   ('6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario', NULL, 1),
+  ('6208', 'Pérdida por diferencia cambiaria', 'gasto', 0, 'perdida_cambiaria', NULL, 1),
   ('6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros', 1);
 
 

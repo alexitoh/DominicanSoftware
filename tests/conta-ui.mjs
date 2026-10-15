@@ -69,14 +69,14 @@ await cd.guardarPresupuesto(2026, C['6201'].id, Array(12).fill(1000));
 const raiz = new Nodo('div');
 await vistaContabilidad(raiz); await pausa();
 const tabs = raiz.todos((x) => x.tag === 'button' && x.attrs.role === 'tab');
-assert.equal(tabs.length, 15);
+assert.equal(tabs.length, 14);
 for (const t of tabs) {
   await pulsar(t);
   const cuerpo = textoDe(raiz);
   assert.ok(!cuerpo.includes('No se pudo cargar'), `${t.texto}: ${cuerpo.slice(0, 200)}`);
   assert.ok(cuerpo.length > 20, `${t.texto} está vacía`);
 }
-ok('las 15 pestañas se pintan sin errores');
+ok('las 14 pestañas se pintan sin errores');
 
 // Reportes: recorre todos los tipos
 const rr = new Nodo('div');
@@ -281,6 +281,31 @@ await verSeccion('Condición de Pago'); await pulsar(boton(rcx, 'Nueva condició
 await verSeccion('Descuento y Devolución'); await pulsar(boton(rcx, 'Nuevo motivo')); assert.ok(textoDe(document.body).includes('Porcentaje sugerido')); limpiarHojas();
 await verSeccion('Recibo'); assert.ok(textoDe(rcx).includes('Nuevo recibo'));
 ok('reportes CxC y dinámico, y los catálogos (tipo de cliente, condición, motivos) abren sin errores');
+
+// Finanzas
+limpiarHojas();
+const fd = await import('../src/finanzas-db.js');
+const { vistaFinanzas } = await import('../src/finanzas.js');
+const [usd] = (await fd.listarMonedas()).filter((m) => m.codigo === 'USD');
+await fd.guardarTasa({ moneda_id: usd.id, fecha: '2026-01-05', tasa: 58 });
+await fd.guardarPartida({ descripcion: 'Banco en dólares', moneda_id: usd.id, cuenta_id: C['1102'].id, monto_ext: 1000, tasa_libro: 58, fecha: '2026-01-05' });
+await fd.guardarTasa({ moneda_id: usd.id, fecha: '2026-02-01', tasa: 60 });
+const rf = new Nodo('div'); await vistaFinanzas(rf); await pausa();
+const tabsF = rf.todos((x) => x.tag === 'button' && x.attrs.role === 'tab');
+assert.equal(tabsF.length, 9);
+for (const t of tabsF) {
+  await pulsar(t);
+  const cuerpo = textoDe(rf);
+  assert.ok(!cuerpo.includes('No se pudo cargar') && !cuerpo.includes('NaN') && !cuerpo.includes('undefined'), `Finanzas ${t.texto}: ${cuerpo.slice(0, 300)}`);
+  assert.ok(cuerpo.length > 20, `Finanzas ${t.texto} vacía`);
+}
+await pulsar(tabsF.find((t) => t.texto.trim() === 'Diferencia Cambiaria'));
+assert.ok(textoDe(rf).includes('Banco en dólares') && textoDe(rf).includes('Contabilizar diferencia'));
+await pulsar(tabsF.find((t) => t.texto.trim() === 'Conversión Moneda'));
+assert.ok(textoDe(rf).includes('USD') && textoDe(rf).includes('Convertidor'));
+await pulsar(tabsF.find((t) => t.texto.trim() === 'Análisis Financiero'));
+assert.ok(textoDe(rf).includes('Razón corriente') || textoDe(rf).includes('Capital de trabajo'));
+ok('Finanzas: las 9 secciones se pintan sin errores (análisis, balance, resultados, flujo, capital, monedas, diferencia cambiaria, presupuesto, dinámico)');
 
 // Facturación: tipo de comprobante y consulta del RNC
 limpiarHojas();

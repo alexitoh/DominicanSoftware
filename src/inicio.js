@@ -28,6 +28,8 @@ export const MODULOS = [
     icono: svg('<path d="M4 4v16h16"/><rect x="8" y="11" width="3" height="6"/><rect x="13" y="7" width="3" height="10"/><rect x="18" y="13" width="2" height="4"/>') },
   { id: 'contabilidad', titulo: 'Contabilidad', color: '#1F6F5C',
     icono: svg('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 11h2M12 11h2M8 15h2M12 15h2M16 11v4"/>') },
+  { id: 'finanzas', titulo: 'Finanzas', color: '#B7791F',
+    icono: svg('<path d="M4 19V5"/><path d="M4 19h16"/><path d="M7 15l4-5 3 3 5-7"/><path d="M16 6h3v3"/>') },
   { id: 'usuarios', titulo: 'Usuarios', color: '#3D4F8A',
     icono: svg('<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.6-3.8 3.4-6 7-6s6.4 2.2 7 6"/><path d="M17.5 3.5l.7 1.4 1.5.2-1.1 1 .3 1.5-1.4-.8-1.4.8.3-1.5-1.1-1 1.5-.2z"/>') },
   { id: 'ajustes', titulo: 'Ajustes', color: '#5B6B78',
@@ -45,7 +47,7 @@ const PALABRAS = {
   ventas: 'vender factura facturar cotizacion cotizaciones pos cobrar', productos: 'articulos catalogo precio precios codigo',
   inventario: 'stock existencia existencias almacen ajuste', compras: 'comprar suplidor mercancia', caja: 'efectivo cierre apertura gastos turno',
   clientes: 'direcciones contactos telefono', proveedores: 'suplidores', garantias: 'garantia',
-  reportes: 'informes estadisticas ganancias', contabilidad: 'cxc cxp cuentas por cobrar pagar recibo recibos nota credito debito anticipo anticipos condicion de pago tipo de cliente abonos cobrar gastos periodos fiscal diarios deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
+  reportes: 'informes estadisticas ganancias', contabilidad: 'cxc cxp cuentas por cobrar pagar recibo recibos nota credito debito anticipo anticipos condicion de pago tipo de cliente abonos cobrar gastos periodos fiscal diarios deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', finanzas: 'analisis financiero ratios razones balance general estado de resultados flujo de efectivo variacion de capital conversion moneda dolar euro tasa de cambio diferencia cambiaria presupuesto reporte dinamico', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
 };
 const plano = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 

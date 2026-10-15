@@ -42,7 +42,7 @@ async function vistaResumen(raiz) {
     h('p', { class: 'ayuda', style: 'padding:0 1rem 1rem' }, 'Ventas, cobros, compras, pagos, gastos, activos, nómina y bancos generan sus asientos solos. Para otros movimientos usa Asientos → Nuevo asiento.'));
 }
 
-async function vistaPresupuesto(raiz) {
+export async function vistaPresupuesto(raiz) {
   const est = { anio: Number(fechaHoy().slice(0, 4)) };
   const cont = h('div');
   const anio = h('input', { class: 'campo', type: 'number', value: est.anio, min: 2000, max: 2100, 'aria-label': 'Año', onChange: (e) => { est.anio = Number(e.target.value); pintar(); } });
@@ -122,7 +122,7 @@ async function vistaAjustes(raiz) {
 
 const TABS = [
   ['resumen', 'Resumen', vistaResumen], ['asientos', 'Asientos', vistaDiarios], ['cuentas', 'Cuentas', vistaCuentas], ['bancos', 'Bancos', vistaBancos], ['cxc', 'CXC', vistaCxc], ['cxp', 'CXP', vistaCxp], ['cuadre', 'Cuadre de caja', vistaCuadreCaja], ['cajachica', 'Caja chica', vistaCajaChica], ['gastos', 'Gastos', vistaGastos],
-  ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['periodos', 'Períodos', vistaPeriodos], ['presupuesto', 'Presupuesto', vistaPresupuesto], ['ajustes', 'Ajustes', vistaAjustes],
+  ['activos', 'Activos fijos', vistaActivos], ['nomina', 'Nómina', vistaNomina], ['reportes', 'Reportes', vistaReportes], ['periodos', 'Períodos', vistaPeriodos], ['ajustes', 'Ajustes', vistaAjustes],
 ];
 let tabActual = 'resumen';
 // Abre Contabilidad directamente en una pestaña (por ejemplo, desde un aviso del inicio)

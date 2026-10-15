@@ -587,5 +587,69 @@ await assert.rejects(() => cx.crearNota({ tipo: 'credito', cliente_id: cid, vent
 ok('CxC: tipos de cliente, condiciones, notas de crédito y débito, anticipos (aplicar/anular), reportes y contabilidad cuadrando');
 }
 
+// ---- Finanzas: razones, comparativos, variación del capital, monedas y diferencia cambiaria, tabla dinámica ----
+{
+const fm = await import('../src/finanzas-motor.js');
+const fd = await import('../src/finanzas-db.js');
+const libF = await cd.libroContable();
+const hoyF = cd.fechaHoy();
+// monedas y tasas
+assert.deepEqual((await fd.listarMonedas()).map((m) => m.codigo), ['EUR', 'USD']);
+await assert.rejects(() => fd.guardarMoneda({ codigo: 'DOP', nombre: 'Peso' }), /moneda base/);
+await assert.rejects(() => fd.guardarMoneda({ codigo: 'usd', nombre: 'Otra' }), /Ya existe/);
+const usd = (await fd.listarMonedas()).find((m) => m.codigo === 'USD'); const eur = (await fd.listarMonedas()).find((m) => m.codigo === 'EUR');
+await fd.guardarTasa({ moneda_id: usd.id, fecha: '2020-01-01', tasa: 58 });
+await fd.guardarTasa({ moneda_id: usd.id, fecha: '2020-06-01', tasa: 60 });
+await fd.guardarTasa({ moneda_id: usd.id, fecha: '2020-06-01', tasa: 60.5 }); // misma fecha: reemplaza
+assert.equal((await fd.listarTasas(usd.id)).length, 2);
+assert.equal((await fd.tasaEn(usd.id, '2020-03-01')).tasa, 58);
+assert.equal((await fd.tasaEn(usd.id, '2019-01-01')), null);
+assert.equal((await fd.convertirMoneda({ monto: 100, de: usd.id, a: 'BASE', fecha: '2020-03-01' })).resultado, 5800);
+assert.equal((await fd.convertirMoneda({ monto: 6050, de: 'BASE', a: usd.id, fecha: '2020-07-01' })).resultado, 100);
+await assert.rejects(() => fd.convertirMoneda({ monto: 1, de: eur.id, a: 'BASE' }), /No hay tasa de EUR/);
+await assert.rejects(() => fd.guardarTasa({ moneda_id: usd.id, fecha: '2020-01-02', tasa: 0 }), /tasa/);
+// diferencia cambiaria
+const prestamo = (await cd.listarCuentas()).find((c) => c.codigo === '2501');
+await assert.rejects(() => fd.guardarPartida({ descripcion: 'x', moneda_id: usd.id, cuenta_id: C['1201'].id, monto_ext: 1, tasa_libro: 58 }), /facturas del sistema/);
+await assert.rejects(() => fd.guardarPartida({ descripcion: 'x', moneda_id: usd.id, cuenta_id: C['4101'].id, monto_ext: 1, tasa_libro: 58 }), /activo o de pasivo/);
+await fd.guardarPartida({ descripcion: 'Cuenta en dólares', moneda_id: usd.id, cuenta_id: C['1110'].id, monto_ext: 1000, tasa_libro: 58, fecha: '2020-01-01' });
+await fd.guardarPartida({ descripcion: 'Préstamo en dólares', moneda_id: usd.id, cuenta_id: prestamo.id, monto_ext: 500, tasa_libro: 58, fecha: '2020-01-01' });
+const rv = await fd.revaluar(hoyF);
+assert.equal(rv.ganancia, 2500, 'activo: 1000 × (60.5 − 58)'); assert.equal(rv.perdida, 1250, 'pasivo: 500 × 2.5');
+const antes = r2((await cd.libroContable()).lineas.reduce((s, l) => s + l.debe - l.haber, 0));
+const ctb = await fd.contabilizarDiferencia(hoyF);
+assert.match(ctb.numero, /^A-/); assert.equal(ctb.partidas, 2);
+const libG = await cd.libroContable();
+assert.equal(r2(libG.lineas.reduce((s, l) => s + l.debe - l.haber, 0)), antes, 'el asiento cuadra');
+const sG = (c) => r2(libG.lineas.filter((l) => l.cuenta_id === C[c].id).reduce((s, l) => s + l.debe - l.haber, 0));
+assert.equal(sG('4203'), -2500); assert.equal(sG('6208'), 1250);
+await assert.rejects(() => fd.contabilizarDiferencia(hoyF), /No hay diferencias/);
+assert.ok((await fd.listarPartidas()).every((p) => p.tasa_libro === 60.5));
+assert.equal((await fd.historialDiferencias()).length, 2);
+const idP0 = (await fd.listarPartidas())[0].id;
+await assert.rejects(() => fd.eliminarPartida(idP0), /ya tiene diferencias/);
+// razones, comparativos, variación del capital
+const an = fm.analisisFinanciero(libF.cuentas, libF.lineas, '2000-01-01', hoyF);
+for (const [k, v] of Object.entries(an.valores)) assert.ok(v == null || Number.isFinite(v), `razón ${k}`);
+assert.ok(Number.isFinite(an.valores.corriente) && an.base.pasivosCorrientes === 108 && an.valores.capitalTrabajo === r2(an.base.activosCorrientes - an.base.pasivosCorrientes));
+assert.equal(fm.RATIOS.length, Object.keys(an.valores).length);
+assert.deepEqual(fm.periodoAnterior('2026-03-01', '2026-03-31'), { desde: '2026-01-29', hasta: '2026-02-28' });
+assert.deepEqual(fm.mismoPeriodoAnioAnterior('2024-02-29', '2024-03-31'), { desde: '2023-02-28', hasta: '2023-03-31' });
+const bc = fm.balanceComparativo(libG.cuentas, libG.lineas, hoyF, '2020-12-31');
+assert.equal(bc.total.cuadra, true); assert.ok(bc.anterior);
+const rc = fm.resultadosComparativo(libG.cuentas, libG.lineas, '2000-01-01', hoyF, fm.periodoAnterior('2000-01-01', hoyF));
+assert.equal(rc.actual.utilidadNeta, cm.estadoResultados(libG.cuentas, libG.lineas, '2000-01-01', hoyF).utilidadNeta);
+const pm = fm.resultadosPorMes(libG.cuentas, libG.lineas, `${hoyF.slice(0, 4)}-01-01`, hoyF);
+assert.equal(pm.sumas.utilidad, cm.estadoResultados(libG.cuentas, libG.lineas, `${hoyF.slice(0, 4)}-01-01`, hoyF).utilidadNeta, 'por mes suma lo mismo que el período completo');
+const vc = fm.variacionCapital(libG.cuentas, libG.lineas, '2000-01-01', hoyF);
+assert.equal(vc.inicial, 0); assert.equal(r2(vc.inicial + vc.filas.reduce((s, f) => s + f.monto, 0)), vc.final);
+assert.equal(vc.final, cm.balanceGeneral(libG.cuentas, libG.lineas, hoyF).totalPatrimonio);
+const td = fm.tablaDinamicaLibro(libG.lineas, libG.cuentas, { desde: '2000-01-01', hasta: hoyF, tipos: ['ingreso'], filas: 'cuenta', columnas: 'mes' });
+assert.equal(td.total, cm.estadoResultados(libG.cuentas, libG.lineas, '2000-01-01', hoyF).totalIngresos);
+assert.equal(fm.tablaDinamicaLibro(libG.lineas, libG.cuentas, { filas: 'origen', columnas: 'tipo', medida: 'debe' }).filas.length >= 3, true);
+assert.throws(() => fm.tablaDinamicaLibro(libG.lineas, libG.cuentas, { filas: 'x' }), /no válida/);
+ok('Finanzas: razones, balance y resultados comparativos, por mes, variación del capital, monedas, conversión, diferencia cambiaria y tabla dinámica');
+}
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

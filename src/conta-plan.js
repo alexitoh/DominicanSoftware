@@ -17,9 +17,9 @@ export const ROLES = {
   cxp: 'Cuentas por pagar', itbis_pagar: 'ITBIS cobrado (por pagar)', tss_pagar: 'TSS por pagar', isr_pagar: 'ISR retenido por pagar',
   sueldos_pagar: 'Sueldos por pagar', otros_pagar: 'Otras retenciones por pagar', anticipos_clientes: 'Anticipos de clientes',
   capital: 'Capital social', superavit_reval: 'Superávit por revalorización', utilidades_acum: 'Utilidades acumuladas', utilidad_ejercicio: 'Utilidad del ejercicio',
-  ventas: 'Ventas de mercancía', servicios: 'Ingresos por servicios', desc_ventas: 'Descuentos y devoluciones en ventas', otros_ingresos: 'Otros ingresos', cargos_clientes: 'Cargos y recargos a clientes',
+  ventas: 'Ventas de mercancía', servicios: 'Ingresos por servicios', desc_ventas: 'Descuentos y devoluciones en ventas', otros_ingresos: 'Otros ingresos', cargos_clientes: 'Cargos y recargos a clientes', ganancia_cambiaria: 'Ganancia por diferencia cambiaria',
   costo_ventas: 'Costo de ventas', gasto_sueldos: 'Sueldos y salarios', gasto_tss: 'Aportes patronales',
-  gasto_depreciacion: 'Gasto de depreciación', gasto_bancario: 'Comisiones bancarias', gasto_otros: 'Otros gastos',
+  gasto_depreciacion: 'Gasto de depreciación', gasto_bancario: 'Comisiones bancarias', perdida_cambiaria: 'Pérdida por diferencia cambiaria', gasto_otros: 'Otros gastos',
 };
 
 // [código, nombre, tipo, es título (no admite movimientos), rol, categoría de gasto de Caja]
@@ -58,6 +58,7 @@ export const PLAN_BASE = [
   ['4103', 'Descuentos y devoluciones en ventas', 'ingreso', 0, 'desc_ventas'],
   ['4201', 'Otros ingresos', 'ingreso', 0, 'otros_ingresos'],
   ['4202', 'Cargos y recargos a clientes', 'ingreso', 0, 'cargos_clientes'],
+  ['4203', 'Ganancia por diferencia cambiaria', 'ingreso', 0, 'ganancia_cambiaria'],
   ['5', 'COSTOS', 'costo', 1],
   ['5101', 'Costo de ventas', 'costo', 0, 'costo_ventas'],
   ['6', 'GASTOS', 'gasto', 1],
@@ -70,6 +71,7 @@ export const PLAN_BASE = [
   ['6205', 'Mantenimiento y reparaciones', 'gasto', 0, null, 'Mantenimiento'],
   ['6206', 'Depreciación', 'gasto', 0, 'gasto_depreciacion'],
   ['6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario'],
+  ['6208', 'Pérdida por diferencia cambiaria', 'gasto', 0, 'perdida_cambiaria'],
   ['6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros'],
 ];
 

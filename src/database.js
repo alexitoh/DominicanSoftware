@@ -116,6 +116,7 @@ export async function initDB() {
   await sembrarTiposActivo();
   await sembrarTiposPago();
   await sembrarCxc();
+  await sembrarMonedas();
   await guardarWeb();
   return db;
 }
@@ -173,6 +174,15 @@ async function sembrarCxc() {
     }
   }
   await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('cxc_sembrado', '1')");
+}
+
+// Monedas de ejemplo (sin tasas: las tasas las escribe el negocio), UNA sola vez
+async function sembrarMonedas() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'monedas_sembradas'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM monedas');
+  if (n === 0) for (const [c, nombre, sim] of [['USD', 'Dólar estadounidense', 'US$'], ['EUR', 'Euro', '€']]) await ejecutar('INSERT OR IGNORE INTO monedas (codigo, nombre, simbolo) VALUES (?,?,?)', [c, nombre, sim]);
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('monedas_sembradas', '1')");
 }
 
 async function sembrarTiposPago() {

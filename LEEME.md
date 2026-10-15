@@ -277,3 +277,14 @@ Límites: las notas de crédito y débito todavía no salen en el 607 de la DGII
 - **Períodos** (pestaña nueva): **Período Contable** (cierra/reabre mes a mes, cierra hasta un mes y cierra el ejercicio) y **Período Fiscal** (control de 606, 607, 608 e IT-1 por mes, con estado presentada / por presentar / vencida y mes de inicio del año fiscal). Los vencimientos (día 15 y día 20 del mes siguiente) son de referencia: confírmalos con la DGII o tu contador. El sistema no envía nada a la DGII.
 - **Cuentas:** buscador y filtro por tipo. **Estado de resultados:** % sobre ingresos y comparación con el período anterior de igual duración.
 
+
+## Finanzas (módulo propio en el menú principal)
+Nueve secciones, todas calculadas desde el libro contable (permiso "Finanzas"):
+- **Análisis Financiero**: 12 indicadores (capital de trabajo, razón corriente y ácida, endeudamiento, márgenes, ROA/ROE, días de cobro/inventario/pago) contra el período anterior. Las etiquetas Bien/Regular/Atención son referencias generales, no un diagnóstico.
+- **Balance General**: a una fecha, con % de activos y comparación (cierre del año o mes anterior, u otra fecha).
+- **Estado de Resultados**: resumen con % de ingresos y comparación (período anterior o mismo período del año pasado), o vista mes por mes.
+- **Flujo Efectivo**: método directo (caja, bancos y caja chica) por actividad.
+- **Variación Capital**: patrimonio inicial, aportes, utilidad, retiros y patrimonio final.
+- **Conversión Moneda**: monedas (USD y EUR vienen creadas, sin tasa), tasas por fecha y convertidor.
+- **Diferencia Cambiaria**: partidas en moneda extranjera (cuenta en dólares, préstamo…). "Contabilizar" crea un solo asiento con ganancia/pérdida (4203 / 6208) y actualiza la tasa de cada partida. No incluye CxC/CxP.
+- **Presupuesto**: se movió desde Contabilidad. **Reporte Dinámico**: tabla dinámica del libro (filas, columnas, medida, tipos y fechas) con exportación a CSV.

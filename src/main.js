@@ -24,6 +24,7 @@ import { vistaCaja } from './caja.js';
 import { abrirImpresoras } from './impresion.js';
 import { vistaReportes } from './reportes.js';
 import { vistaContabilidad } from './contabilidad.js';
+import { vistaFinanzas } from './finanzas.js';
 import { vistaGarantias } from './garantias.js';
 import { crearVistaInicio, MODULOS, INICIO, icono, buscadorModulos } from './inicio.js';
 
@@ -50,6 +51,7 @@ const vistas = {
   garantias: vistaGarantias,
   reportes: vistaReportes,
   contabilidad: vistaContabilidad,
+  finanzas: vistaFinanzas,
   clientes: vistaClientes,
   proveedores: vistaProveedores,
   usuarios: vistaUsuarios,
