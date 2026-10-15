@@ -365,10 +365,6 @@ CREATE INDEX IF NOT EXISTS idx_detalle_venta ON venta_detalle(venta_id);
 CREATE INDEX IF NOT EXISTS idx_venta_servicios ON venta_servicios(venta_id);
 CREATE INDEX IF NOT EXISTS idx_mov_producto ON movimientos_inventario(producto_id);
 
-INSERT OR IGNORE INTO categorias (nombre) VALUES
-  ('Bajos / Subwoofers'), ('Bocinas'), ('Amplificadores'),
-  ('Pantallas / Radios'), ('Cables y accesorios'), ('Otros');
-
 INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('negocio_nombre', 'Mi Car Audio'),
   ('negocio_telefono', ''),

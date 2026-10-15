@@ -6,7 +6,7 @@ import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { defineCustomElements as jeepSqlite } from 'jeep-sqlite/loader';
 import schema from './schema.sql?raw'; // Vite: importa el archivo como texto
-import { prepararBase } from './sync-esquema.js';
+import { prepararBase, CATEGORIAS_BASE } from './sync-esquema.js';
 import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { limpiarDocumento } from './fiscal.js';
 
@@ -85,8 +85,49 @@ export async function initDB() {
   const [{ n }] = await consultar("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync1_%'");
   syncListo = n >= 60; // 3 por tabla sincronizada + 1 de usuarios
   if (!syncListo) console.warn(`Sincronización no disponible: solo ${n} triggers creados`);
+  await sembrarCategorias();
   await guardarWeb();
   return db;
+}
+
+// Las categorías son del negocio (se crean, renombran y borran desde Productos). Las de ejemplo se siembran UNA sola vez,
+// y solo si la base está vacía; si no, una categoría borrada reaparecería en cada arranque.
+async function sembrarCategorias() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'categorias_sembradas'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM categorias');
+  if (n === 0) {
+    for (const c of CATEGORIAS_BASE) await ejecutar('INSERT OR IGNORE INTO categorias (nombre) VALUES (?)', [c]);
+  }
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('categorias_sembradas', '1')");
+}
+
+export async function listarCategorias() {
+  return consultar(`SELECT k.id, k.nombre, (SELECT COUNT(*) FROM productos p WHERE p.categoria_id = k.id AND p.activo = 1) AS productos
+                      FROM categorias k ORDER BY k.nombre COLLATE NOCASE`);
+}
+export async function crearCategoria(nombre) {
+  const n = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!n) throw new Error('Escribe el nombre de la categoría.');
+  const [ya] = await consultar('SELECT id FROM categorias WHERE lower(nombre) = lower(?)', [n]);
+  if (ya) throw new Error('Esa categoría ya existe.');
+  await ejecutar('INSERT INTO categorias (nombre) VALUES (?)', [n]);
+  const [c] = await consultar('SELECT id FROM categorias WHERE nombre = ?', [n]);
+  return c.id;
+}
+export async function renombrarCategoria(id, nombre) {
+  const n = String(nombre || '').trim().replace(/\s+/g, ' ');
+  if (!n) throw new Error('Escribe el nombre de la categoría.');
+  const [ya] = await consultar('SELECT id FROM categorias WHERE lower(nombre) = lower(?) AND id <> ?', [n, id]);
+  if (ya) throw new Error('Ya existe otra categoría con ese nombre.');
+  await ejecutar('UPDATE categorias SET nombre = ? WHERE id = ?', [n, id]);
+}
+// Los productos de la categoría borrada quedan "Sin categoría"
+export async function eliminarCategoria(id) {
+  await transaccion([
+    { statement: 'UPDATE productos SET categoria_id = NULL WHERE categoria_id = ?', values: [id] },
+    { statement: 'DELETE FROM categorias WHERE id = ?', values: [id] },
+  ]);
 }
 
 // false si esta versión del motor de SQLite no pudo crear los triggers (entonces solo se trabaja en local)

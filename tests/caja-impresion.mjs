@@ -145,6 +145,24 @@ const cerrar = rq.todos((x) => x.tag === 'button' && x.texto.includes('Cerrar ca
 assert.ok(cerrar);
 ok('el cajero no ve el cuadre ni el cierre; la vista de Contabilidad muestra el cuadre y el botón de cerrar caja');
 
+// 7. Categorías del negocio: crear, renombrar y eliminar (sembradas una sola vez)
+const cats0 = await bd.listarCategorias();
+assert.equal(cats0.length, 6, 'las 6 de ejemplo se siembran en una base nueva');
+const idNueva = await bd.crearCategoria('  Luces   LED ');
+await assert.rejects(() => bd.crearCategoria('luces led'), /ya existe/);
+await assert.rejects(() => bd.crearCategoria('  '), /Escribe/);
+await bd.renombrarCategoria(idNueva, 'Luces');
+await bd.ejecutar('UPDATE productos SET categoria_id = ? WHERE id = ?', [idNueva, prod.id]);
+const [conProd] = (await bd.listarCategorias()).filter((c) => c.id === idNueva);
+assert.equal(conProd.nombre, 'Luces'); assert.equal(conProd.productos, 1);
+await bd.eliminarCategoria(idNueva);
+assert.equal((await bd.listarCategorias()).length, 6);
+assert.equal((await bd.consultar('SELECT categoria_id c FROM productos WHERE id = ?', [prod.id]))[0].c, null, 'el producto queda sin categoría');
+const baja = (await bd.listarCategorias()).find((c) => c.nombre === 'Bocinas');
+await bd.eliminarCategoria(baja.id);
+assert.equal((await bd.listarCategorias()).length, 5, 'una categoría de ejemplo también se puede eliminar');
+ok('las categorías se crean, renombran y eliminan; sus productos quedan sin categoría');
+
 if (process.env.VOLCAR_IMPRESIONES) { const fs = await import('node:fs'); impresiones.forEach((h, i) => fs.writeFileSync(`${process.env.VOLCAR_IMPRESIONES}/impresion-${i}.html`, h)); }
 console.log(`\n${n} comprobaciones correctas`);
 process.exit(0);

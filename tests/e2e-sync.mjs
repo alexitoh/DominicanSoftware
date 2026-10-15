@@ -11,7 +11,7 @@ import { abrirBase, siguienteVersion } from '../server/db.js';
 import { importarPadron } from '../server/dgii.js';
 import { crearCliente } from '../src/nube.js';
 import { crearMotor } from '../src/sync-nucleo.js';
-import { prepararBase } from '../src/sync-esquema.js';
+import { prepararBase, CATEGORIAS_BASE } from '../src/sync-esquema.js';
 
 const aqui = path.dirname(fileURLToPath(import.meta.url));
 const schema = fs.readFileSync(path.join(aqui, '../src/schema.sql'), 'utf8').replace(/--.*$/gm, '');
@@ -33,6 +33,7 @@ async function crearDispositivo(nombre) {
   for (const q of ['ALTER TABLE ventas ADD COLUMN usuario_id INTEGER', 'ALTER TABLE compras ADD COLUMN usuario_id INTEGER',
     'ALTER TABLE cotizaciones ADD COLUMN usuario_id INTEGER']) db.exec(q);
   await prepararBase(async (q) => { db.exec(q); });
+  for (const c of CATEGORIAS_BASE) db.prepare('INSERT INTO categorias (nombre) VALUES (?)').run(c); // lo que siembra initDB en una base nueva
   const consultar = async (sql, p = []) => db.prepare(sql).all(...p);
   const run = (sql, p = []) => db.prepare(sql).run(...p);
   const lote = async (sets) => {

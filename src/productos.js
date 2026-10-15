@@ -1,5 +1,5 @@
 // productos.js - lista, búsqueda y formulario de productos
-import { consultar, ejecutar, transaccion, precioDesde, margenProducto, anotar } from './database.js';
+import { consultar, ejecutar, transaccion, precioDesde, margenProducto, anotar, listarCategorias, crearCategoria, renombrarCategoria, eliminarCategoria } from './database.js';
 import { botonEscaner } from './escaner.js';
 import { h, hoja, toast, dinero, confirmar, medidor } from './ui.js';
 
@@ -43,6 +43,49 @@ export async function vistaProductos(raiz) {
       ...cats.map((c) => h('option', { value: c.id }, c.nombre)));
     selCat.value = filtro.cat;
     return cats;
+  }
+
+  // Crear, renombrar y borrar las categorías del negocio
+  function gestionarCategorias() {
+    const caja = h('div', { class: 'cuerpo' });
+    const error = h('p', { class: 'error', role: 'alert' });
+    const nueva = h('input', { class: 'campo', placeholder: 'Nueva categoría', 'aria-label': 'Nueva categoría', autocomplete: 'off' });
+    async function pintarCats() {
+      const cats = await listarCategorias();
+      caja.replaceChildren(
+        h('div', { class: 'buscador' }, nueva, h('button', { class: 'btn primario', onClick: agregar }, 'Agregar')),
+        error,
+        cats.length
+          ? h('div', { class: 'lista' }, cats.map((c) => h('div', { class: 'fila inventario' },
+              h('span', { class: 'datos' }, h('strong', {}, c.nombre), h('small', {}, `${c.productos} ${c.productos === 1 ? 'producto' : 'productos'}`)),
+              h('button', { class: 'btn', onClick: () => renombrar(c) }, 'Renombrar'),
+              h('button', { class: 'btn peligro', onClick: () => borrar(c) }, 'Eliminar'))))
+          : h('p', { class: 'ayuda' }, 'Todavía no tienes categorías. Crea la primera arriba.'));
+    }
+    async function agregar() {
+      error.textContent = '';
+      try { await crearCategoria(nueva.value); nueva.value = ''; await pintarCats(); await cargarCategorias(); }
+      catch (e) { error.textContent = e.message || String(e); }
+    }
+    async function renombrar(c) {
+      const campo = h('input', { class: 'campo', value: c.nombre, 'aria-label': 'Nombre de la categoría', autocomplete: 'off' });
+      const err = h('p', { class: 'error', role: 'alert' });
+      const cerrar = hoja('Renombrar categoría', h('div', { class: 'cuerpo' }, campo, err,
+        h('div', { class: 'acciones' }, h('button', { class: 'btn primario', onClick: async () => {
+          try { await renombrarCategoria(c.id, campo.value); cerrar(); await pintarCats(); await cargarCategorias(); await pintar(); }
+          catch (e) { err.textContent = e.message || String(e); }
+        } }, 'Guardar'))));
+    }
+    async function borrar(c) {
+      const ok = await confirmar('Eliminar categoría',
+        c.productos ? `"${c.nombre}" tiene ${c.productos} ${c.productos === 1 ? 'producto' : 'productos'}; quedarán "Sin categoría". ¿Eliminarla?` : `¿Eliminar la categoría "${c.nombre}"?`, 'Eliminar');
+      if (!ok) return;
+      await eliminarCategoria(c.id);
+      if (String(filtro.cat) === String(c.id)) filtro.cat = '';
+      await pintarCats(); await cargarCategorias(); await pintar();
+    }
+    hoja('Categorías de productos', caja);
+    pintarCats();
   }
 
   async function pintar() {
@@ -254,7 +297,9 @@ export async function vistaProductos(raiz) {
   raiz.replaceChildren(
     h('header', { class: 'barra' },
       h('h1', {}, 'Productos'),
-      h('button', { class: 'btn claro', onClick: () => formulario() }, 'Nuevo producto')),
+      h('div', { class: 'acciones' },
+        h('button', { class: 'btn claro', onClick: () => gestionarCategorias() }, 'Categorías'),
+        h('button', { class: 'btn claro', onClick: () => formulario() }, 'Nuevo producto'))),
     h('div', { class: 'filtros' }, h('div', { class: 'buscador' }, buscador, botonEscaner({
       titulo: 'Buscar por código', ayuda: 'Escanea el código del producto',
       alLeer: (c) => { buscador.value = c; buscador.dispatchEvent(new Event('input')); return false; },
