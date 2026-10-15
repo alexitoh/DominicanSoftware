@@ -200,6 +200,7 @@ CREATE TABLE IF NOT EXISTS proveedores (
   dias_credito INTEGER,
   tipo_doc TEXT,
   documento TEXT,
+  tipo_proveedor_id INTEGER REFERENCES tipos_proveedor(id),
   creado TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -236,6 +237,7 @@ CREATE TABLE IF NOT EXISTS pagos_compra (
   monto REAL NOT NULL,
   metodo TEXT NOT NULL DEFAULT 'efectivo',
   nota TEXT,
+  documento_id INTEGER,   -- nota de crédito/débito o anticipo de cxp_docs que originó este movimiento
   fecha TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -337,6 +339,93 @@ CREATE TABLE IF NOT EXISTS cxc_docs (
   usuario_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cxc_docs_cliente ON cxc_docs(cliente_id);
+
+-- CxP: tipos de suplidor, documentos (notas de crédito y débito, anticipos) y compras (solicitud, requisición de cotización, orden)
+CREATE TABLE IF NOT EXISTS tipos_proveedor (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL UNIQUE,
+  notas TEXT,
+  activo INTEGER NOT NULL DEFAULT 1
+);
+-- tipo: credito (baja lo que se le debe al suplidor) | debito (lo sube) | anticipo (dinero entregado por adelantado)
+CREATE TABLE IF NOT EXISTS cxp_docs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  tipo TEXT NOT NULL,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
+  compra_id INTEGER REFERENCES compras(id),
+  concepto TEXT,
+  monto REAL NOT NULL,
+  itbis REAL NOT NULL DEFAULT 0,
+  ncf TEXT,
+  metodo TEXT,                            -- solo anticipos: cómo se pagó
+  referencia TEXT,
+  notas TEXT,
+  estado TEXT NOT NULL DEFAULT 'vigente', -- vigente | anulado
+  anulado_motivo TEXT,
+  usuario_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cxp_docs_proveedor ON cxp_docs(proveedor_id);
+
+CREATE TABLE IF NOT EXISTS solicitudes_compra (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  solicitante TEXT,
+  estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | aprobada | rechazada | atendida | anulada
+  notas TEXT,
+  usuario_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS solicitud_detalle (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  solicitud_id INTEGER NOT NULL REFERENCES solicitudes_compra(id),
+  producto_id INTEGER NOT NULL REFERENCES productos(id),
+  cantidad INTEGER NOT NULL,
+  nota TEXT
+);
+CREATE TABLE IF NOT EXISTS requisiciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  estado TEXT NOT NULL DEFAULT 'abierta',   -- abierta | adjudicada | anulada
+  solicitud_id INTEGER REFERENCES solicitudes_compra(id),
+  notas TEXT,
+  usuario_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS requisicion_detalle (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requisicion_id INTEGER NOT NULL REFERENCES requisiciones(id),
+  producto_id INTEGER NOT NULL REFERENCES productos(id),
+  cantidad INTEGER NOT NULL
+);
+-- Precio que cada suplidor cotizó para cada línea de la requisición
+CREATE TABLE IF NOT EXISTS requisicion_cot (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requisicion_id INTEGER NOT NULL REFERENCES requisiciones(id),
+  proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
+  detalle_id INTEGER NOT NULL REFERENCES requisicion_detalle(id),
+  costo_unitario REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ordenes_compra (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  numero TEXT UNIQUE,
+  fecha TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
+  estado TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | recibida | anulada
+  entrega TEXT,                             -- fecha esperada de entrega
+  requisicion_id INTEGER REFERENCES requisiciones(id),
+  compra_id INTEGER REFERENCES compras(id), -- la factura del suplidor con la que se recibió
+  notas TEXT,
+  usuario_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS orden_detalle (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  orden_id INTEGER NOT NULL REFERENCES ordenes_compra(id),
+  producto_id INTEGER NOT NULL REFERENCES productos(id),
+  cantidad INTEGER NOT NULL,
+  costo_unitario REAL NOT NULL DEFAULT 0
+);
 
 -- Finanzas: monedas, tasas de cambio y partidas en moneda extranjera (para la diferencia cambiaria)
 CREATE TABLE IF NOT EXISTS monedas (
@@ -753,6 +842,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('1110', 'Bancos', 'activo', 0, 'banco', NULL, 1),
   ('1201', 'Cuentas por cobrar clientes', 'activo', 0, 'cxc', NULL, 1),
   ('1210', 'ITBIS pagado por adelantado', 'activo', 0, 'itbis_adelantado', NULL, 1),
+  ('1220', 'Anticipos a proveedores', 'activo', 0, 'anticipos_proveedores', NULL, 1),
   ('1301', 'Inventario de mercancía', 'activo', 0, 'inventario', NULL, 1),
   ('15', 'Activos no corrientes', 'activo', 1, NULL, NULL, 1),
   ('1501', 'Mobiliario y equipos', 'activo', 0, 'activo_fijo', NULL, 1),
@@ -783,6 +873,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('4203', 'Ganancia por diferencia cambiaria', 'ingreso', 0, 'ganancia_cambiaria', NULL, 1),
   ('5', 'COSTOS', 'costo', 1, NULL, NULL, 1),
   ('5101', 'Costo de ventas', 'costo', 0, 'costo_ventas', NULL, 1),
+  ('5102', 'Descuentos y devoluciones en compras', 'costo', 0, 'desc_compras', NULL, 1),
   ('6', 'GASTOS', 'gasto', 1, NULL, NULL, 1),
   ('6101', 'Sueldos y salarios', 'gasto', 0, 'gasto_sueldos', 'Sueldos', 1),
   ('6102', 'Aportes patronales (TSS, INFOTEP)', 'gasto', 0, 'gasto_tss', NULL, 1),
@@ -794,6 +885,7 @@ INSERT OR IGNORE INTO cuentas_contables (codigo, nombre, tipo, grupo, rol, categ
   ('6206', 'Depreciación', 'gasto', 0, 'gasto_depreciacion', NULL, 1),
   ('6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario', NULL, 1),
   ('6208', 'Pérdida por diferencia cambiaria', 'gasto', 0, 'perdida_cambiaria', NULL, 1),
+  ('6209', 'Cargos y recargos de proveedores', 'gasto', 0, 'cargos_proveedores', NULL, 1),
   ('6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros', 1);
 
 
@@ -802,6 +894,7 @@ INSERT OR IGNORE INTO config (clave, valor) VALUES
   ('siguiente_numero_bancomov', '1'),
   ('siguiente_numero_cajachica', '1'),
   ('siguiente_numero_nc', '1'), ('siguiente_numero_nd', '1'), ('siguiente_numero_anticipo', '1'),
+  ('siguiente_numero_ncp', '1'), ('siguiente_numero_ndp', '1'), ('siguiente_numero_anticipop', '1'), ('siguiente_numero_solicitud', '1'), ('siguiente_numero_requisicion', '1'), ('siguiente_numero_orden', '1'),
   ('fiscal_mes_inicio', '1'),
   ('siguiente_numero_nomina', '1'),
   ('conta_inicio', ''),

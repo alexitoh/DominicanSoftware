@@ -31,8 +31,8 @@ export async function datosImpuestos(mes) {
   const compras = await consultar(
     `SELECT c.id, c.numero, c.fecha, c.total, c.itbis, c.ncf, p.documento, p.nombre AS proveedor,
             EXISTS(SELECT 1 FROM cuentas_pagar a WHERE a.compra_id = c.id) AS credito,
-            (SELECT metodo FROM pagos_compra WHERE compra_id = c.id ORDER BY id LIMIT 1) AS metodo,
-            (SELECT MAX(fecha) FROM pagos_compra WHERE compra_id = c.id) AS fecha_pago
+            (SELECT metodo FROM pagos_compra WHERE compra_id = c.id AND metodo NOT IN ('nota_credito','nota_debito','anticipo') ORDER BY id LIMIT 1) AS metodo,
+            (SELECT MAX(fecha) FROM pagos_compra WHERE compra_id = c.id AND metodo NOT IN ('nota_credito','nota_debito','anticipo')) AS fecha_pago
        FROM compras c LEFT JOIN proveedores p ON p.id = c.proveedor_id
       WHERE c.estado = 'completada' AND ${cm('c.fecha')} ORDER BY c.fecha, c.id`);
   const gastos = await consultar(

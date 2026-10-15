@@ -288,3 +288,16 @@ Nueve secciones, todas calculadas desde el libro contable (permiso "Finanzas"):
 - **Conversión Moneda**: monedas (USD y EUR vienen creadas, sin tasa), tasas por fecha y convertidor.
 - **Diferencia Cambiaria**: partidas en moneda extranjera (cuenta en dólares, préstamo…). "Contabilizar" crea un solo asiento con ganancia/pérdida (4203 / 6208) y actualiza la tasa de cada partida. No incluye CxC/CxP.
 - **Presupuesto**: se movió desde Contabilidad. **Reporte Dinámico**: tabla dinámica del libro (filas, columnas, medida, tipos y fechas) con exportación a CSV.
+
+## CxP: cuentas por pagar (Contabilidad → CxP)
+Doce secciones, igual que CxC (todo lo de cuentas por pagar vive aquí; Compras y Proveedores ya no muestran deudas):
+- **Factura Suplidor**: todas las compras, con filtros (pendientes, vencidas, pagadas); detalle con pagos, notas y botón de pago. "Nueva factura" abre el mismo formulario de Compras (el inventario entra igual).
+- **Nota de Crédito / Nota de Débito**: bajan o suben lo que se le debe a un suplidor por una factura a crédito. Asiento automático (Descuentos y devoluciones en compras 5102 / Cargos de proveedores 6209). Una devolución no baja el inventario sola.
+- **Orden de Compras**: pedido a un suplidor; "Recibir" abre la factura prellenada y, al guardarla, la orden queda recibida y enlazada.
+- **Suplidor**: estado de cuenta, tipo, "Pagar" (se reparte entre sus facturas, las que vencen primero antes), nueva factura, notas y anticipo.
+- **Anticipo CxP**: dinero entregado por adelantado (Anticipos a proveedores 1220); se aplica a facturas.
+- **Pago de Contado**: compras pagadas en el momento.
+- **Reporte CxP** (antigüedad de saldos) y **Reporte Dinámico** (por suplidor, tipo, mes, concepto o documento; CSV).
+- **Solicitud Compras** → **Requisición Cotización** (cuadro comparativo, ★ = menor precio, "Ordenar a" genera la orden) → Orden de Compras.
+- **Tipo de Suplidor**: catálogo.
+Notas de crédito/débito y anticipos aún no salen en el 606; un anticipo en efectivo no entra al cuadre del cajero.

@@ -14,7 +14,7 @@ import { vistaBancos } from './conta-ui-bancos.js';
 import { vistaActivos, vistaNomina } from './conta-ui-activos.js';
 import { vistaReportes } from './conta-ui-reportes.js';
 import { vistaCuadreCaja } from './caja.js';
-import { vistaCuentas as vistaCxp } from './cuentas.js';
+import { vistaCxp } from './cxp.js';
 import { vistaCxc } from './cxc.js';
 import { vistaCajaChica } from './conta-ui-cajachica.js';
 import { campo, numero, fechaInput, texto, selectCuentas, tabla, vacio, limpiar } from './conta-ui-comun.js';

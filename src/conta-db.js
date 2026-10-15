@@ -180,7 +180,9 @@ export async function cargarFuentes() {
   const cajaChicaMovs = (await q('SELECT * FROM caja_chica_movs')).map((m) => ({ ...m, caja_nombre: cajasCh.get(m.caja_chica_id) || '', cuenta_banco_id: m.banco_id ? cuentaDe.get(m.banco_id) : null }));
   const cxcDocs = await q(`SELECT d.numero, d.tipo, substr(d.fecha, 1, 10) AS fecha, d.monto, d.itbis, d.metodo, d.referencia, v.numero AS venta_numero, c.nombre AS cliente
       FROM cxc_docs d JOIN clientes c ON c.id = d.cliente_id LEFT JOIN ventas v ON v.id = d.venta_id WHERE d.estado = 'vigente'`);
-  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, cxcDocs, hoy: hoy() };
+  const cxpDocs = await q(`SELECT d.numero, d.tipo, substr(d.fecha, 1, 10) AS fecha, d.monto, d.itbis, d.metodo, d.referencia, c.numero AS compra_numero, p.nombre AS proveedor
+      FROM cxp_docs d JOIN proveedores p ON p.id = d.proveedor_id LEFT JOIN compras c ON c.id = d.compra_id WHERE d.estado = 'vigente'`);
+  return { ventas, pagos, compras, pagosCompra, gastos, activos, nominas, bancoMovs, cajaChicaMovs, cxcDocs, cxpDocs, hoy: hoy() };
 }
 
 // Libro completo hasta una fecha (por defecto hoy). Respeta la fecha de inicio contable.

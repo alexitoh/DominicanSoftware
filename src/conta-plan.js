@@ -15,10 +15,10 @@ export const ROLES = {
   caja: 'Caja (efectivo)', caja_chica: 'Caja chica (fondo fijo)', banco: 'Banco (tarjeta, transferencia, cheque)', cxc: 'Cuentas por cobrar', inventario: 'Inventario',
   itbis_adelantado: 'ITBIS pagado (a favor)', activo_fijo: 'Activos fijos (costo)', dep_acumulada: 'Depreciación acumulada',
   cxp: 'Cuentas por pagar', itbis_pagar: 'ITBIS cobrado (por pagar)', tss_pagar: 'TSS por pagar', isr_pagar: 'ISR retenido por pagar',
-  sueldos_pagar: 'Sueldos por pagar', otros_pagar: 'Otras retenciones por pagar', anticipos_clientes: 'Anticipos de clientes',
+  sueldos_pagar: 'Sueldos por pagar', otros_pagar: 'Otras retenciones por pagar', anticipos_clientes: 'Anticipos de clientes', anticipos_proveedores: 'Anticipos a proveedores',
   capital: 'Capital social', superavit_reval: 'Superávit por revalorización', utilidades_acum: 'Utilidades acumuladas', utilidad_ejercicio: 'Utilidad del ejercicio',
   ventas: 'Ventas de mercancía', servicios: 'Ingresos por servicios', desc_ventas: 'Descuentos y devoluciones en ventas', otros_ingresos: 'Otros ingresos', cargos_clientes: 'Cargos y recargos a clientes', ganancia_cambiaria: 'Ganancia por diferencia cambiaria',
-  costo_ventas: 'Costo de ventas', gasto_sueldos: 'Sueldos y salarios', gasto_tss: 'Aportes patronales',
+  costo_ventas: 'Costo de ventas', desc_compras: 'Descuentos y devoluciones en compras', cargos_proveedores: 'Cargos y recargos de proveedores', gasto_sueldos: 'Sueldos y salarios', gasto_tss: 'Aportes patronales',
   gasto_depreciacion: 'Gasto de depreciación', gasto_bancario: 'Comisiones bancarias', perdida_cambiaria: 'Pérdida por diferencia cambiaria', gasto_otros: 'Otros gastos',
 };
 
@@ -31,6 +31,7 @@ export const PLAN_BASE = [
   ['1110', 'Bancos', 'activo', 0, 'banco'],
   ['1201', 'Cuentas por cobrar clientes', 'activo', 0, 'cxc'],
   ['1210', 'ITBIS pagado por adelantado', 'activo', 0, 'itbis_adelantado'],
+  ['1220', 'Anticipos a proveedores', 'activo', 0, 'anticipos_proveedores'],
   ['1301', 'Inventario de mercancía', 'activo', 0, 'inventario'],
   ['15', 'Activos no corrientes', 'activo', 1],
   ['1501', 'Mobiliario y equipos', 'activo', 0, 'activo_fijo'],
@@ -61,6 +62,7 @@ export const PLAN_BASE = [
   ['4203', 'Ganancia por diferencia cambiaria', 'ingreso', 0, 'ganancia_cambiaria'],
   ['5', 'COSTOS', 'costo', 1],
   ['5101', 'Costo de ventas', 'costo', 0, 'costo_ventas'],
+  ['5102', 'Descuentos y devoluciones en compras', 'costo', 0, 'desc_compras'],
   ['6', 'GASTOS', 'gasto', 1],
   ['6101', 'Sueldos y salarios', 'gasto', 0, 'gasto_sueldos', 'Sueldos'],
   ['6102', 'Aportes patronales (TSS, INFOTEP)', 'gasto', 0, 'gasto_tss'],
@@ -72,6 +74,7 @@ export const PLAN_BASE = [
   ['6206', 'Depreciación', 'gasto', 0, 'gasto_depreciacion'],
   ['6207', 'Comisiones bancarias', 'gasto', 0, 'gasto_bancario'],
   ['6208', 'Pérdida por diferencia cambiaria', 'gasto', 0, 'perdida_cambiaria'],
+  ['6209', 'Cargos y recargos de proveedores', 'gasto', 0, 'cargos_proveedores'],
   ['6299', 'Otros gastos', 'gasto', 0, 'gasto_otros', 'Otros'],
 ];
 

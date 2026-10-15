@@ -81,6 +81,8 @@ export async function initDB() {
     'ALTER TABLE clientes ADD COLUMN tipo_cliente_id INTEGER REFERENCES tipos_cliente(id)',
     'ALTER TABLE clientes ADD COLUMN condicion_pago_id INTEGER REFERENCES condiciones_pago(id)',
     'ALTER TABLE pagos ADD COLUMN documento_id INTEGER',
+    'ALTER TABLE proveedores ADD COLUMN tipo_proveedor_id INTEGER REFERENCES tipos_proveedor(id)',
+    'ALTER TABLE pagos_compra ADD COLUMN documento_id INTEGER',
     'ALTER TABLE gastos ADD COLUMN beneficiario TEXT',
     "ALTER TABLE gastos ADD COLUMN estado TEXT NOT NULL DEFAULT 'vigente'",
     "ALTER TABLE gastos ADD COLUMN origen TEXT NOT NULL DEFAULT 'caja'",
@@ -117,6 +119,7 @@ export async function initDB() {
   await sembrarTiposPago();
   await sembrarCxc();
   await sembrarMonedas();
+  await sembrarCxp();
   await guardarWeb();
   return db;
 }
@@ -174,6 +177,15 @@ async function sembrarCxc() {
     }
   }
   await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('cxc_sembrado', '1')");
+}
+
+// Tipos de suplidor de ejemplo, UNA sola vez
+async function sembrarCxp() {
+  const [marca] = await consultar("SELECT valor FROM config WHERE clave = 'cxp_sembrado'");
+  if (marca) return;
+  const [{ n }] = await consultar('SELECT COUNT(*) AS n FROM tipos_proveedor');
+  if (n === 0) for (const nombre of ['Distribuidor', 'Fabricante', 'Servicios']) await ejecutar('INSERT OR IGNORE INTO tipos_proveedor (nombre) VALUES (?)', [nombre]);
+  await ejecutar("INSERT OR IGNORE INTO config (clave, valor) VALUES ('cxp_sembrado', '1')");
 }
 
 // Monedas de ejemplo (sin tasas: las tasas las escribe el negocio), UNA sola vez
@@ -833,6 +845,8 @@ export async function anularCompra(compraId) {
   if (!c) throw new Error('La compra no existe');
   if (c.estado === 'anulada') throw new Error('La compra ya está anulada');
 
+  const [{ docs }] = await consultar('SELECT COUNT(*) AS docs FROM pagos_compra WHERE compra_id = ? AND documento_id IS NOT NULL', [compraId]);
+  if (docs) throw new Error('Esta factura tiene notas de crédito o débito, o anticipos aplicados. Anúlalos primero en Contabilidad → CxP.');
   const items = await consultar('SELECT producto_id, cantidad FROM compra_detalle WHERE compra_id = ?', [compraId]);
   const porProducto = new Map();
   for (const it of items) porProducto.set(it.producto_id, (porProducto.get(it.producto_id) || 0) + it.cantidad);

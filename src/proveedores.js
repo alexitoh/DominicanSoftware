@@ -92,10 +92,7 @@ export async function vistaProveedores(raiz) {
     const filas = await consultar(
       `SELECT p.*,
          (SELECT COUNT(*) FROM compras c WHERE c.proveedor_id = p.id AND c.estado = 'completada') AS compras,
-         (SELECT COALESCE(SUM(c.total), 0) FROM compras c WHERE c.proveedor_id = p.id AND c.estado = 'completada') AS total,
-         (SELECT COALESCE(SUM(c.total - (SELECT COALESCE(SUM(monto), 0) FROM pagos_compra WHERE compra_id = c.id)), 0)
-            FROM cuentas_pagar a JOIN compras c ON c.id = a.compra_id
-           WHERE c.proveedor_id = p.id AND c.estado = 'completada') AS deuda
+         (SELECT COALESCE(SUM(c.total), 0) FROM compras c WHERE c.proveedor_id = p.id AND c.estado = 'completada') AS total
          FROM proveedores p
         WHERE p.nombre LIKE ? OR p.telefono LIKE ?
         ORDER BY p.nombre`, [like, like]);
@@ -106,7 +103,7 @@ export async function vistaProveedores(raiz) {
             h('strong', {}, p.nombre),
             h('small', {}, p.telefono || 'Sin teléfono'),
             textoCondicion(p) ? h('small', {}, textoCondicion(p)) : null,
-            p.deuda > 0.005 ? h('small', { class: 'deuda' }, `Le debes ${dinero(p.deuda)}`) : null),
+          ),
           h('span', { class: 'precio' }, dinero(p.total),
             h('small', { class: 'bloque' }, `${p.compras} ${p.compras === 1 ? 'compra' : 'compras'}`))))
       : [h('p', { class: 'vacio' }, texto.trim()

@@ -651,5 +651,114 @@ assert.throws(() => fm.tablaDinamicaLibro(libG.lineas, libG.cuentas, { filas: 'x
 ok('Finanzas: razones, balance y resultados comparativos, por mes, variación del capital, monedas, conversión, diferencia cambiaria y tabla dinámica');
 }
 
+// ---- CxP: tipos de suplidor, notas, anticipos, pagos, reportes y el circuito de compras ----
+{
+const xp = await import('../src/cxp-db.js');
+assert.equal((await xp.listarTiposProveedor()).length, 3);
+await xp.guardarTipoProveedor({ nombre: 'Importador' });
+await assert.rejects(() => xp.guardarTipoProveedor({ nombre: 'importador' }), /Ya existe/);
+const tImp = (await xp.listarTiposProveedor()).find((t) => t.nombre === 'Importador');
+await bd.ejecutar("INSERT INTO proveedores (nombre, dias_credito, condicion) VALUES ('Distribuidora Sur', 30, 'credito')");
+const sid = (await uno("SELECT id FROM proveedores WHERE nombre = 'Distribuidora Sur'")).id;
+await xp.guardarTipoDeProveedor(sid, tImp.id);
+await assert.rejects(() => xp.eliminarTipoProveedor(tImp.id), /Desactívalo/);
+const cp = await bd.registrarCompra({ proveedor_id: sid, forma_pago: 'credito', plazo_dias: 30, itbis: 90, items: [{ producto_id: pid, cantidad: 5, costo_unitario: 118 }], actualizarCosto: false }); // 590
+const idC = (await uno('SELECT id FROM compras WHERE numero = ?', [cp])).id;
+const saldoC = async () => r2((await xp.detalleFacturaSuplidor(idC)).saldo);
+assert.equal(await saldoC(), 590);
+const sct = (codigo, lib) => r2(lib.lineas.filter((l) => l.cuenta_id === C[codigo].id).reduce((s, l) => s + l.debe - l.haber, 0));
+// notas
+await assert.rejects(() => xp.crearNotaProveedor({ tipo: 'credito', proveedor_id: sid, compra_id: idC, monto: 9999 }), /no puede ser mayor/);
+const ncp = await xp.crearNotaProveedor({ tipo: 'credito', proveedor_id: sid, compra_id: idC, monto: 59, itbis: 9, concepto: 'Devolución de mercancía' });
+assert.match(ncp.numero, /^NCP-/); assert.equal(await saldoC(), 531);
+const ndp = await xp.crearNotaProveedor({ tipo: 'debito', proveedor_id: sid, compra_id: idC, monto: 20, concepto: 'Flete o transporte' });
+assert.match(ndp.numero, /^NDP-/); assert.equal(await saldoC(), 551);
+// anticipo
+const anp = await xp.crearAnticipoProveedor({ proveedor_id: sid, monto: 300, metodo: 'transferencia', referencia: 'T-9' });
+await assert.rejects(() => xp.crearAnticipoProveedor({ proveedor_id: sid, monto: 10, metodo: 'cheque' }), /número de cheque/);
+await assert.rejects(() => xp.aplicarAnticipoProveedor({ anticipo_id: anp.id, compra_id: idC, monto: 400 }), /disponible/);
+await xp.aplicarAnticipoProveedor({ anticipo_id: anp.id, compra_id: idC, monto: 100 });
+assert.equal(await saldoC(), 451);
+assert.equal((await xp.listarAnticiposProveedor({ proveedorId: sid }))[0].disponible, 200);
+await assert.rejects(() => xp.anularAnticipoProveedor(anp.id, 'x'), /ya se aplicó/);
+// contabilidad: cuadra y la cuenta por pagar coincide con las facturas
+const libP = await cd.libroContable();
+assert.deepEqual(libP.faltantes, []);
+assert.equal(r2(libP.lineas.reduce((s, l) => s + l.debe, 0)), r2(libP.lineas.reduce((s, l) => s + l.haber, 0)), 'el libro cuadra con CxP');
+const porPagarTotal = r2((await cd.saldosPorPagar()).reduce((s, x) => s + x.saldo, 0));
+assert.equal(-sct('2101', libP), porPagarTotal, 'la cuenta 2101 coincide con lo que se debe a los suplidores');
+assert.equal(sct('5102', libP), -50, 'nota de crédito: descuento sin ITBIS');
+assert.equal(sct('6209', libP), 20, 'nota de débito: cargo del suplidor');
+assert.equal(sct('1220', libP), 200, 'anticipo entregado menos lo aplicado');
+assert.equal(cm.balanceGeneral(libP.cuentas, libP.lineas, '2099-12-31').cuadra, true);
+// pago repartido (las facturas más antiguas primero) y límites
+await assert.rejects(() => xp.pagarSuplidor({ proveedor_id: sid, monto: 99999 }), /no puede ser mayor/);
+const pg = await xp.pagarSuplidor({ proveedor_id: sid, monto: 51, metodo: 'efectivo' });
+assert.equal(pg.aplicados.length, 1); assert.equal(await saldoC(), 400);
+// anulaciones
+await assert.rejects(() => xp.anularNotaProveedor(ncp.id, ''), /motivo/);
+await xp.anularNotaProveedor(ndp.id, 'Error'); assert.equal(await saldoC(), 380);
+await xp.anularNotaProveedor(ncp.id, 'Error'); assert.equal(await saldoC(), 439);
+await assert.rejects(() => xp.anularNotaProveedor(ncp.id, 'otra vez'), /ya está anulada/);
+const [apl] = await xp.aplicacionesAnticipoProveedor(anp.id); await xp.quitarAplicacionProveedor(apl.id); assert.equal(await saldoC(), 539);
+await xp.anularAnticipoProveedor(anp.id, 'Devuelto'); assert.equal((await xp.listarAnticiposProveedor({ proveedorId: sid }))[0].disponible, 0);
+const libQ = await cd.libroContable();
+assert.equal(sct('5102', libQ), 0); assert.equal(sct('6209', libQ), 0); assert.equal(sct('1220', libQ), 0, 'anulado: no queda nada contabilizado');
+// el 606 no toma una nota como forma de pago
+await xp.crearNotaProveedor({ tipo: 'credito', proveedor_id: sid, compra_id: idC, monto: 10 });
+// reportes
+const rep = await xp.reporteCxp({ hasta: '2099-01-01' });
+const fila = rep.proveedores.find((x) => x.proveedor_id === sid);
+assert.equal(fila.total, 529); assert.equal(fila.t90m, 529, 'muy vencida');
+assert.equal((await xp.reporteCxp({ hasta: '2099-01-01', tipoProveedorId: 9999 })).proveedores.length, 0);
+assert.equal((await xp.reporteCxp({ hasta: '2099-01-01', tipoProveedorId: tImp.id })).proveedores.length, 1);
+const movs = await xp.movimientosCxp({});
+const tb = xp.tablaDinamicaCxp(movs, { dimension: 'proveedor' });
+const tf = tb.filas.find((x) => x.clave === 'Distribuidora Sur');
+assert.equal(tf.factura, 590); assert.equal(tf.credito, 10); assert.equal(tf.pago, 51);
+assert.equal(tf.neto, r2(590 - 10 - 51));
+assert.ok(xp.tablaDinamicaCxp(movs, { dimension: 'documento' }).filas.length >= 2);
+assert.throws(() => xp.tablaDinamicaCxp(movs, { dimension: 'nada' }), /Agrupación/);
+const ec = await xp.estadoCuentaProveedor(sid); assert.equal(ec.saldo, 529); assert.ok(ec.movimientos.length >= 2);
+const lista = await xp.proveedoresCxp(); assert.equal(lista.find((x) => x.id === sid).saldo, 529);
+assert.equal((await xp.listarComprasContado({})).every((c) => c.numero !== cp), true, 'la compra a crédito no es de contado');
+assert.ok((await xp.listarComprasContado({})).length >= 1);
+const idOtra = (await uno('SELECT id FROM compras WHERE proveedor_id <> ? LIMIT 1', [sid])).id;
+await assert.rejects(() => xp.crearNotaProveedor({ tipo: 'credito', proveedor_id: sid, compra_id: idOtra, monto: 5 }), /de este suplidor|a crédito/);
+
+// circuito de compras: solicitud → requisición → orden → factura
+const sol = await xp.crearSolicitud({ solicitante: 'Almacén', items: [{ producto_id: pid, cantidad: 12 }] });
+assert.match(sol.numero, /^SC-/);
+await assert.rejects(() => xp.crearRequisicion({ items: [{ producto_id: pid, cantidad: 12 }], solicitud_id: sol.id }), /aprobada/);
+await assert.rejects(() => xp.cambiarEstadoSolicitud(sol.id, 'atendida'), /no puede pasar/);
+await xp.cambiarEstadoSolicitud(sol.id, 'aprobada');
+const rq = await xp.crearRequisicion({ items: [{ producto_id: pid, cantidad: 12 }], solicitud_id: sol.id });
+assert.match(rq.numero, /^RQ-/); assert.equal((await xp.detalleSolicitud(sol.id)).estado, 'atendida');
+const prov2 = (await uno('SELECT id FROM proveedores WHERE id <> ? ORDER BY id LIMIT 1', [sid])).id;
+let dq = await xp.detalleRequisicion(rq.id); const linea = dq.items[0].id;
+await assert.rejects(() => xp.guardarCotizacion({ requisicion_id: rq.id, proveedor_id: sid, precios: {} }), /al menos un precio/);
+await xp.guardarCotizacion({ requisicion_id: rq.id, proveedor_id: sid, precios: { [linea]: 110 } });
+await xp.guardarCotizacion({ requisicion_id: rq.id, proveedor_id: prov2, precios: { [linea]: 95 } });
+await xp.guardarCotizacion({ requisicion_id: rq.id, proveedor_id: prov2, precios: { [linea]: 97 } }); // se reemplaza
+dq = await xp.detalleRequisicion(rq.id);
+assert.equal(dq.proveedores.length, 2); assert.equal(dq.mejor[linea], prov2); assert.equal(dq.totales.find((t) => t.proveedor_id === prov2).total, 1164);
+const oc = await xp.adjudicarRequisicion({ requisicion_id: rq.id, proveedor_id: prov2, entrega: '2099-01-01' });
+assert.match(oc.numero, /^OC-/);
+assert.equal((await xp.detalleRequisicion(rq.id)).estado, 'adjudicada');
+await assert.rejects(() => xp.adjudicarRequisicion({ requisicion_id: rq.id, proveedor_id: prov2 }), /ya no está abierta/);
+let doc = await xp.detalleOrden(oc.id); assert.equal(doc.total, 1164); assert.equal(doc.estado, 'pendiente');
+const stock0 = (await uno('SELECT stock_actual FROM productos WHERE id = ?', [pid])).stock_actual;
+const cn2 = await bd.registrarCompra({ proveedor_id: prov2, items: [{ producto_id: pid, cantidad: 12, costo_unitario: 97 }], actualizarCosto: false });
+await xp.marcarOrdenRecibida(oc.id, cn2);
+doc = await xp.detalleOrden(oc.id); assert.equal(doc.estado, 'recibida'); assert.equal(doc.factura, cn2);
+assert.equal((await uno('SELECT stock_actual FROM productos WHERE id = ?', [pid])).stock_actual, stock0 + 12);
+await assert.rejects(() => xp.anularOrden(oc.id), /pendiente/);
+const oc2 = await xp.crearOrden({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 1, costo_unitario: 50 }] });
+await xp.anularOrden(oc2.id); assert.equal((await xp.detalleOrden(oc2.id)).estado, 'anulada');
+await assert.rejects(() => xp.crearOrden({ proveedor_id: sid, items: [] }), /al menos un producto/);
+await assert.rejects(() => xp.crearOrden({ proveedor_id: sid, items: [{ producto_id: pid, cantidad: 1.5, costo_unitario: 1 }] }), /enteros/);
+ok('CxP: tipos de suplidor, notas de crédito y débito, anticipos, pagos repartidos, reportes, contabilidad cuadrando y circuito solicitud → requisición → orden → factura');
+}
+
 console.log(`\n${n} grupos de pruebas correctos`);
 process.exit(0);

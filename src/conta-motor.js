@@ -137,7 +137,19 @@ export function asientosAutomaticos(f, { inicio = '', hasta = '9999-12-31' } = {
   }
   for (const p of f.pagosCompra || []) {
     if (!comprasOk.has(p.compra_numero)) continue;
+    if (p.metodo === 'nota_credito' || p.metodo === 'nota_debito') continue; // salen de su nota (abajo)
+    if (p.metodo === 'anticipo') { add('aplicacionprov', `P${p.id}`, p.fecha, `Anticipo aplicado a ${p.compra_numero}`, [{ rol: 'cxp', debe: p.monto }, { rol: 'anticipos_proveedores', haber: p.monto }]); continue; }
     add('pagocompra', `P${p.id}`, p.fecha, `Pago de ${p.compra_numero}`, [{ rol: 'cxp', debe: p.monto }, { rol: rolMetodo(p.metodo), haber: p.monto }]);
+  }
+  // CxP: notas de crédito (descuentos y devoluciones de suplidores), notas de débito (cargos) y anticipos entregados
+  for (const d of f.cxpDocs || []) {
+    const neto = r2(d.monto - (d.itbis || 0));
+    if (d.tipo === 'anticipo') add('anticipoprov', d.numero, d.fecha, `Anticipo ${d.numero} · ${d.proveedor}`, [{ rol: 'anticipos_proveedores', debe: d.monto }, { rol: rolMetodo(d.metodo), haber: d.monto }]);
+    else {
+      if (!comprasOk.has(d.compra_numero)) continue;
+      if (d.tipo === 'credito') add('ncproveedor', d.numero, d.fecha, `Nota de crédito ${d.numero} · ${d.proveedor}`, [{ rol: 'cxp', debe: d.monto }, { rol: 'desc_compras', haber: neto }, { rol: 'itbis_adelantado', haber: d.itbis || 0 }]);
+      else add('ndproveedor', d.numero, d.fecha, `Nota de débito ${d.numero} · ${d.proveedor}`, [{ rol: 'cargos_proveedores', debe: neto }, { rol: 'itbis_adelantado', debe: d.itbis || 0 }, { rol: 'cxp', haber: d.monto }]);
+    }
   }
 
   for (const g of f.gastos || []) {

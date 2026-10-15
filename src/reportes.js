@@ -60,9 +60,6 @@ export async function datosReporte(periodo, rango) {
   const [porCobrar] = await consultar(
     `SELECT COALESCE(SUM(v.total - (SELECT COALESCE(SUM(monto), 0) FROM pagos WHERE venta_id = v.id)), 0) AS total
        FROM ventas v WHERE v.metodo_pago = 'credito' AND v.estado = 'completada'`);
-  const [porPagar] = await consultar(
-    `SELECT COALESCE(SUM(c.total - (SELECT COALESCE(SUM(monto), 0) FROM pagos_compra WHERE compra_id = c.id)), 0) AS total
-       FROM cuentas_pagar a JOIN compras c ON c.id = a.compra_id WHERE c.estado = 'completada'`);
   const vendedores = await consultar(
     `SELECT COALESCE(u.nombre, 'Sin asignar') AS vendedor, COUNT(*) AS n, COALESCE(SUM(v.total), 0) AS total
        FROM ventas v LEFT JOIN usuarios u ON u.id = v.usuario_id
@@ -75,7 +72,7 @@ export async function datosReporte(periodo, rango) {
        FROM productos WHERE activo = 1`);
   return {
     ventas: t.n, vendido: t.total, gananciaBruta: g.ganancia - t.dto, gastos: gs.total, compras: cp.total,
-    neta: g.ganancia - t.dto - gs.total, metodos, vendedores, porDia, top, gastosCat, porCobrar: porCobrar.total, porPagar: porPagar.total, inv,
+    neta: g.ganancia - t.dto - gs.total, metodos, vendedores, porDia, top, gastosCat, porCobrar: porCobrar.total, inv,
   };
 }
 
@@ -122,9 +119,6 @@ export async function vistaReportes(raiz) {
           renglon('Ganancia neta', dinero(d.neta), 'gran'),
           renglon('Compras a proveedores', dinero(d.compras))),
         h('p', { class: 'ayuda' }, 'La ganancia neta es la ganancia de las ventas menos los gastos. Las compras no se restan: lo que vendes ya descuenta su costo.')),
-      d.porPagar > 0.005
-        ? h('section', { class: 'seccion' }, h('div', { class: 'totales' },
-            d.porPagar > 0.005 ? renglon('Por pagar a proveedores (ahora)', dinero(d.porPagar), 'deuda') : null)) : null,
       h('section', { class: 'seccion' },
         h('h2', {}, 'Ventas por método de pago'),
         d.metodos.length
