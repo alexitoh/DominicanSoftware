@@ -1,6 +1,7 @@
 // factura.js - genera la factura en PDF y la comparte (WhatsApp, correo, Drive...)
 // Requiere: npm install jspdf
-import { NOMBRE_COMPROBANTE } from './itbis.js';
+import { NOMBRE_COMPROBANTE, esElectronico } from './itbis.js';
+import { qrMatriz } from './qr.js';
 import { jsPDF } from 'jspdf';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
@@ -184,6 +185,27 @@ export async function crearPDF(ventaId) {
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90);
   y += 12;
   doc.text(L('Gracias por su compra.'), 74, y, { align: 'center' });
+
+  // Comprobante electrónico: código de seguridad, fecha de firma y QR de verificación
+  if (esElectronico(v.ncf)) {
+    const [ecf] = await consultar('SELECT * FROM ecf_documentos WHERE venta_id = ? ORDER BY id DESC LIMIT 1', [ventaId]);
+    if (y > 170) { doc.addPage(); y = 10; }
+    y += 6;
+    if (ecf?.qr_url) {
+      const m = qrMatriz(ecf.qr_url, 'L'); const n = m.length; const lado = 30; const px = lado / (n + 8);
+      doc.setFillColor(0, 0, 0);
+      m.forEach((fila, fy) => fila.forEach((on, fx) => { if (on) doc.rect(M + (fx + 4) * px, y + (fy + 4) * px, px + 0.02, px + 0.02, 'F'); }));
+      doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(21, 33, 43);
+      doc.text(`e-NCF: ${v.ncf}`, M + lado + 4, y + 9);
+      doc.setFont('helvetica', 'normal').setFontSize(8.5);
+      if (ecf.codigo_seguridad) doc.text(`${L('Código de seguridad')}: ${ecf.codigo_seguridad}`, M + lado + 4, y + 14);
+      if (ecf.fecha_firma) doc.text(`${L('Fecha de firma digital')}: ${ecf.fecha_firma}`, M + lado + 4, y + 19);
+      if (ecf.estado === 'rechazado') { doc.setFont('helvetica', 'bold').setTextColor(200, 64, 47); doc.text(L('RECHAZADO POR LA DGII'), M + lado + 4, y + 25); }
+    } else {
+      doc.setFont('helvetica', 'normal').setFontSize(8.5).setTextColor(90);
+      doc.text(L('Comprobante electrónico: pendiente de confirmación de la DGII'), 74, y, { align: 'center' });
+    }
+  }
 
   if (v.estado === 'anulada') {
     doc.setFont('helvetica', 'bold').setFontSize(46).setTextColor(200, 64, 47);

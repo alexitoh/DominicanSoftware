@@ -582,6 +582,25 @@ CREATE TABLE IF NOT EXISTS ncf_anulados (
   usuario_id INTEGER
 );
 
+-- Estado de cada comprobante electrónico (e-CF). Lo escribe el servidor; los dispositivos solo lo leen.
+CREATE TABLE IF NOT EXISTS ecf_documentos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ncf TEXT NOT NULL,
+  tipo TEXT,
+  estado TEXT,
+  track_id TEXT,
+  codigo_seguridad TEXT,
+  fecha_firma TEXT,
+  mensaje TEXT,
+  monto REAL,
+  qr_url TEXT,
+  ambiente TEXT,
+  venta_id INTEGER,
+  cxc_doc_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ecf_venta ON ecf_documentos(venta_id);
+CREATE INDEX IF NOT EXISTS idx_ecf_ncf ON ecf_documentos(ncf);
+
 CREATE INDEX IF NOT EXISTS idx_bitacora_fecha ON bitacora(fecha);
 CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(fecha);
 CREATE INDEX IF NOT EXISTS idx_detalle_venta ON venta_detalle(venta_id);

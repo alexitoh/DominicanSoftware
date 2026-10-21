@@ -15,6 +15,7 @@ import { campanaAvisos, bannerPago } from './avisos-ui.js';
 import { cargarVinculo, vinculado, iniciarSincronizacionAutomatica, haySesionNube, subirSecuenciasLocales } from './nube-app.js';
 import { nube } from './nube.js';
 import { vistaVentas } from './ventas.js';
+import { vistaEcf } from './ecf.js';
 import { vistaProductos } from './productos.js';
 import { vistaInventario } from './inventario.js';
 import { vistaCompras } from './compras.js';
@@ -52,6 +53,7 @@ const vistas = {
   reportes: vistaReportes,
   contabilidad: vistaContabilidad,
   finanzas: vistaFinanzas,
+  ecf: vistaEcf,
   clientes: vistaClientes,
   proveedores: vistaProveedores,
   usuarios: vistaUsuarios,
@@ -260,7 +262,7 @@ async function vistaAjustes(raiz) {
   }
   const adminNcf = usuarioActual()?.rol === 'admin';
   const secuencias = ncfNube
-    ? (ncfServidor?.secuencias || []).map((x) => ({ tipo: x.tipo, sig: x.siguiente, hasta: x.hasta }))
+    ? (ncfServidor?.secuencias || []).filter((x) => TIPOS_NCF[x.tipo]).map((x) => ({ tipo: x.tipo, sig: x.siguiente, hasta: x.hasta }))
     : await leerSecuenciasNCF();
   const anuladosNcf = (await consultar('SELECT ncf FROM ncf_anulados ORDER BY id DESC LIMIT 20')).map((x) => x.ncf);
   const bloqueadoNcf = ncfNube && (!ncfServidor || !adminNcf);

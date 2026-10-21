@@ -1,6 +1,6 @@
 // ventas.js - historial, nueva venta con carrito, ventas a crédito, detalle y anulación
 import { consultar, ejecutar, registrarVenta, anularVenta, redondear, configFiscal, leerReglasComprobante, anotar, enviarACaja, listarPendientes, cancelarPendiente } from './database.js';
-import { TIPOS_NCF, NOMBRE_COMPROBANTE, calcularItbis, comprobanteDeCliente } from './itbis.js';
+import { TIPOS_NCF, NOMBRE_COMPROBANTE, B_A_E, calcularItbis, comprobanteDeCliente } from './itbis.js';
 import { buscarRNC } from './dgii.js';
 import { limpiarDocumento, formatearDocumento } from './fiscal.js';
 import { h, hoja, toast, dinero, confirmar } from './ui.js';
@@ -11,7 +11,7 @@ import { compartirFactura } from './factura.js';
 import { botonEscaner } from './escaner.js';
 import { tienePermiso, registrarBitacora, usuarioActual } from './auth.js';
 import { vistaCotizaciones, formularioCotizacion } from './cotizaciones.js';
-import { sincronizarAhora } from './nube-app.js';
+import { sincronizarAhora, facturaElectronica } from './nube-app.js';
 import { imprimirCredito, imprimirVenta } from './impresion.js';
 
 const PERIODOS = {
@@ -528,8 +528,9 @@ export async function vistaVentas(raiz) {
         const sug = comprobanteDeCliente(clientesInfo.get(cliente.value), reglasCpb);
         const t = elegido === 'auto' ? sug.tipo : elegido;
         const opAuto = tipoNcf.options?.[0];
-        if (opAuto) opAuto.textContent = `Automático: ${NOMBRE_COMPROBANTE[sug.tipo]} (${sug.tipo})`;
-        avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]} (${t})${elegido === 'auto' ? `, ${sug.motivo}` : ', elegido por ti'}.`;
+        const ver = (k) => (facturaElectronica() ? B_A_E[k] || k : k); // con facturación electrónica los B salen como E
+        if (opAuto) opAuto.textContent = `Automático: ${NOMBRE_COMPROBANTE[sug.tipo]} (${ver(sug.tipo)})`;
+        avisoNcf.textContent = `Se entregará: ${NOMBRE_COMPROBANTE[t]}${facturaElectronica() ? ' electrónica' : ''} (${ver(t)})${elegido === 'auto' ? `, ${sug.motivo}` : ', elegido por ti'}.`;
       }
       const sub = subtotal();
       const dto = descuentoAplicado(sub);

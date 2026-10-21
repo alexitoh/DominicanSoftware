@@ -161,7 +161,7 @@ Cómo funciona: ventas, cobros, compras, pagos a proveedores, gastos, activos, n
 Límites a tener presentes:
 - Los asientos automáticos se calculan desde los documentos; cerrar un período bloquea solo asientos, banco, activos y nóminas manuales, no las ventas/compras.
 - Los ajustes de inventario y mermas no generan asiento; los centros de costo solo aplican a líneas manuales.
-- ITBIS solo en modo "incluido"; no hay 608 ni notas de crédito. La facturación electrónica (e-CF) queda para una etapa posterior.
+- ITBIS solo en modo "incluido"; no hay 608 ni notas de crédito. La facturación electrónica (e-CF) tiene su propio módulo (ver al final de este archivo).
 - **Nómina**: las tasas del empleador (AFP 7.10 %, SFS 7.09 %, SRL 1.10 %, INFOTEP 1 %), los topes y la escala del ISR son orientativos; confírmalos cada año con la TSS y la DGII. INFOTEP no lleva tope en este cálculo.
 - No sustituye a un contador: revisa los reportes con uno antes de presentarlos a la DGII.
 
@@ -323,3 +323,25 @@ Trece secciones: Banco, Cargo Bancario, Cheque, Conciliación, Crédito Bancario
 - **Crédito bancario**: el desembolso entra al banco y queda en *Créditos bancarios por pagar* (2502); cada cuota separa capital (baja 2502) e interés (*Intereses de préstamos* 6215) y sale del banco. Cuota fija mensual; el interés es tasa/12 sobre el saldo.
 - **Solicitud de pago**: se pide, se aprueba (permiso "Aprobar solicitudes de pago": administrador y gerente) y recién entonces se paga con cheque o transferencia. A un suplidor baja sus facturas y sale de la cuenta bancaria predeterminada.
 - **Cheque**: queda "en tránsito" hasta conciliarlo; entonces pasa a "cobrado". Uno cobrado no se anula.
+
+
+## Facturación electrónica e-CF (módulo "e-CF")
+El servidor arma el XML, lo firma con el certificado digital de la empresa y lo envía **directo a la DGII** (TesteCF / CerteCF / eCF). Los equipos solo piden el número y reciben el resultado.
+
+**Qué cubre**: E31 crédito fiscal, E32 consumo (menos de RD$250,000 va como resumen RFCE), E33/E34 notas de débito/crédito, E41 compras, E43 gastos menores, E44 régimen especial y E45 gubernamental, más la anulación de rangos (ANECF).
+
+**Cómo se activa** (módulo e-CF → Configuración, solo el administrador):
+1. Sube el certificado `.p12` y su contraseña (se guarda cifrado en el servidor).
+2. Escribe los datos del emisor y las secuencias E que la DGII te autorizó (con su fecha de vencimiento; E32 y E34 no la llevan).
+3. Elige el ambiente (empieza en **Pruebas**) y pulsa *Probar conexión*.
+4. Activa la facturación electrónica. Desde ese momento Ventas emite E31/E32/E44/E45 en lugar de B01/B02/B14/B15, las notas de crédito/débito de una factura electrónica salen como E34/E33 y los tickets y facturas llevan el código de seguridad y el QR. Antes de imprimir se espera unos segundos la respuesta de la DGII.
+
+**Estados** de cada comprobante: En cola → Enviado → Aceptado / Aceptado condicional / Rechazado. Si falla la comunicación se reintenta solo con esperas cada vez más largas; "Falta información" y "Rechazado" se corrigen y se pulsa *Reintentar*.
+
+**Importante antes de usarlo de verdad**
+- Hace falta el certificado de una entidad certificadora autorizada y estar registrado como emisor electrónico en la DGII.
+- La DGII exige un proceso de **certificación** (set de pruebas en CerteCF) antes de autorizar producción. El XML sigue la documentación pública, pero **debe validarse contra los XSD oficiales** durante ese proceso; es probable que haya que ajustar detalles.
+- Las pruebas de este proyecto usan un certificado autofirmado y una DGII simulada: verifican firma, flujos y cuadres, no la aceptación real de la DGII.
+- El servidor necesita la herramienta `openssl` (el Dockerfile ya la instala).
+- Si cambia el secreto del servidor (JWT_SECRET) hay que volver a subir el certificado.
+- Anular una venta que ya tiene e-CF aceptado no emite sola la nota de crédito: hay que hacer la nota.

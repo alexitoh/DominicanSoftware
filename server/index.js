@@ -11,12 +11,18 @@ import {
 } from './seguridad.js';
 import { prepararTablaRNC, consultarRNC, estadoPadron, importarPadron, descargarPadron } from './dgii.js';
 import { abrirBase, transaccion, siguienteVersion, identificadorLibre, TABLAS_SYNC } from './db.js';
+import * as ecf from './ecf.js';
+import { AMBIENTES as AMBIENTES_ECF } from './ecf-dgii.js';
+import { ahoraDR, fechaDGII, dinero } from './ecf-xml.js';
 
 const ROLES = ['admin', 'gerente', 'vendedor', 'cajero', 'almacen'];
 const PERMISOS = ['ventas', 'productos', 'inventario', 'compras', 'caja', 'cuentas', 'clientes', 'proveedores', 'garantias', 'reportes', 'contabilidad', 'ajustes', 'anular'];
 const MAX_CUERPO = 12 * 1024 * 1024;
 const LIMITE_PAGINA = 500;
-const TIPOS_NCF = ['B01', 'B02', 'B14', 'B15'];
+const TIPOS_B = ['B01', 'B02', 'B14', 'B15'];
+const TIPOS_E = ['E31', 'E32', 'E33', 'E34', 'E41', 'E43', 'E44', 'E45']; // comprobantes electrónicos (e-CF): E + 2 dígitos del tipo + 10 de secuencia
+const TIPOS_NCF = [...TIPOS_B, ...TIPOS_E];
+const maxSecuencia = (tipo) => (tipo.startsWith('E') ? 9999999999 : 99999999);
 
 class ErrorHttp extends Error {
   constructor(estado, mensaje) { super(mensaje); this.estado = estado; }
@@ -46,9 +52,20 @@ function servirEstatico(carpeta, req, res) {
   if (req.method === 'HEAD') res.end(); else fs.createReadStream(archivo).pipe(res);
 }
 
-export function crearServidor({ db, secreto, origenes = '*', estaticos = null, clavePropietario = '', aprobacionAutomatica = false, urlPadron = undefined, fetchPadron = undefined }) {
+export function crearServidor({ db, secreto, origenes = '*', estaticos = null, clavePropietario = '', aprobacionAutomatica = false, urlPadron = undefined, fetchPadron = undefined, fetchEcf = undefined, procesoEcf = true }) {
   if (!secreto || secreto.length < 16) throw new Error('Falta JWT_SECRET (mínimo 16 caracteres).');
   prepararTablaRNC(db);
+  ecf.prepararTablasEcf(db);
+  // Facturación electrónica: el servidor firma y envía a la DGII los comprobantes de cada negocio
+  const ctxEcf = { db, secreto, fetchFn: fetchEcf, cacheToken: new Map() };
+  let procesandoEcf = false;
+  const procesarEcf = async (negocio = null) => {
+    if (procesandoEcf) return;
+    procesandoEcf = true;
+    try { await ecf.procesarPendientes(ctxEcf, { negocio }); } catch (e) { console.error(`e-CF: ${e.message}`); } finally { procesandoEcf = false; }
+  };
+  const avisarEcf = (negocio) => { if (procesoEcf) setImmediate(() => procesarEcf(negocio)); };
+  if (procesoEcf) setInterval(() => procesarEcf(), 30000).unref();
   const intentos = new Map(); // límite de intentos de acceso por IP + usuario
 
   // Consultas de RNC antes de tener cuenta (al registrar un negocio): tope por IP para que no sirva para bajar el padrón completo
@@ -163,6 +180,23 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
   }
 
   // ---------- Rutas ----------
+  // Entrega el siguiente número de la primera secuencia con disponibles (atómico). La clave evita repartir dos números por un mismo pedido repetido.
+  function reservarNumero(negocioUid, candidatos, clave, dispositivo = '') {
+    return transaccion(db, () => {
+      const previo = db.prepare('SELECT tipo, numero, estado FROM ncf_emitidos WHERE negocio = ? AND clave = ?').get(negocioUid, clave);
+      if (previo) return { tipo: previo.tipo, numero: previo.numero, quedan: 0, repetido: true, anulado: previo.estado === 'anulado' };
+      const equipo = db.prepare('SELECT codigo FROM dispositivos WHERE negocio = ? AND uid = ?').get(negocioUid, dispositivo)?.codigo || null;
+      for (const tipo of candidatos) {
+        const f = db.prepare('SELECT siguiente, hasta FROM ncf_secuencias WHERE negocio = ? AND tipo = ?').get(negocioUid, tipo);
+        if (!f || !(f.siguiente > 0 && f.hasta >= f.siguiente)) continue;
+        db.prepare("UPDATE ncf_secuencias SET siguiente = siguiente + 1, actualizado = datetime('now') WHERE negocio = ? AND tipo = ?").run(negocioUid, tipo);
+        db.prepare('INSERT INTO ncf_emitidos (negocio, clave, tipo, numero, equipo) VALUES (?, ?, ?, ?, ?)').run(negocioUid, clave, tipo, f.siguiente, equipo);
+        return { tipo, numero: f.siguiente, quedan: f.hasta - f.siguiente };
+      }
+      return { tipo: null, numero: 0, quedan: 0 };
+    });
+  }
+
   const rutas = {
     // Consulta de RNC/cédula en el padrón de la DGII (cualquier usuario con sesión)
     'GET /api/rnc/:numero': (req, b, p) => { autenticar(req); return consultarRNC(db, p.numero); },
@@ -183,10 +217,10 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
     // La autorización de la DGII es del negocio: se guarda aquí y cada factura pide el siguiente número al servidor (hace falta internet).
     'GET /api/ncf': (req) => {
       const ctx = autenticar(req);
-      const filas = db.prepare('SELECT tipo, siguiente, hasta FROM ncf_secuencias WHERE negocio = ?').all(ctx.negocio.uid);
+      const filas = db.prepare('SELECT tipo, siguiente, hasta, vence FROM ncf_secuencias WHERE negocio = ?').all(ctx.negocio.uid);
       const secuencias = TIPOS_NCF.map((tipo) => {
-        const f = filas.find((x) => x.tipo === tipo) || { siguiente: 0, hasta: 0 };
-        return { tipo, siguiente: f.siguiente, hasta: f.hasta, disponibles: f.siguiente > 0 && f.hasta >= f.siguiente ? f.hasta - f.siguiente + 1 : 0 };
+        const f = filas.find((x) => x.tipo === tipo) || { siguiente: 0, hasta: 0, vence: null };
+        return { tipo, siguiente: f.siguiente, hasta: f.hasta, vence: f.vence || '', disponibles: f.siguiente > 0 && f.hasta >= f.siguiente ? f.hasta - f.siguiente + 1 : 0 };
       });
       const anulados = db.prepare("SELECT tipo, numero, motivo, fecha FROM ncf_emitidos WHERE negocio = ? AND estado = 'anulado' ORDER BY id DESC LIMIT 30").all(ctx.negocio.uid);
       return { secuencias, anulados };
@@ -198,16 +232,18 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       if (!TIPOS_NCF.includes(p.tipo)) falla(400, 'Tipo de comprobante desconocido.');
       const siguiente = Number.isInteger(Number(b.siguiente)) ? Number(b.siguiente) : NaN;
       const hasta = Number.isInteger(Number(b.hasta)) ? Number(b.hasta) : NaN;
-      if (!(siguiente >= 0 && hasta >= 0 && siguiente <= 99999999 && hasta <= 99999999)) falla(400, 'Los números de la secuencia no son válidos.');
+      if (!(siguiente >= 0 && hasta >= 0 && siguiente <= maxSecuencia(p.tipo) && hasta <= maxSecuencia(p.tipo))) falla(400, 'Los números de la secuencia no son válidos.');
       if ((siguiente === 0) !== (hasta === 0)) falla(400, 'Escribe el próximo número y el último autorizado (o deja los dos vacíos).');
       if (siguiente > hasta) falla(400, 'El próximo número no puede ser mayor que el último autorizado.');
+      const vence = b.vence === undefined || b.vence === null || b.vence === '' ? null : String(b.vence);
+      if (vence !== null && !(/^\d{4}-\d{2}-\d{2}$/.test(vence) && !Number.isNaN(Date.parse(vence)))) falla(400, 'La fecha de vencimiento no es válida.');
       const antes = db.prepare('SELECT siguiente, hasta FROM ncf_secuencias WHERE negocio = ? AND tipo = ?').get(ctx.negocio.uid, p.tipo);
-      db.prepare(`INSERT INTO ncf_secuencias (negocio, tipo, siguiente, hasta, actualizado) VALUES (?, ?, ?, ?, datetime('now'))
-                  ON CONFLICT(negocio, tipo) DO UPDATE SET siguiente = excluded.siguiente, hasta = excluded.hasta, actualizado = excluded.actualizado`)
-        .run(ctx.negocio.uid, p.tipo, siguiente, hasta);
-      auditar('Cambió secuencia NCF', ctx.negocio.nombre, `${p.tipo}: ${antes ? `${antes.siguiente}-${antes.hasta}` : 'sin secuencia'} → ${siguiente}-${hasta} (${ctx.cuenta.usuario})`);
+      db.prepare(`INSERT INTO ncf_secuencias (negocio, tipo, siguiente, hasta, vence, actualizado) VALUES (?, ?, ?, ?, ?, datetime('now'))
+                  ON CONFLICT(negocio, tipo) DO UPDATE SET siguiente = excluded.siguiente, hasta = excluded.hasta, vence = excluded.vence, actualizado = excluded.actualizado`)
+        .run(ctx.negocio.uid, p.tipo, siguiente, hasta, vence);
+      auditar('Cambió secuencia NCF', ctx.negocio.nombre, `${p.tipo}: ${antes ? `${antes.siguiente}-${antes.hasta}` : 'sin secuencia'} → ${siguiente}-${hasta}${vence ? ` (vence ${vence})` : ''} (${ctx.cuenta.usuario})`);
       const retrocede = !!antes && antes.siguiente > 0 && siguiente > 0 && siguiente < antes.siguiente;
-      return { tipo: p.tipo, siguiente, hasta, aviso: retrocede ? 'Bajaste el próximo número: si ya se emitieron comprobantes en ese rango, se repetirían.' : '' };
+      return { tipo: p.tipo, siguiente, hasta, vence: vence || '', aviso: retrocede ? 'Bajaste el próximo número: si ya se emitieron comprobantes en ese rango, se repetirían.' : '' };
     },
 
     // Entrega el siguiente número de comprobante en el momento de facturar. Es atómico: dos equipos nunca reciben el mismo.
@@ -219,19 +255,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       if (!candidatos.length) falla(400, 'Indica el tipo de comprobante.');
       const clave = String(b.clave || '').slice(0, 64);
       if (clave.length < 8) falla(400, 'Falta la clave del pedido.');
-      return transaccion(db, () => {
-        const previo = db.prepare('SELECT tipo, numero, estado FROM ncf_emitidos WHERE negocio = ? AND clave = ?').get(ctx.negocio.uid, clave);
-        if (previo) return { tipo: previo.tipo, numero: previo.numero, quedan: 0, repetido: true, anulado: previo.estado === 'anulado' };
-        const equipo = db.prepare('SELECT codigo FROM dispositivos WHERE negocio = ? AND uid = ?').get(ctx.negocio.uid, String(b.dispositivo || ''))?.codigo || null;
-        for (const tipo of candidatos) {
-          const f = db.prepare('SELECT siguiente, hasta FROM ncf_secuencias WHERE negocio = ? AND tipo = ?').get(ctx.negocio.uid, tipo);
-          if (!f || !(f.siguiente > 0 && f.hasta >= f.siguiente)) continue;
-          db.prepare("UPDATE ncf_secuencias SET siguiente = siguiente + 1, actualizado = datetime('now') WHERE negocio = ? AND tipo = ?").run(ctx.negocio.uid, tipo);
-          db.prepare('INSERT INTO ncf_emitidos (negocio, clave, tipo, numero, equipo) VALUES (?, ?, ?, ?, ?)').run(ctx.negocio.uid, clave, tipo, f.siguiente, equipo);
-          return { tipo, numero: f.siguiente, quedan: f.hasta - f.siguiente };
-        }
-        return { tipo: null, numero: 0, quedan: 0 };
-      });
+      return reservarNumero(ctx.negocio.uid, candidatos, clave, String(b.dispositivo || ''));
     },
 
     // El equipo avisa que la factura no se guardó: el número entregado queda anulado (consta para el formato 608 de la DGII).
@@ -242,8 +266,101 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
       const fila = db.prepare("SELECT id, tipo, numero FROM ncf_emitidos WHERE negocio = ? AND clave = ? AND estado = 'emitido'").get(ctx.negocio.uid, clave);
       if (!fila) return { anulado: false };
       db.prepare("UPDATE ncf_emitidos SET estado = 'anulado', motivo = ? WHERE id = ?").run(String(b.motivo || 'La factura no se guardó').slice(0, 200), fila.id);
-      auditar('Anuló comprobante sin factura', ctx.negocio.nombre, `${fila.tipo}${String(fila.numero).padStart(8, '0')} (${ctx.cuenta.usuario})`);
+      auditar('Anuló comprobante sin factura', ctx.negocio.nombre, `${fila.tipo}${String(fila.numero).padStart(fila.tipo.startsWith('E') ? 10 : 8, '0')} (${ctx.cuenta.usuario})`);
+      // Un e-NCF que no se usó se informa a la DGII como rango anulado
+      if (fila.tipo.startsWith('E') && ecf.leerConfig(db, ctx.negocio.uid).activo) {
+        ecf.encolarAnulacion(db, ctx.negocio.uid, fila.tipo.slice(1), fila.numero, fila.numero);
+        avisarEcf(ctx.negocio.uid);
+      }
       return { anulado: true, tipo: fila.tipo, numero: fila.numero };
+    },
+
+    // ---------- Facturación electrónica (e-CF) ----------
+    'GET /api/ecf': (req) => {
+      const ctx = autenticar(req);
+      const cfg = ecf.leerConfig(db, ctx.negocio.uid);
+      return { ...cfg, resumen: ecf.resumenEnvios(db, ctx.negocio.uid), ambientes: Object.entries(AMBIENTES_ECF).map(([id, nombre]) => ({ id, nombre })) };
+    },
+    'PUT /api/ecf/config': (req, b) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      const antes = ecf.leerConfig(db, ctx.negocio.uid);
+      if (b.activo && !antes.tieneCertificado) falla(400, 'Primero sube el certificado digital de la empresa.');
+      let cfg;
+      try { cfg = ecf.guardarConfig(db, ctx.negocio.uid, { activo: b.activo === undefined ? undefined : !!b.activo, ambiente: b.ambiente, extra: b.extra }); } catch (e) { falla(400, e.message); }
+      auditar('Cambió la facturación electrónica', ctx.negocio.nombre, `${cfg.activo ? 'activa' : 'apagada'} · ${cfg.ambiente} (${ctx.cuenta.usuario})`);
+      return cfg;
+    },
+    'POST /api/ecf/certificado': (req, b) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      let info;
+      try { info = ecf.guardarCertificado(db, ctx.negocio.uid, secreto, b.p12, b.clave); } catch (e) { falla(400, e.message); }
+      auditar('Subió el certificado digital', ctx.negocio.nombre, `${info.sujeto} · vence ${info.vence} (${ctx.cuenta.usuario})`);
+      return { certificado: info };
+    },
+    'DELETE /api/ecf/certificado': (req) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      ecf.quitarCertificado(db, ctx.negocio.uid);
+      auditar('Quitó el certificado digital', ctx.negocio.nombre, ctx.cuenta.usuario);
+      return { ok: true };
+    },
+    'POST /api/ecf/probar': async (req) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      try { return await ecf.probarConexion(ctxEcf, ctx.negocio.uid); } catch (e) { falla(502, e.message); }
+    },
+    'GET /api/ecf/envios': (req) => ({ envios: ecf.listarEnvios(db, autenticar(req).negocio.uid) }),
+    'POST /api/ecf/envios/:uid/reintentar': (req, b, p) => {
+      const ctx = autenticar(req);
+      try { ecf.reintentar(db, ctx.negocio.uid, p.uid, { reconstruir: !!b.reconstruir }); } catch (e) { falla(400, e.message); }
+      avisarEcf(ctx.negocio.uid);
+      return { ok: true };
+    },
+    'GET /api/ecf/envios/:uid/xml': (req, b, p) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      const x = ecf.xmlDe(db, ctx.negocio.uid, p.uid);
+      if (!x?.xml) falla(404, 'Ese comprobante todavía no se ha firmado.');
+      return x;
+    },
+    'POST /api/ecf/procesar': async (req) => {
+      const ctx = autenticar(req);
+      exigirAdmin(ctx);
+      await procesarEcf(ctx.negocio.uid);
+      return { resumen: ecf.resumenEnvios(db, ctx.negocio.uid) };
+    },
+    // Emite a mano un comprobante de compras (E41) o de gastos menores (E43)
+    'POST /api/ecf/emitir': async (req, b) => {
+      const ctx = autenticar(req);
+      const cfg = ecf.leerConfig(db, ctx.negocio.uid);
+      if (!cfg.activo) falla(400, 'La facturación electrónica no está activada.');
+      const tipo = String(b.tipo || '');
+      if (!['E41', 'E43'].includes(tipo)) falla(400, 'Solo se emiten a mano los comprobantes E41 (compras) y E43 (gastos menores).');
+      const clave = String(b.clave || '').slice(0, 64);
+      if (clave.length < 8) falla(400, 'Falta la clave del pedido.');
+      const lineas = Array.isArray(b.lineas) ? b.lineas.slice(0, 50).map((l) => ({
+        nombre: String(l?.nombre || '').trim().slice(0, 80), bien: l?.bien !== false, cantidad: Number(l?.cantidad), precio: Number(l?.precio), exento: !!l?.exento, descuento: 0,
+      })) : [];
+      if (!lineas.length || lineas.some((l) => !l.nombre || !(l.cantidad > 0) || !(l.precio >= 0))) falla(400, 'Cada línea necesita descripción, cantidad y precio.');
+      const comprador = b.comprador && (b.comprador.rnc || b.comprador.razon) ? { rnc: String(b.comprador.rnc || '').replace(/\D/g, ''), razon: String(b.comprador.razon || '').trim().slice(0, 150), direccion: String(b.comprador.direccion || '').trim().slice(0, 100) } : null;
+      if (comprador?.rnc && ![9, 11].includes(comprador.rnc.length)) falla(400, 'El RNC debe tener 9 números (o la cédula 11).');
+      if (tipo === 'E41' && !comprador?.razon) falla(400, 'Escribe el nombre de quien te vende.');
+      const num = reservarNumero(ctx.negocio.uid, [tipo], clave, String(b.dispositivo || ''));
+      if (!num.tipo) falla(409, `No hay números disponibles de ${tipo}. Registra la secuencia autorizada por la DGII.`);
+      const encf = `${tipo}${String(num.numero).padStart(10, '0')}`;
+      const retenido = Number(b.itbisRetenido) > 0 ? Number(b.itbisRetenido) : 0;
+      const datos = {
+        fecha: ahoraDR().fecha, comprador, lineas, tasa: 18, tipoPago: Number(b.tipoPago) === 2 ? 2 : 1,
+        fechaLimitePago: Number(b.tipoPago) === 2 && /^\d{4}-\d{2}-\d{2}$/.test(String(b.fechaLimitePago || '')) ? fechaDGII(b.fechaLimitePago) : null,
+        itbisRetenido: retenido, isrRetenido: Number(b.isrRetenido) > 0 ? Number(b.isrRetenido) : 0,
+      };
+      const e = ecf.encolarManual(db, ctx.negocio.uid, encf, datos, 0);
+      auditar('Emitió comprobante electrónico', ctx.negocio.nombre, `${encf} (${ctx.cuenta.usuario})`);
+      await procesarEcf(ctx.negocio.uid);
+      const fila = ecf.listarEnvios(db, ctx.negocio.uid).find((x) => x.uid === e);
+      return { encf, envio: fila || null };
     },
 
     // Reclamo atómico del cobro de una venta enviada a caja. Si otro equipo ya la está cobrando (o ya la cobró) no se deja cobrar de nuevo.
@@ -635,6 +752,8 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
         db.prepare('DELETE FROM dispositivos WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM ncf_secuencias WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM ncf_emitidos WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM ecf_envios WHERE negocio = ?').run(n.uid);
+        db.prepare('DELETE FROM ecf_config WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM cobros_reclamados WHERE negocio = ?').run(n.uid);
         db.prepare('DELETE FROM avisos_leidos WHERE cuenta IN (SELECT uid FROM cuentas WHERE negocio = ?)').run(n.uid);
         db.prepare('DELETE FROM avisos WHERE negocio = ?').run(n.uid);
@@ -794,7 +913,7 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
             version = excluded.version, origen = excluded.origen`);
         transaccion(db, () => {
           for (const c of cambios) {
-            if (!TABLAS_SYNC.includes(c?.t) || typeof c.uid !== 'string' || c.uid.length > 80 || !Number.isFinite(c.u)) { ignorados++; continue; }
+            if (!TABLAS_SYNC.includes(c?.t) || c.t === 'ecf_documentos' || typeof c.uid !== 'string' || c.uid.length > 80 || !Number.isFinite(c.u)) { ignorados++; continue; }
             const u = Math.min(Math.floor(c.u), ahora);
             const previo = leer.get(negocio, c.t, c.uid);
             if (previo && previo.actualizado > u) { ignorados++; continue; }
@@ -802,6 +921,15 @@ export function crearServidor({ db, secreto, origenes = '*', estaticos = null, c
             aceptados++;
           }
         });
+        // Ventas y notas con comprobante electrónico: se ponen en la cola para firmarlas y enviarlas a la DGII
+        if (cambios.some((c) => (c?.t === 'ventas' || c?.t === 'cxc_docs') && !c.x && ecf.esENCF(c.d?.ncf)) && ecf.leerConfig(db, negocio).activo) {
+          for (const c of cambios) {
+            if (c.x || !ecf.esENCF(c.d?.ncf)) continue;
+            if (c.t === 'ventas' && c.d.estado !== 'anulada') ecf.encolarVenta(db, negocio, c.uid, c.d.ncf, Number(c.d.total) || 0);
+            if (c.t === 'cxc_docs' && c.d.estado !== 'anulado') ecf.encolarNota(db, negocio, c.uid, c.d.ncf, Number(c.d.monto) || 0);
+          }
+          avisarEcf(negocio);
+        }
       }
 
       const filas = db.prepare(`

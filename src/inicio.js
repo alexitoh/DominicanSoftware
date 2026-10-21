@@ -30,6 +30,8 @@ export const MODULOS = [
     icono: svg('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 11h2M12 11h2M8 15h2M12 15h2M16 11v4"/>') },
   { id: 'finanzas', titulo: 'Finanzas', color: '#B7791F',
     icono: svg('<path d="M4 19V5"/><path d="M4 19h16"/><path d="M7 15l4-5 3 3 5-7"/><path d="M16 6h3v3"/>') },
+  { id: 'ecf', titulo: 'e-CF', color: '#0B7285',
+    icono: svg('<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13l2 2 4-4"/><path d="M9 18h6"/>') },
   { id: 'usuarios', titulo: 'Usuarios', color: '#3D4F8A',
     icono: svg('<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.6-3.8 3.4-6 7-6s6.4 2.2 7 6"/><path d="M17.5 3.5l.7 1.4 1.5.2-1.1 1 .3 1.5-1.4-.8-1.4.8.3-1.5-1.1-1 1.5-.2z"/>') },
   { id: 'ajustes', titulo: 'Ajustes', color: '#5B6B78',
@@ -47,7 +49,7 @@ const PALABRAS = {
   ventas: 'vender factura facturar cotizacion cotizaciones pos cobrar', productos: 'articulos catalogo precio precios codigo',
   inventario: 'stock existencia existencias almacen ajuste', compras: 'comprar suplidor mercancia', caja: 'efectivo cierre apertura gastos turno',
   clientes: 'direcciones contactos telefono', proveedores: 'suplidores', garantias: 'garantia',
-  reportes: 'informes estadisticas ganancias', contabilidad: 'factura suplidor orden de compras requisicion cotizacion solicitud compras anticipo suplidor tipo de suplidor pago de contado cxc cxp cuentas por cobrar pagar recibo recibos nota credito debito anticipo anticipos condicion de pago tipo de cliente abonos cobrar gastos periodos fiscal diarios deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', finanzas: 'analisis financiero ratios razones balance general estado de resultados flujo de efectivo variacion de capital conversion moneda dolar euro tasa de cambio diferencia cambiaria presupuesto reporte dinamico', usuarios: 'empleados vendedores permisos contrasena', ajustes: 'configuracion nube respaldo logo moneda idioma',
+  reportes: 'informes estadisticas ganancias', contabilidad: 'factura suplidor orden de compras requisicion cotizacion solicitud compras anticipo suplidor tipo de suplidor pago de contado cxc cxp cuentas por cobrar pagar recibo recibos nota credito debito anticipo anticipos condicion de pago tipo de cliente abonos cobrar gastos periodos fiscal diarios deudas proveedores credito contable asientos balance cuentas banco bancos nomina activos fijos presupuesto libro diario mayor erp', finanzas: 'analisis financiero ratios razones balance general estado de resultados flujo de efectivo variacion de capital conversion moneda dolar euro tasa de cambio diferencia cambiaria presupuesto reporte dinamico', usuarios: 'empleados vendedores permisos contrasena', ecf: 'comprobante electronico factura electronica dgii certificado digital e31 e32 e34 ncf firma xml', ajustes: 'configuracion nube respaldo logo moneda idioma',
 };
 const plano = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 

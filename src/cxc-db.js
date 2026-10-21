@@ -4,7 +4,7 @@
 // Cómo se guardan los movimientos: una nota de crédito o un anticipo aplicado BAJAN lo que debe una factura y una nota de débito lo SUBE.
 // Para que todos los saldos del sistema (facturas, clientes, reportes, contabilidad) sigan sumando igual, cada uno deja una línea en `pagos`
 // con metodo 'nota_credito' | 'anticipo' (monto positivo) o 'nota_debito' (monto negativo) y apunta a su documento en cxc_docs.
-import { consultar, ejecutar, transaccion, numeroDocumento, redondear, usuarioId, facturasPendientes, METODOS_COBRO } from './database.js';
+import { consultar, ejecutar, transaccion, numeroDocumento, redondear, usuarioId, facturasPendientes, METODOS_COBRO, pedirNcfElectronico, soltarNcfElectronico } from './database.js';
 import { exigirPeriodoAbierto } from './conta-db.js';
 
 const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -157,6 +157,14 @@ export async function crearNota({ tipo, cliente_id, venta_id, concepto_id = null
     if ((tipo === 'debito') !== (k.tipo === 'cargo')) throw new Error(tipo === 'debito' ? 'Para una nota de débito elige un motivo de tipo cargo.' : 'Para una nota de crédito elige un descuento o una devolución.');
   }
   const prefijo = tipo === 'credito' ? 'NC' : 'ND'; const clave = tipo === 'credito' ? 'siguiente_numero_nc' : 'siguiente_numero_nd';
+  // Si la factura es electrónica, su nota también: el e-NCF (E34 crédito / E33 débito) lo entrega el servidor y la nota viaja a la DGII
+  let electronico = null;
+  if (!limpio(ncf)) {
+    const [fv] = await consultar('SELECT ncf FROM ventas WHERE id = ?', [venta_id]);
+    if (/^E\d{12}$/.test(String(fv?.ncf || ''))) electronico = await pedirNcfElectronico(tipo === 'credito' ? 'E34' : 'E33');
+    if (electronico) ncf = electronico.ncf;
+  }
+  try {
   const numero = await numeroDocumento(prefijo, clave);
   const doc = '(SELECT id FROM cxc_docs WHERE numero = ?)';
   await transaccion([
@@ -167,7 +175,11 @@ export async function crearNota({ tipo, cliente_id, venta_id, concepto_id = null
     contador(clave),
   ]);
   const [d] = await consultar('SELECT id FROM cxc_docs WHERE numero = ?', [numero]);
-  return { id: d.id, numero };
+  return { id: d.id, numero, ncf: electronico?.ncf || null };
+  } catch (e) {
+    if (electronico) await soltarNcfElectronico(electronico, `La nota no se pudo guardar (${e.message || e})`.slice(0, 200));
+    throw e;
+  }
 }
 
 export async function anularNota(id, motivo = '') {

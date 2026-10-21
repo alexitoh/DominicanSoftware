@@ -7,7 +7,7 @@ import { Share } from '@capacitor/share';
 import { defineCustomElements as jeepSqlite } from 'jeep-sqlite/loader';
 import schema from './schema.sql?raw'; // Vite: importa el archivo como texto
 import { prepararBase, CATEGORIAS_BASE } from './sync-esquema.js';
-import { calcularItbis, TIPOS_NCF, formatearNCF, ncfValido, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
+import { calcularItbis, TIPOS_NCF, B_A_E, formatearNCF, ncfValido, comprobanteDeCliente, REGLAS_COMPROBANTE_BASE } from './itbis.js';
 import { limpiarDocumento } from './fiscal.js';
 
 const DB_NAME = 'caraudio';
@@ -1082,7 +1082,7 @@ export async function leerSecuenciasNCF() {
 
 // En un equipo conectado a la nube las secuencias son del negocio (viven en el servidor) y cada factura pide su número ahí: hace falta internet.
 // nube-app.js registra este enlace; sin nube (o sin enlace) se usan las secuencias de este dispositivo.
-let reservaNCF = null; // { activo(), exigirConexion(), pedir(candidatos, clave) → {tipo, numero}, anular(clave, motivo) }
+let reservaNCF = null; // { activo(), electronico(), exigirConexion(), pedir(candidatos, clave) → {tipo, numero}, anular(clave, motivo) }
 export const configurarReservaNCF = (r) => { reservaNCF = r; };
 
 // Vacía lo que este equipo tenía de un tipo (cuando esos números pasan a administrarse desde el servidor)
@@ -1134,6 +1134,9 @@ async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
     ({ tipo: ideal, motivo } = comprobanteDeCliente(cli, await leerReglasComprobante()));
     candidatos = !obligatorio && ideal !== 'B02' ? [ideal, 'B02'] : [ideal];
   }
+  // Facturación electrónica: B01→E31, B02→E32, B14→E44, B15→E45. Los números salen de las secuencias E del servidor.
+  const electronico = enNube && !!reservaNCF.electronico?.();
+  if (electronico) candidatos = candidatos.map((c) => B_A_E[c] || c);
   let tipo = null; let numero = 0; let clave = null;
   if (enNube) {
     clave = claveAleatoria();
@@ -1144,12 +1147,28 @@ async function siguienteNCF(clienteId, pedido = 'auto', obligatorio = false) {
     if (t) { tipo = t; numero = util(t).sig; await ejecutar('UPDATE config SET valor = ? WHERE clave = ?', [String(numero + 1), `ncf_${t}_sig`]); }
   }
   if (!tipo) {
-    if (pedido && pedido !== 'auto') throw new Error(`No hay números disponibles de ${pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
-    if (obligatorio) throw new Error(`A este cliente le corresponde ${ideal} (${TIPOS_NCF[ideal]}; ${motivo}), pero no hay números disponibles. Registra la secuencia en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
+    if (pedido && pedido !== 'auto') throw new Error(`No hay números disponibles de ${electronico ? B_A_E[pedido] || pedido : pedido} (${TIPOS_NCF[pedido]}). Registra la secuencia autorizada por la DGII en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
+    if (obligatorio) throw new Error(`A este cliente le corresponde ${ideal} (${TIPOS_NCF[ideal]}; ${motivo}), pero no hay números disponibles${electronico ? ` (secuencia ${B_A_E[ideal] || ideal})` : ''}. Registra la secuencia en Ajustes → Facturación con comprobante o elige otro tipo de comprobante.`);
     return null;
   }
   return { ncf: formatearNCF(tipo, numero), tipo, clave };
 }
+
+// Número electrónico para una nota (E33/E34) o cualquier otro comprobante que se pide directo. Devuelve null si el negocio no factura electrónicamente.
+export async function pedirNcfElectronico(tipo) {
+  if (!reservaNCF?.activo() || !reservaNCF.electronico?.()) return null;
+  await reservaNCF.exigirConexion();
+  const clave = claveAleatoria();
+  const r = await reservaNCF.pedir([tipo], clave);
+  if (!r?.tipo) throw new Error(`No hay números disponibles de ${tipo}. Registra la secuencia autorizada por la DGII en Ajustes → Facturación electrónica.`);
+  return { ncf: formatearNCF(r.tipo, r.numero), clave };
+}
+export async function soltarNcfElectronico(n, motivo) {
+  if (!n?.clave || !reservaNCF) return;
+  await reservaNCF.anular(n.clave, motivo).catch(() => {});
+  await registrarNcfAnulado({ ncf: n.ncf, motivo }).catch(() => {});
+}
+export const facturacionElectronica = () => !!(reservaNCF?.activo() && reservaNCF.electronico?.());
 
 const claveAleatoria = () => (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`).replace(/-/g, '');
 

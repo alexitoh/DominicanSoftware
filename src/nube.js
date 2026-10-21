@@ -59,6 +59,16 @@ export function crearCliente({ base = () => '', token = () => null, fetchFn = (.
     guardarNcf: (tipo, b) => llamar('PUT', `/api/ncf/${encodeURIComponent(tipo)}`, b, { tiempo: 12000 }),
     siguienteNcf: (b) => llamar('POST', '/api/ncf/siguiente', b, { tiempo: 10000 }),
     anularNcf: (b) => llamar('POST', '/api/ncf/anular', b, { tiempo: 10000 }),
+    // Facturación electrónica (e-CF)
+    ecf: () => llamar('GET', '/api/ecf', undefined, { tiempo: 12000 }),
+    guardarEcf: (b) => llamar('PUT', '/api/ecf/config', b, { tiempo: 12000 }),
+    subirCertificado: (b) => llamar('POST', '/api/ecf/certificado', b, { tiempo: 30000 }),
+    quitarCertificado: () => llamar('DELETE', '/api/ecf/certificado', undefined, { tiempo: 12000 }),
+    probarEcf: () => llamar('POST', '/api/ecf/probar', {}, { tiempo: 40000 }),
+    enviosEcf: () => llamar('GET', '/api/ecf/envios', undefined, { tiempo: 15000 }),
+    reintentarEcf: (uid, b = {}) => llamar('POST', `/api/ecf/envios/${encodeURIComponent(uid)}/reintentar`, b, { tiempo: 15000 }),
+    procesarEcf: () => llamar('POST', '/api/ecf/procesar', {}, { tiempo: 60000 }),
+    emitirEcf: (b) => llamar('POST', '/api/ecf/emitir', b, { tiempo: 30000 }),
     reclamarCobro: (b) => llamar('POST', '/api/caja/reclamar', b, { tiempo: 10000 }),
     sync: (b) => llamar('POST', '/api/sync', b, { tiempo: 60000 }),
   };

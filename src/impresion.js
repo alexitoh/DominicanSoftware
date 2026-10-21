@@ -7,7 +7,8 @@ import { consultar, esWeb } from './database.js';
 import { h, hoja, toast, dinero } from './ui.js';
 import { tienePermiso } from './auth.js';
 import { traducir, getIdioma } from './i18n.js';
-import { NOMBRE_COMPROBANTE } from './itbis.js';
+import { NOMBRE_COMPROBANTE, esElectronico } from './itbis.js';
+import { qrSvg } from './qr.js';
 import { textoDocumento } from './fiscal.js';
 
 // En el navegador se imprime directo; en la app Android se comparte el PDF (las pruebas fuerzan el modo navegador)
@@ -90,8 +91,10 @@ export async function cargarFactura(ventaId) {
   const garantias = await consultar('SELECT g.*, p.nombre FROM garantias g JOIN productos p ON p.id = g.producto_id WHERE g.venta_id = ? ORDER BY g.id', [ventaId]);
   const cfg = Object.fromEntries((await consultar('SELECT clave, valor FROM config')).map((r) => [r.clave, r.valor]));
   const [{ pagado }] = await consultar('SELECT COALESCE(SUM(monto), 0) AS pagado FROM pagos WHERE venta_id = ?', [ventaId]);
+  // Comprobante electrónico: lo que la DGII respondió (código de seguridad, fecha de firma, QR)
+  const [ecf] = esElectronico(v.ncf) ? await consultar('SELECT * FROM ecf_documentos WHERE venta_id = ? ORDER BY id DESC LIMIT 1', [ventaId]) : [];
   const lang = cfg.idioma_factura === 'es' || cfg.idioma_factura === 'en' ? cfg.idioma_factura : getIdioma();
-  return { v, items, servicios, cobro, garantias, cfg, pagado, L: (t) => traducir(t, lang) };
+  return { v, items, servicios, cobro, garantias, cfg, pagado, ecf: ecf || null, L: (t) => traducir(t, lang) };
 }
 
 // ---------- Piezas comunes de los formatos ----------
@@ -102,6 +105,29 @@ const garantiaDe = (f, producto_id) => {
   const g = f.garantias.find((x) => x.producto_id === producto_id);
   return g ? `${f.L('Garantía')} ${g.meses} ${f.L(g.meses === 1 ? 'mes' : 'meses')}, ${f.L('hasta')} ${fechaDD(g.vence)}${g.serie ? `. ${f.L('Serie')}: ${esc(g.serie)}` : ''}` : '';
 };
+
+// Con facturación electrónica, antes de imprimir se espera (unos segundos) a que la DGII responda para que salga el código de seguridad y el QR.
+// (nube-app.js se carga aquí y no arriba para no crear un ciclo de importaciones.)
+async function esperarEcf(ventaId) {
+  const [v] = await consultar('SELECT ncf FROM ventas WHERE id = ?', [ventaId]);
+  if (!esElectronico(v?.ncf)) return;
+  const { esperarRespuestaEcf } = await import('./nube-app.js');
+  await esperarRespuestaEcf(async () => (await consultar('SELECT id FROM ecf_documentos WHERE venta_id = ? AND qr_url IS NOT NULL', [ventaId])).length > 0).catch(() => {});
+}
+
+// Bloque del comprobante electrónico: e-NCF, fecha de firma, código de seguridad y QR de verificación en la DGII
+export function bloqueEcfHTML(f, { lado = 34 } = {}) {
+  const { v, ecf, L } = f;
+  if (!esElectronico(v.ncf)) return '';
+  if (!ecf?.qr_url) return `<div class="c gris" style="margin-top:6px;font-size:10px">${esc(L('Comprobante electrónico: pendiente de confirmación de la DGII'))}</div>`;
+  const rechazado = ecf.estado === 'rechazado' ? `<div class="c b" style="color:#b00">${esc(L('RECHAZADO POR LA DGII'))}</div>` : '';
+  const qr = qrSvg(ecf.qr_url, { lado: `${lado}mm`, ecc: 'L' });
+  return `<hr class="p">${rechazado}<div class="c" style="font-size:10px">
+<div>e-NCF: <b>${esc(v.ncf)}</b></div>
+${ecf.codigo_seguridad ? `<div>${esc(L('Código de seguridad'))}: <b>${esc(ecf.codigo_seguridad)}</b></div>` : ''}
+${ecf.fecha_firma ? `<div>${esc(L('Fecha de firma digital'))}: ${esc(ecf.fecha_firma)}</div>` : ''}
+<div style="margin:4px auto 0;width:${lado}mm;height:${lado}mm">${qr}</div></div>`;
+}
 
 // ---------- Ticket de punto de venta 80 mm (facturas al contado) ----------
 export function ticket80HTML(f, { recibido = null } = {}) {
@@ -156,6 +182,7 @@ ${v.itbis > 0 && !itbisSumado ? `<div class="c gris">${esc(L('ITBIS incluido'))}
 ${par(L('Pago'), L(METODOS[v.metodo_pago] || v.metodo_pago))}
 ${recibido != null ? par(L('Recibido'), dinero(recibido)) : ''}
 ${cambio != null ? par(L('Cambio'), dinero(cambio), 'b') : ''}
+${bloqueEcfHTML(f, { lado: 36 })}
 <div class="c gris gracias">${esc(L('Gracias por su compra.'))}</div>
 ${anuladaMarca(v, L)}
 </body></html>`;
@@ -217,6 +244,7 @@ ${tot(L('TOTAL'), dinero(v.total), 'g')}
 ${v.itbis > 0 && !itbisSumado ? tot(L('ITBIS incluido'), dinero(v.itbis)) : ''}
 ${v.metodo_pago === 'credito' ? `${tot(L('Abonado'), dinero(pagado))}${tot(L('Saldo pendiente'), dinero(Math.max(0, v.total - pagado)), 'b')}${cobro?.vence ? tot(L('Fecha límite'), fechaDD(cobro.vence)) : ''}` : ''}
 </div>
+${bloqueEcfHTML(f, { lado: 30 })}
 <div class="gracias">${esc(L('Gracias por su compra.'))}</div>
 ${anuladaMarca(v, L)}
 </div></body></html>`;
@@ -293,6 +321,7 @@ async function imprimirOCompartir(ventaId, html) {
 
 // Factura al contado: sale sola por la impresora de 80 mm de caja (sin preguntar, si está configurada); si no, se elige la impresora
 export async function imprimirContado(ventaId, { recibido = null } = {}) {
+  await esperarEcf(ventaId);
   const f = await cargarFactura(ventaId);
   const c = leerImpresoras();
   if (impresionDirecta && !(c.auto80 && predeterminada('pos80'))) {
@@ -304,6 +333,7 @@ export async function imprimirContado(ventaId, { recibido = null } = {}) {
 
 // Factura a crédito: la imprime el vendedor en una impresora normal (siempre se elige antes)
 export async function imprimirCredito(ventaId) {
+  await esperarEcf(ventaId);
   const f = await cargarFactura(ventaId);
   if (impresionDirecta) {
     const destino = await elegirImpresora('normal');

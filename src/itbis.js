@@ -45,7 +45,15 @@ export function comprobanteDeCliente(c, reglas = REGLAS_COMPROBANTE_BASE) {
 
 // Nombre que lleva la factura según el comprobante
 export const NOMBRE_COMPROBANTE = { B01: 'Factura de crédito fiscal', B02: 'Factura de consumo', B14: 'Factura de régimen especial', B15: 'Factura gubernamental' };
-export const formatearNCF = (tipo, n) => `${tipo}${String(n).padStart(8, '0')}`;
+// Comprobantes electrónicos (e-CF): el tipo B se convierte en su equivalente E cuando el negocio factura electrónicamente
+export const B_A_E = { B01: 'E31', B02: 'E32', B14: 'E44', B15: 'E45' };
+export const NOMBRE_E = {
+  E31: 'Factura de crédito fiscal electrónica', E32: 'Factura de consumo electrónica', E33: 'Nota de débito electrónica', E34: 'Nota de crédito electrónica',
+  E41: 'Comprobante de compras electrónico', E43: 'Gastos menores electrónico', E44: 'Régimen especial electrónico', E45: 'Gubernamental electrónico',
+};
+Object.assign(NOMBRE_COMPROBANTE, NOMBRE_E);
+export const esElectronico = (ncf) => /^E\d{2}\d{10}$/.test(String(ncf || '').toUpperCase());
+export const formatearNCF = (tipo, n) => `${tipo}${String(n).padStart(String(tipo).startsWith('E') ? 10 : 8, '0')}`;
 export const ncfValido = (s) => /^[BE]\d{2}\d{8,10}$/.test(String(s || '').toUpperCase());
 
 // ---------- Fechas y números para los archivos ----------

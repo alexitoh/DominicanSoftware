@@ -11,7 +11,7 @@
     "android:agregar": "vite build && cap add android",
     "android:abrir": "vite build && cap sync android && node scripts/preparar-android.mjs && cap open android",
     "servidor": "node server/index.js",
-    "prueba": "node tests/e2e-sync.mjs && node --import ./tests/stubs/registrar.mjs tests/e2e-app.mjs && node --import ./tests/stubs/registrar.mjs tests/busqueda.mjs && node --import ./tests/stubs/registrar.mjs tests/conta.mjs && node --import ./tests/stubs/registrar.mjs tests/conta-ui.mjs && node --import ./tests/stubs/registrar.mjs tests/dgii.mjs && node --import ./tests/stubs/registrar.mjs tests/acceso-ui.mjs && node --import ./tests/stubs/registrar.mjs tests/venta-cliente-ui.mjs && node --import ./tests/stubs/registrar.mjs tests/caja-impresion.mjs"
+    "prueba": "node tests/e2e-sync.mjs && node --import ./tests/stubs/registrar.mjs tests/e2e-app.mjs && node --import ./tests/stubs/registrar.mjs tests/busqueda.mjs && node --import ./tests/stubs/registrar.mjs tests/conta.mjs && node --import ./tests/stubs/registrar.mjs tests/conta-ui.mjs && node --import ./tests/stubs/registrar.mjs tests/dgii.mjs && node --import ./tests/stubs/registrar.mjs tests/acceso-ui.mjs && node --import ./tests/stubs/registrar.mjs tests/venta-cliente-ui.mjs && node --import ./tests/stubs/registrar.mjs tests/caja-impresion.mjs && node tests/ecf.mjs && node --import ./tests/stubs/registrar.mjs tests/ecf-cliente.mjs && node --import ./tests/stubs/registrar.mjs tests/ecf-ui.mjs"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "latest",

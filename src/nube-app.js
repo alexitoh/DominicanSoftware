@@ -179,11 +179,25 @@ async function anularPendientesNCF() {
 }
 const marcarParaAnular = (clave, motivo) => guardarPendientesNCF([...leerPendientesNCF(), { clave, motivo }]);
 
+// ¿El negocio factura electrónicamente? Lo decide el servidor; aquí se guarda lo último que dijo (también offline, para saber qué mostrar)
+const K_ECF = 'caraudio_ecf_activo';
+let ecfActivo = (() => { try { return localStorage.getItem(K_ECF) === '1'; } catch { return false; } })();
+export const facturaElectronica = () => ecfActivo;
+export function fijarElectronico(v) {
+  ecfActivo = !!v;
+  try { localStorage.setItem(K_ECF, ecfActivo ? '1' : '0'); } catch { /* sin almacenamiento */ }
+}
+export async function refrescarElectronico() {
+  try { const r = await nube.ecf(); fijarElectronico(r.activo); return r; } catch { return null; }
+}
+
 configurarReservaNCF({
   activo: () => vinculado() && haySesionNube(),
+  electronico: () => ecfActivo,
   // Sin internet un equipo conectado a la nube no emite ninguna factura (solo consulta): se comprueba antes de empezar
   exigirConexion: async () => {
     try { await nube.salud(); } catch { throw new Error(SIN_INTERNET_FACTURA); }
+    await refrescarElectronico(); // el modo (B o E) lo decide el servidor justo antes de facturar
     await anularPendientesNCF().catch(() => {});
   },
   pedir: async (candidatos, clave) => {
@@ -202,6 +216,16 @@ configurarReservaNCF({
     try { await nube.anularNcf({ clave, motivo }); } catch { marcarParaAnular(clave, motivo); }
   },
 });
+
+// Antes de imprimir un comprobante electrónico: sincroniza y espera (hasta ~20 s) la respuesta de la DGII
+export async function esperarRespuestaEcf(listo) {
+  if (!vinculado() || !haySesionNube() || await listo()) return;
+  for (let i = 0; i < 7; i++) {
+    await sincronizarAhora();
+    if (await listo()) return;
+    await pausaCorta(3000);
+  }
+}
 
 // Cola de caja: el servidor reparte el derecho a cobrar cada venta, para que dos cajeros no la cobren a la vez
 configurarReclamoCobro({
@@ -249,6 +273,7 @@ export async function sincronizarAhora() {
   try {
     const r = await motor.sincronizar();
     avisar({ fase: 'ok', ultimo: new Date(), pendientes: await motor.pendientes(), mensaje: '' });
+    refrescarElectronico().catch(() => {});
     anularPendientesNCF().catch(() => {}); // comprobantes que quedaron en duda por un corte de internet
     if (r.reiniciado) {
       // Los datos del negocio fueron limpiados desde el panel del propietario: se recarga para volver a empezar limpio

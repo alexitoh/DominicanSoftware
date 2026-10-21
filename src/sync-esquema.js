@@ -169,6 +169,7 @@ export const TABLAS = [
   { t: 'presupuestos', cols: ['anio', 'mes', 'monto'], refs: [{ col: 'cuenta_id', tabla: 'cuentas_contables' }] },
   { t: 'periodos_cerrados', cols: ['periodo'] },
   { t: 'ncf_anulados', cols: ['fecha', 'ncf', 'tipo', 'motivo', 'origen'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], unicos: ['ncf'] },
+  { t: 'ecf_documentos', cols: ['ncf', 'tipo', 'estado', 'track_id', 'codigo_seguridad', 'fecha_firma', 'mensaje', 'monto', 'qr_url', 'ambiente'], refs: [{ col: 'venta_id', tabla: 'ventas' }, { col: 'cxc_doc_id', tabla: 'cxc_docs' }] },
   { t: 'bitacora', cols: ['fecha', 'usuario', 'accion', 'detalle'], refs: [{ col: 'usuario_id', tabla: 'usuarios' }], inmutable: true },
   { t: 'config', cols: ['valor'], clave: 'clave' },
 ];
